@@ -38,6 +38,9 @@ VENDOR_ROOT = REPO_ROOT / "vendor" / "reBotArm_control_py"
 #: Our fork of the RS hardware config — retuned for the camera payload.
 HARDWARE_YAML = REPO_ROOT / "config" / "rebotarm_rs.yaml"
 
+#: Built frontend, produced by `npm run build` in frontend/.
+STATIC_DIR = REPO_ROOT / "backend" / "static"
+
 #: Substring every RS URDF path must contain. Guards against a DM-arm mix-up.
 _RS_URDF_MARKER = "00-arm-rs_asm-v3"
 

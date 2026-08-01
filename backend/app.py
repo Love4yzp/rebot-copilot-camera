@@ -19,6 +19,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
 from .api import control, estop, routines
@@ -109,6 +110,25 @@ def health() -> dict:
             "joints": assets.joint_names(),
         },
     }
+
+
+# ── static assets ────────────────────────────────────────────────────────────
+#
+# Mounted last, deliberately. `app.mount("/", ...)` matches everything, so a
+# mount registered before the routers swallows every API path and websocket.
+# The previous generation of this service lost an afternoon to that; keep these
+# at the bottom of the file.
+
+_URDF_DIR = assets.VENDOR_ROOT / "urdf"
+if _URDF_DIR.is_dir():
+    # Served from the submodule rather than copied: 63 MB of meshes, and a copy
+    # would go stale the moment the submodule is bumped.
+    app.mount("/assets/urdf", StaticFiles(directory=_URDF_DIR), name="urdf")
+
+if assets.STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=assets.STATIC_DIR, html=True), name="ui")
+else:
+    log.info("no built frontend at %s — run `npm run build` in frontend/", assets.STATIC_DIR)
 
 
 def main() -> None:

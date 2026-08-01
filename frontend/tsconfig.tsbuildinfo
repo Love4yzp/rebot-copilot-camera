@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/usecontrolsocket.ts","./src/components/armview3d.tsx","./src/components/estopbar.tsx","./src/components/jointreadout.tsx","./src/components/playbackbar.tsx","./src/components/routinelist.tsx","./src/components/toasts.tsx","./src/components/waypointeditor.tsx"],"version":"5.9.3"}
