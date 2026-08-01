@@ -76,8 +76,16 @@ backend/
     watchdog.py     三个条件自动触发急停，都要求「持续」而非单次
     kinematics.py   限位（从 URDF 读）+ 自碰撞 + 路径采样 + FK
 
+  actions/
+    base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
+    runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上
+    registry.py     entry_points 发现 + 健康。runner 才是「装了哪些」的唯一登记处
+    validate.py     写入时与播放前两道校验，让错误离开 ACTING 阶段
+    shutter.py      ShutterProvider —— 第一个 provider
+
   core/
     controller.py   控制循环。闩锁在任何东西能命令臂之前检查
+    events.py       语义事件名与信封。单向，不可否决
     executor.py     Routine 执行器。纯逻辑，注入时钟/arm/shutter
     floatlock.py    浮动/锁定判据。带迟滞与最短静止时间
     broadcaster.py  控制线程 → asyncio 的扇出。有界队列，丢旧包
@@ -94,6 +102,7 @@ backend/
 
   api/
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
+    plugins.py      GET /api/plugins —— 前端据此渲染触发表单
     estop.py        急停端点
     routines.py     序列与点位 CRUD
     control.py      播放 / 示教 / 录点 / 快门自检 / WebSocket
@@ -118,6 +127,12 @@ vendor/reBotArm_control_py/  git submodule，锁 d540405
 - `backend/core/executor.py` 纯逻辑，不碰 FastAPI、不碰真实时间、**不知道闩锁存在**（控制循环看到闩锁后调它的 `abort()`，这样执行器结构上不可能自己决定恢复）
 - `backend/arm/*` 只薄封装上游，不实现运动学
 - `SafetyLatch` 是横切闩锁，**不是模式机里的模式**（做成模式的话每加一个模式都要重审所有切换是否会绕过它）
+
+**动作绝不跑在控制循环上**
+provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒）。executor **投递 + 每 tick 轮询**，实际执行在 `backend/actions/runner.py` 的 worker 线程上。曾经不是这样：一条慢快门把 tick 间隔拉到 619ms，越过 watchdog 的 0.5s 宽限 → **急停触发，整轮拍摄中止**。一台仅仅是慢的相机，看起来和丢了臂一模一样。
+
+**插件够不到臂**
+`ActionContext` 只给只读姿态，没有 arm 句柄。这和「闩锁不进 executor」是同一手法 —— 让错的事**够不到**，而不只是禁止。要加运动能力给插件之前，先读 `docs/PLUGINS.md` 里「为什么触发源不是插件」。
 
 **运动闸门**
 任何会让臂动的端点必须挂 `dependencies=[Depends(require_arm_available)]`。`tests/test_motion_gate.py` 遍历路由表，未挂闸门又没在 `NON_MOTION_ROUTES` 里写明理由的端点会让测试失败。**这是设计**：新增运动端点必须做一个显式决定。
@@ -183,6 +198,7 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
 | [`docs/INTERACTION.md`](./docs/INTERACTION.md) | 交互骨架详细设计：布局 / 流程 / 参数隐藏 / goto 接口 | 动前端界面或加运动端点时 |
+| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
 | [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 历史设计决策记录（不再追加；当前设计模式看 ARCHITECTURE.md） | 想知道某个旧决定为什么这样时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。

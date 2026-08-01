@@ -215,12 +215,17 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `GET/POST /api/estop` · `POST /api/estop/clear` | 急停。engage 永远 200，重复 engage 保留首因 |
 | `GET/POST /api/routines` · `GET/PATCH/DELETE /api/routines/{id}` | 序列 CRUD |
 | `POST /api/routines/{id}/waypoints` · `…/capture` · `…/reorder` · `PATCH/DELETE …/{index}` | 点位编辑与录点 |
-| `POST /api/routines/{id}/play` · `POST /api/playback/stop` | 播放。play 前做整条预检 |
+| `POST /api/routines/{id}/play` · `POST /api/playback/stop` | 播放。play 前做整条预检（路径 + 插件可用性）|
+| `POST /api/routines/{id}/waypoints/{i}/goto` | 单锚点：过去、稳定、执行它的动作、保持。可带 `{"source": "..."}` 记录是谁触发的 |
 | `POST /api/teach` | 零力示教开关 |
 | `POST /api/shutter/test` | 快门自检。默认只 ping，`?shoot=true` 才真拍 |
+| `GET /api/plugins` · `POST /api/plugins/probe` | 装了哪些动作插件、可不可用。前端据此渲染触发表单 |
 | `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | 状态与日志 |
+| `WS /api/events` | 语义事件流：到位 / 动作 / 急停。给集成方用，不含 20Hz 关节角 |
 
 **所有会让臂动的端点在急停期间返 409 并带原因。**
+
+**扩展这台机器**：动作插件（进程内，`uv pip install` 一个声明了 `rebot.actions` entry point 的包）、触发源（打 `goto` 的 HTTP 客户端）、事件订阅（连 `/api/events` 的 WS 客户端）。三个扩展点的完整契约、一个四十行的插件例子、以及无硬件开发循环 `uv run -m backend.actions.check`，全在 [`docs/PLUGINS.md`](./docs/PLUGINS.md)。
 
 **Agent API**（`/api/agent/*`）给外部 LLM / 脚本用：`acquire` 拿独占 token，`control/joints` 和 `control/play/{id}` 下指令，`release` 交还（`?force=true` 让 Web UI 强制收回）。租约空闲 5 分钟或持有满 30 分钟自动过期。**给的是控制权不是安全豁免** —— 急停期间拒绝 agent，和拒绝人一模一样。完整参数看 `/docs`。
 
