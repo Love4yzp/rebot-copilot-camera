@@ -3,7 +3,8 @@
 **项目状态机。接手一个 session 先读这里。**
 
 本文件只回答三个问题：**现在在哪 / 下一步做什么 / 什么被卡住了**。
-铁律与代码约定在 [`AGENTS.md`](./AGENTS.md)，原始设计与决策记录在 [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1)。
+铁律与代码约定在 [`AGENTS.md`](./AGENTS.md)，当前设计模式在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
+[issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) 是 2026-07-31 的原始计划，**已归档不再追加** —— 读它是为了看偏离了什么，不是为了知道现在该做什么。
 
 ---
 
@@ -32,11 +33,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#6` spike: 硬件对表 |
+| **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#57` feat: 日志抽屉 |
-| **备注** | **60/62 完成，252 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
+| **上一个完成的** | `#72` fix: 3D 视图从来没画出过臂 |
+| **备注** | **70/72 完成，260 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
 
@@ -93,8 +94,8 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 6 | H | spike: 跑上游 example 2/9/10，实测 CAN 通道 / 零位 / 浮动手感 / 500Hz | BLOCKED | **没有臂，做不了。** 代码侧全部就绪：`ArmSession` 写好了，`./manage.sh status` 会报告跑在真臂还是模拟器上。上机后把实测值填进 `docs/HARDWARE_NOTES.md` 的「待实测」段 |
-| 7 | H | spike: 验证末端夹相机后的重力补偿 | BLOCKED | **没有臂和相机，做不了。** 浮动/锁定阈值已经做成可配（`FloatLockConfig`）并有测试覆盖，就是为了挂上相机后能安全重调 |
+| 6 | H | spike: 跑上游 example 2/9/10，实测 CAN 通道 / 零位 / 浮动手感 / 500Hz | BLOCKED | **没有臂，做不了。** 代码侧全部就绪：`ArmSession` 写好了，`./manage.sh status` 会报告跑在真臂还是模拟器上。上机后把实测值填进 `docs/HARDWARE_NOTES.md` 的「待实测」段。跟踪见 [issue #2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) |
+| 7 | H | spike: 验证末端夹相机后的重力补偿 | BLOCKED | **没有臂和相机，做不了。** 浮动/锁定阈值已经做成可配（`FloatLockConfig`）并有测试覆盖，就是为了挂上相机后能安全重调。跟踪见 [issue #3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | 8 | L | docs: `docs/HARDWARE_NOTES.md` —— 已验证 / 待实测严格分开 | DONE | 记了 7 条已验证（含 DM 默认配置、URDF 8 自由度 vs 硬件 7 关节、j2/j3 下限为 0）+ 4 条待实测 |
 
 ### Phase 2 — 臂层封装
@@ -214,6 +215,7 @@
 | 69 | L | feat: 锚点卡片撑满卡片板（launchpad 式主控件，不再是指甲盖磁贴） | DONE | 用户截图反馈：3 张 96px 小卡片缩在巨大空白左上角。卡片是使用层唯一动词，改成 `auto-fit` + `grid-auto-rows: minmax(160px, 1fr)` + `min-height: 100%` —— 锚点少（常见 4 个）时卡片摊满整板，多了每行至少 160px 溢出滚动；`auto-fit` 让空列坍塌，3 张卡平分整行宽。卡名 `clamp(20px, 1.2vw+12px, 28px)`。纯 CSS 改动 |
 | 70 | L | fix: 界面对臂的位置说谎（卡片状态机 + 急停被遮罩吞点击） | DONE | **安全**：弹层遮罩 z-index 40 盖在急停条上，示教（双手在臂上）恰好是最需要急停的模式，而屏幕急停按钮点不动 —— 急停条提到 60。弹层补 Esc/点背景关闭、焦点陷阱、`aria-modal`；Esc 用**原生**监听在面板上截停（React 合成事件的 `stopPropagation` 拦不住 window 级急停监听）。**状态可信度**：`arrived` 原本由 `phase == null` 推出，点卡瞬间就亮「已到位」；controller 保留 finished executor 会持续重播上一次的 `done`，所以 `pending` 只被*运行中*的 phase 解除、超时则丢弃声明而非升级；急停/示教立即作废 `target`。`_advance_waypoint` 先自增后判断导致收尾时 index 越界一位，前端夹紧。急停/忙时卡片不再静默失效，分别给出不同原因 |
 | 71 | L | feat: 颜色改为状态通道 + tally 条（视觉系统重做） | DONE | 原配色是 GitHub 深色主题套在机械臂上：蓝色 accent 同时是按钮/进度/选中/链接，而「臂正朝人移动」只配到柔和蓝呼吸。改为底盘全灰阶、**删除品牌色**，四个彩色各自独占一个机器状态（红=急停 / 琥珀=在动 / 绿=到位 / 白=快门），借用 tally 灯与机械警示灯约定。签名元素 **tally 条**：顶端 4px 满幅光带报机器状态 —— 操作者站在臂旁读不到 12px 状态字，但两米外余光能读一条横贯屏幕的光带。单锚点进度移进卡片内部（反馈回到手指落下的地方）；配置模式换成工作台底纹而非虚线边框（前注意级别区分「点了臂会不会动」）；示教弹层改底部横条并自带急停；3D 收进抽屉，预览由 hover 改选中语义；数字键 1–9 触发锚点；删除锚点改 8 秒撤销（复用 `POST /waypoints` 的 `index`）。无障碍补 `:focus-visible` / `prefers-reduced-motion` / `--mark-dim` 提到 7:1。自托管 Saira Condensed latin 子集（设备离线，不能挂 CDN）。顺手修：mock 结束时把 playback 置 null，与真 controller 不一致，导致「已到位」在预览里永远出不来 |
+| 72 | L | fix: 3D 视图从来没画出过臂（三个叠在一起的 bug） | DONE | 一直以为是 submodule 没拉 —— 网格文件其实在。真因三层：① mesh 路径用 `packages` 解析，但那只管 `package://` URI，这个 URDF 写的是相对包根的普通相对路径，要用 `workingPath`；② `workingPath` 是**拼接**不是 join，少个尾斜杠就拼成 `…-v3meshes/`；③ 最隐蔽的一个 —— `{status && <div/>}` 在 `status === ""` 时求值为**空字符串**而非 `false`，React 把它当文本子节点走 `setTextContent(node, '')` 快路径，**把命令式 append 的 canvas 一起抹掉**，所以模型加载成功了却连画布都没有。改成显式 `? :` 三元。另外抽屉原本 `position: fixed; top: 0` 盖住急停条和底栏右端，改为与卡片板共享一个定位行，结构上只能盖住卡片。renderer 构造加 try/catch —— 黑框必须自己说明为什么黑 |
 
 ---
 
@@ -233,5 +235,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 9 | **9** | 9 |
-| **合计** | **71** | **69** | **60** |
+| 后续新增 | 10 | **10** | 10 |
+| **合计** | **72** | **70** | **61** |

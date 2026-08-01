@@ -201,7 +201,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `/api/logs` 是空的 | 服务账号不在 `systemd-journal` 组 | `./manage.sh setup` 会加，加完要重新登录 |
 | journalctl 里中文变 `?` | systemd 默认 `LANG=C` | unit 和 `manage.sh run` 都已设 `LANG=zh_CN.UTF-8` |
 | 臂突然自己停了 | 看门狗触发的急停 | 急停条上有原因。三个条件都要求**持续**，抖一下、丢一帧不会触发 |
-| 前端 3D 空白 | URDF / mesh 没加载 | 3D 抽屉里会写明是「加载失败」还是「网格缺失」。后者最常见 —— URDF 本身返 200 但 `.STL` 全 404，`git submodule update --init` 即可。自查：`curl -I :18790/assets/urdf/00-arm-rs_asm-v3/urdf/meshes/base_link.STL` 应返 200 |
+| 前端 3D 空白 | URDF / mesh 没加载 | 抽屉里会写明是「加载失败」「网格缺失」还是「3D 无法初始化」，照着那句查。最常见是 submodule 没拉：`git submodule update --init`。自查 `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` 应返 200 —— 注意 mesh 在**包根**下，不在 `urdf/` 里 |
 | 卡片一直不亮「已到位」 | 臂被急停或示教动过 | 这是对的。臂被冻在别处或被人推走之后，界面不再声称知道它在哪 —— 重新点一张卡即可 |
 
 ---
@@ -234,7 +234,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实与坑，**已验证**和**待实测**严格分开 |
 | [PROGRESS.md](./PROGRESS.md) | 进度、阻塞项、交接协议 |
 | [firmware/esp32-shutter/](./firmware/esp32-shutter/README.md) | 烧录、配对、串口协议 |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计与决策记录 |
+| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计与决策记录（已归档，不再追加） |
 
 臂层不自己写 —— 运动学、动力学、重力补偿、轨迹规划、URDF 全部来自 [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py)。
 
