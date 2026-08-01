@@ -1,0 +1,258 @@
+"""The control loop: the one place that talks to the arm every tick.
+
+:meth:`Controller.tick` is the whole thing, and it is deliberately readable top
+to bottom, because the emergency-stop path runs through it.
+
+Order matters. The latch is checked **before** anything else gets to command
+the arm, so no mode can slip a command past an engaged stop. That is why the
+stop is a latch and not a mode: a mode would have to be reached by a transition
+that some other mode might not take.
+
+What the stop does here is **hold**, not release:
+
+    ``arm.hold(frozen_pose)`` keeps torque on and pins the arm where it was.
+    Upstream offers ``RebotArm.estop()``, which is one line forwarding to
+    ``disable_all()``; MotorBridge documents ``disable_all()`` as "Emergency
+    stop all motors". Both cut torque, and a 48 V arm holding a camera drops
+    when torque goes. Neither is called here or anywhere else in this project.
+    See docs/HARDWARE_NOTES.md.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from typing import Callable
+
+from ..arm.base import ArmDriver
+from ..routines.models import Routine
+from ..safety import LatchSource, SafetyLatch
+from ..shutter.base import ShutterDriver
+from .broadcaster import Broadcaster
+from .executor import Phase, RoutineExecutor
+
+log = logging.getLogger(__name__)
+
+
+class Controller:
+    """Owns the arm, the latch and at most one running routine."""
+
+    def __init__(
+        self,
+        arm: ArmDriver,
+        shutter: ShutterDriver,
+        latch: SafetyLatch,
+        broadcaster: Broadcaster,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.arm = arm
+        self.shutter = shutter
+        self.latch = latch
+        self.broadcaster = broadcaster
+        self._clock = clock or time.monotonic
+
+        self._lock = threading.RLock()
+        self._executor: RoutineExecutor | None = None
+        self._teaching = False
+
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._tick_times: list[float] = []
+        self.rate_hz = 0.0
+
+    # ── playback ─────────────────────────────────────────────────────────────
+
+    @property
+    def executor(self) -> RoutineExecutor | None:
+        with self._lock:
+            return self._executor
+
+    @property
+    def is_playing(self) -> bool:
+        with self._lock:
+            return self._executor is not None and not self._executor.is_finished
+
+    def play(self, routine: Routine) -> RoutineExecutor:
+        """Start a routine. Refuses while stopped, teaching, or already playing."""
+        with self._lock:
+            if self.latch.is_latched:
+                raise RuntimeError("emergency stop is engaged")
+            if self.is_playing:
+                raise RuntimeError("a routine is already playing")
+            if self._teaching:
+                raise RuntimeError("cannot play while teaching")
+
+            executor = RoutineExecutor(
+                routine,
+                arm=self.arm,
+                shutter=self.shutter,
+                clock=self._clock,
+                on_progress=lambda p: self.broadcaster.publish(
+                    {"type": "playback", "data": _progress_payload(p)}
+                ),
+            )
+            executor.start()
+            self._executor = executor
+            return executor
+
+    def stop_playback(self, reason: str = "stopped by operator") -> bool:
+        """Abort any running routine. Returns whether one was running."""
+        with self._lock:
+            if self._executor is None or self._executor.is_finished:
+                return False
+            self._executor.abort(reason)
+            return True
+
+    # ── teaching ─────────────────────────────────────────────────────────────
+
+    @property
+    def is_teaching(self) -> bool:
+        with self._lock:
+            return self._teaching
+
+    def set_teaching(self, enabled: bool) -> None:
+        """Enter or leave zero-force drag teaching.
+
+        Entering while a routine plays would put a floating arm and a moving
+        target in the same loop, so playback is stopped first.
+        """
+        with self._lock:
+            if enabled and self.latch.is_latched:
+                raise RuntimeError("emergency stop is engaged")
+            if enabled and self.is_playing:
+                self.stop_playback("teaching started")
+            self._teaching = enabled
+            self.arm.set_float(enabled)
+
+    # ── the loop ─────────────────────────────────────────────────────────────
+
+    def tick(self) -> None:
+        """One iteration. Called by the loop thread, or directly by tests."""
+        state = self.arm.read_state()
+        self._record_rate()
+
+        with self._lock:
+            if self.latch.is_latched:
+                self._tick_latched(state)
+            else:
+                self._tick_running()
+
+            self._publish(state)
+
+    def _tick_latched(self, state) -> None:
+        """Hold position and refuse everything else. Never disables the motors."""
+        # First tick after engaging decides where "here" is.
+        self.latch.record_freeze_pose(state.positions)
+        frozen = self.latch.snapshot().freeze_pose or state.positions
+
+        if self._teaching:
+            # A floating arm under an engaged stop is a dropped arm.
+            self._teaching = False
+            self.arm.set_float(False)
+
+        if self._executor is not None and not self._executor.is_finished:
+            self._executor.abort("emergency stop engaged")
+
+        self.arm.hold(frozen)
+
+    def _tick_running(self) -> None:
+        if self._teaching:
+            return  # the arm floats; nothing to command
+        if self._executor is not None and not self._executor.is_finished:
+            self._executor.tick()
+
+    def _record_rate(self) -> None:
+        now = self._clock()
+        self._tick_times.append(now)
+        cutoff = now - 1.0
+        while self._tick_times and self._tick_times[0] < cutoff:
+            self._tick_times.pop(0)
+        self.rate_hz = float(len(self._tick_times))
+
+    def _publish(self, state) -> None:
+        latch = self.latch.snapshot()
+        executor = self._executor
+        self.broadcaster.publish(
+            {
+                "type": "state",
+                "data": {
+                    "t": state.t,
+                    "positions": dict(state.positions),
+                    "velocities": dict(state.velocities),
+                    "rate_hz": self.rate_hz,
+                    "mode": self.mode,
+                    "estop": {
+                        "latched": latch.latched,
+                        "reason": latch.reason,
+                        "source": latch.source.value if latch.source else None,
+                    },
+                    "playback": _progress_payload(executor.progress()) if executor else None,
+                },
+            }
+        )
+
+    @property
+    def mode(self) -> str:
+        """Coarse state for the UI. The latch outranks everything."""
+        if self.latch.is_latched:
+            return "estop"
+        if self._teaching:
+            return "teach"
+        if self.is_playing:
+            return "playback"
+        return "idle"
+
+    # ── thread driver ────────────────────────────────────────────────────────
+    #
+    # On real hardware the loop is upstream's start_control_loop(control_fn,
+    # rate), which already owns CAN timing. This thread exists so the simulated
+    # arm can run the identical tick() without one.
+
+    def start(self, rate_hz: float = 100.0) -> None:
+        if self._thread is not None:
+            raise RuntimeError("already started")
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, args=(rate_hz,), name="control-loop", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def _run(self, rate_hz: float) -> None:
+        period = 1.0 / rate_hz
+        next_tick = time.monotonic()
+        while not self._stop_event.is_set():
+            try:
+                self.tick()
+            except Exception:
+                # A raised exception must not kill the loop: the loop is what
+                # keeps the arm held. Engage the stop and keep ticking.
+                log.exception("control loop tick failed")
+                self.latch.engage("control loop tick raised", LatchSource.WATCHDOG)
+
+            next_tick += period
+            sleep = next_tick - time.monotonic()
+            if sleep > 0:
+                time.sleep(sleep)
+            else:
+                next_tick = time.monotonic()  # fell behind; do not pile up
+
+
+def _progress_payload(progress) -> dict:
+    return {
+        "phase": progress.phase.value,
+        "waypoint_index": progress.waypoint_index,
+        "waypoint_total": progress.waypoint_total,
+        "action_index": progress.action_index,
+        "action_total": progress.action_total,
+        "routine_id": progress.routine_id,
+        "routine_name": progress.routine_name,
+        "error": progress.error,
+        "finished": progress.phase in (Phase.DONE, Phase.ABORTED),
+    }
