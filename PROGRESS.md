@@ -30,11 +30,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#12` feat: 控制循环 |
+| **当前 commit** | `#20` feat: 看门狗自动触发 |
 | **状态** | `TODO` |
-| **Phase** | Phase 2 — 臂层封装（回头补控制循环） |
-| **上一个完成的** | `#49` test: 播放中途 abort（逻辑侧） |
-| **备注** | 25/62 完成，111 个测试绿，ruff 干净。纯逻辑主干打通：Routine 模型 → store → CRUD → 执行器 → 快门 sim，全程假时钟零 sleep。**下一步 #12/#13 控制循环 + WebSocket**，然后 #16（循环尊重闩锁）、#47/#48（播放接线）—— 这三个一通，急停就是端到端的了。之后 #20/#21 看门狗、#40/#41 串口协议（不需要板子）、Phase 5 示教、Phase 6 校验、Phase 9 前端。 |
+| **Phase** | Phase 3 — 急停（补看门狗） |
+| **上一个完成的** | `#49` test: 播放期间急停（端到端） |
+| **备注** | 34/62 完成，140 个测试绿，ruff 干净。**主干端到端跑通** —— 起服务实测过示教 → 录点 → 播放 → 急停 → play 返 409（`uv run -m backend.app --sim`，控制循环 100 Hz）。剩余纯逻辑：#20/#21 看门狗、#40/#41 串口协议（不需要板子）、#33–36 限位与自碰撞（接 Pinocchio）、#29 浮动/锁定判据、Phase 9 前端 7 个、#50 首点平滑。等硬件：#6/#7 实测、#9 ArmSession、#28 teach 移植、#37/#42 固件、Phase 10 部署。 |
 
 ---
 
@@ -101,8 +101,8 @@
 | 9 | L+H | feat: `ArmSession` 薄封装 `RebotArm`（load yaml / connect / enable_all / get_state），**不实现任何运动学** | TODO | 实机连通性依赖 B1 |
 | 10 | L | feat: `ArmDriver` Protocol + `SimArm`（一阶滞后 + 可注入"人手拖动"） | DONE | 时间注入，不 sleep。滞后用指数精确解，结果与 tick 粒度无关。速度**位置差分**算（与真机同一约束）。拖动只在浮动时生效 —— 握持的臂会抵抗，测试不能拖动锁死的臂还信结果 |
 | 11 | L | test: SimArm 行为 | DONE | 18 例，含"拖三个位置录三次"的示教循环、松手停在原地、步长无关性 |
-| 12 | L+H | feat: 控制循环，用上游 `start_control_loop(control_fn, rate)`，不自己起线程 | TODO | 频率依赖 B3 |
-| 13 | L | feat: 状态广播 + WebSocket `/ws`（关节角/速度/力矩、模式、实际循环频率） | TODO | |
+| 12 | L+H | feat: 控制循环 `Controller.tick()` | DONE（sim 侧） | `tick()` 是纯的，测试可直接调。sim 下自带线程驱动（实测 100 Hz 稳）；**真机换成上游 `start_control_loop`**，它已处理 CAN 时序。tick 抛异常不杀循环 —— 循环正是撑住臂的东西，改成 engage 闩锁后继续 tick |
+| 13 | L | feat: 状态广播 + WebSocket `/ws` | DONE | 广播队列**有界且丢旧包**，慢订阅者不能反压控制线程 —— 因为浏览器标签页卡住而停摆的控制循环，就是停止撑住臂的控制循环。`/ws` 只读，指令一律走 REST，否则绕过运动闸门 |
 
 ### Phase 3 — 急停（在任何东西快速运动之前先做）
 
@@ -110,7 +110,7 @@
 |---|---|---|---|---|
 | 14 | L | feat: `SafetyLatch`（engage/clear/is_latched/snapshot/record_freeze_pose），纯逻辑不碰硬件 | DONE | 冻结姿态由控制循环下一 tick 回填（`record_freeze_pose`），latch 本身不碰硬件。`source` 在边界强制转 enum |
 | 15 | L | test: 闩锁状态机 | DONE | 11 例，含并发 engage 只能有一个赢家 |
-| 16 | L+H | feat: 控制循环尊重闩锁，冻结 `q_target` 并继续 MIT + 重力补偿维持 | TODO | **见决策速查 #1**。等 #12 控制循环 |
+| 16 | L+H | feat: 控制循环尊重闩锁，冻结姿态并继续 hold | DONE | 闩锁在**任何东西能命令臂之前**检查。一条测试走 AST 扫 `backend/` 下每个模块，出现 `.estop` 或 `.disable_all` 属性访问就失败 —— 用 AST 不用文本匹配，这样必须提到这两个名字的注释不会误触 |
 | 17 | L | feat: 急停 REST 端点（`POST /api/estop` / `/clear` / `GET`），状态进 health | DONE | engage 永远 200 不 409 —— 会跟你吵架的急停是坏急停；重复 engage 返 `changed: false` 并保留首因 |
 | 18 | L | feat: API 运动闸门（FastAPI 依赖，闩锁期间 409 带原因） | DONE | `backend/api/gate.py`。409 而非 503：臂不是不可用，是调用方必须显式解除的状态 |
 | 19 | L | test: 闸门覆盖，**反射路由表**遍历所有运动端点，不硬编码列表 | DONE | **差点成为空转测试**：FastAPI 0.141 的 `include_router` 不把子路由摊平进 `app.routes`，而是塞进一个不透明的 `_IncludedRouter`，朴素遍历一个端点都看不见。改用 `effective_candidates()` 递归，并加一条 **OpenAPI 交叉校验** —— 下次 FastAPI 改内部结构会大声失败而不是静默失效。已实测：临时加一个未挂闸门的端点，测试确实报错 |
@@ -134,9 +134,9 @@
 |---|---|---|---|---|
 | 28 | L+H | feat: teach 模式，移植 `example/10_gravity_compensation_lock.py`（MIT + 重力前馈 + 位置闭环，雅可比算末端速度，阈值 0.04 m/s / 0.08 rad/s 进配置） | TODO | **见决策速查 #2**；阈值依赖 B2 |
 | 29 | L | test: 浮动/锁定状态机纯逻辑单测（注入速度序列，验证跟随/冻结/抖动不反复解锁 → 要迟滞或最短保持） | TODO | |
-| 30 | L | feat: 录点端点 `POST /api/routines/{id}/waypoints/capture` | TODO | "拖到位、松手、按一下"里的按一下 |
-| 31 | L | test: 示教录点（SimArm 注入式拖动，三个位置各录一次） | TODO | |
-| 32 | L | feat: 示教期间急停 —— 浮动下 engage 必须立刻夹住臂 | TODO | 专门一个测试 |
+| 30 | L | feat: 录点端点 `POST /api/routines/{id}/waypoints/capture` | DONE | 不挂闸门 —— 读当前姿态写条记录，急停期间做这事无害，而且刚按下急停的人多半正想要那个姿态 |
+| 31 | L | test: 示教录点 | DONE | HTTP 层拖三次录三次，顺序与角度都对 |
+| 32 | L | feat: 示教期间急停 —— 浮动下 engage 立刻夹住臂 | DONE | 浮动状态下挂着急停就是一条掉下来的臂。engage 后先撤 float 再 hold |
 
 ### Phase 6 — 安全校验（复用上游运动学）
 
@@ -166,9 +166,9 @@
 | 44 | L | test: 执行器时序 | DONE | 20 例，假时钟驱动零 sleep。settle 的断言写在循环内 —— 写在循环后会漏掉「settle 刚结束那一 tick 就开枪」是正确行为这件事 |
 | 45 | L | feat: action 分发 + 失败策略（abort / skip / retry N） | DONE | `shutter` 默认 abort |
 | 46 | L | test: action 失败分支 | DONE | 含「BLE 断链时臂走完整轮而素材全空」这个最贵失败模式 |
-| 47 | L | feat: playback 模式接入控制循环，进度经 WS 广播（第几点/总数/当前阶段） | TODO | |
-| 48 | L | feat: 播放控制端点，开始前对整条序列做限位与碰撞**预检** | TODO | 不合法直接 400，别让臂动起来才发现 |
-| 49 | L | test: 播放中途 abort 干净中止且不自动恢复 | DONE（一半） | abort 后继续 tick 两千次，帧数与点位下标纹丝不动。**控制循环侧的接线（闩锁 → abort → 臂冻结）还没做**，等 #16/#47，到时候补端到端那一半 |
+| 47 | L | feat: playback 接入控制循环，进度经 WS 广播 | DONE | |
+| 48 | L | feat: 播放控制端点 | DONE（一半） | `play` / `playback/stop` / `teach` / `control` 都通了。`play` 挂闸门，`stop` 不挂 —— 停止不能被停止本身挡住。**限位与碰撞预检还没做**，等 #33/#35 |
+| 49 | L | test: 播放期间急停 | DONE | **端到端跑通**：播到一半 engage → 执行器 abort + 臂冻结 → 再 tick 一千次纹丝不动 → clear → 再 tick 一千次仍是 idle 且停在冻结姿态。真机上要另跑一遍 |
 | 50 | L | feat: 首点平滑接入（限速过渡，不直接下发目标位） | TODO | 继承老项目 `Transition` 模式 |
 
 ### Phase 9 — 前端
@@ -206,14 +206,14 @@
 |---|---|---|---|
 | 0 骨架 | 5 | **5** | 5 |
 | 1 硬件对表 | 3 | **1** | 1 |
-| 2 臂层 | 5 | **2** | 3 |
-| 3 急停 | 8 | **5** | 7 |
+| 2 臂层 | 5 | **4** | 3 |
+| 3 急停 | 8 | **6** | 7 |
 | 4 数据模型 | 6 | **6** | 6 |
-| 5 示教 | 5 | 0 | 4 |
+| 5 示教 | 5 | **3** | 4 |
 | 6 安全校验 | 4 | 0 | 4 |
 | 7 快门 | 6 | **1** | 4 |
-| 8 执行器 | 8 | **5** | 8 |
+| 8 执行器 | 8 | **7** | 8 |
 | 9 前端 | 7 | 0 | 7 |
 | 10 部署 | 4 | 0 | 1 |
 | 11 Agent API | 1 | 0 | 1 |
-| **合计** | **62** | **25** | **51** |
+| **合计** | **62** | **34** | **51** |
