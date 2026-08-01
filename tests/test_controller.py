@@ -10,7 +10,7 @@ import pytest
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
 from backend.routines import Routine, ShutterAction, Waypoint
-from backend.safety import LatchSource, SafetyLatch
+from backend.safety import LatchSource, SafetyLatch, Watchdog
 from backend.shutter import SimShutter
 
 JOINTS = ("joint1", "joint2")
@@ -26,7 +26,7 @@ class FakeClock:
 
 
 class Rig:
-    def __init__(self) -> None:
+    def __init__(self, watchdog: bool = False) -> None:
         self.clock = FakeClock()
         self.arm = SimArm(JOINTS, clock=self.clock, tau=0.05)
         self.arm.connect()
@@ -35,12 +35,15 @@ class Rig:
         self.broadcaster = Broadcaster()
         self.published: list = []
         self.broadcaster.publish = self.published.append  # type: ignore[method-assign]
+        self.watchdog = Watchdog(self.latch, clock=self.clock) if watchdog else None
         self.controller = Controller(
             arm=self.arm,
             shutter=self.shutter,
             latch=self.latch,
             broadcaster=self.broadcaster,
             clock=self.clock,
+            watchdog=self.watchdog,
+            expected_period_s=DT,
         )
 
     def step(self, n: int = 1) -> None:
@@ -240,6 +243,62 @@ def test_nothing_in_the_backend_ever_disables_the_motors():
         "these cut motor torque and drop the arm; this project's emergency stop "
         f"holds position instead (see docs/HARDWARE_NOTES.md): {offenders}"
     )
+
+
+# ── watchdog integration ─────────────────────────────────────────────────────
+
+
+def test_a_failing_arm_read_does_not_kill_the_loop():
+    """CAN drops frames. One bad read must not stop the loop holding the arm."""
+    rig = Rig(watchdog=True)
+    calls = {"n": 0}
+    real_read = rig.arm.read_state
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] % 10 == 0:
+            raise OSError("CAN read failed")
+        return real_read()
+
+    rig.arm.read_state = flaky  # type: ignore[method-assign]
+    rig.step(100)
+
+    assert rig.latch.is_latched is False
+    assert rig.controller.mode == "idle"
+
+
+def test_persistent_read_failure_engages_the_stop():
+    """A run of them means the loop no longer knows where the arm is."""
+    rig = Rig(watchdog=True)
+
+    def always_fails():
+        raise OSError("CAN bus down")
+
+    rig.arm.read_state = always_fails  # type: ignore[method-assign]
+    rig.step(20)
+
+    assert rig.latch.is_latched is True
+    assert rig.latch.snapshot().source is LatchSource.WATCHDOG
+    assert "read failures" in rig.latch.snapshot().reason
+
+
+def test_drift_is_not_judged_against_a_moving_target():
+    """During playback a large error is the whole point of moving."""
+    rig = Rig(watchdog=True)
+    rig.controller.play(Routine(name="x", waypoints=[wp(1.0, duration_s=5)]))
+    rig.step(300)
+
+    assert rig.latch.is_latched is False
+
+
+def test_clearing_a_stop_resets_accumulated_suspicion():
+    rig = Rig(watchdog=True)
+    rig.latch.engage("operator stop", LatchSource.UI)
+    rig.step(5)
+    rig.latch.clear()
+    rig.step(5)
+
+    assert rig.latch.is_latched is False
 
 
 # ── broadcast ────────────────────────────────────────────────────────────────

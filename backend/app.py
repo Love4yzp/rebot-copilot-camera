@@ -25,7 +25,7 @@ from .api import control, estop, routines
 from .arm import SimArm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
-from .safety import SafetyLatch
+from .safety import SafetyLatch, Watchdog
 from .shutter import SimShutter
 
 log = logging.getLogger(__name__)
@@ -69,11 +69,14 @@ app.state.broadcaster = Broadcaster()
 
 # Simulated hardware by default. The real ArmSession (plan commit #9) swaps in
 # here once CAN transport is confirmed; everything above the arm is unaware.
+app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
 app.state.controller = Controller(
     arm=SimArm(assets.joint_names(), clock=time.monotonic),
     shutter=SimShutter(),
     latch=app.state.latch,
     broadcaster=app.state.broadcaster,
+    watchdog=app.state.watchdog,
+    expected_period_s=1.0 / SIM_LOOP_HZ,
 )
 
 app.include_router(estop.router)

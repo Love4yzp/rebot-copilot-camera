@@ -27,7 +27,8 @@ from typing import Callable
 
 from ..arm.base import ArmDriver
 from ..routines.models import Routine
-from ..safety import LatchSource, SafetyLatch
+from ..arm.base import ArmState
+from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..shutter.base import ShutterDriver
 from .broadcaster import Broadcaster
 from .executor import Phase, RoutineExecutor
@@ -45,16 +46,23 @@ class Controller:
         latch: SafetyLatch,
         broadcaster: Broadcaster,
         clock: Callable[[], float] | None = None,
+        watchdog: Watchdog | None = None,
+        expected_period_s: float = 0.01,
     ) -> None:
         self.arm = arm
         self.shutter = shutter
         self.latch = latch
         self.broadcaster = broadcaster
         self._clock = clock or time.monotonic
+        self.watchdog = watchdog
+        self._expected_period_s = expected_period_s
 
         self._lock = threading.RLock()
         self._executor: RoutineExecutor | None = None
         self._teaching = False
+        self._last_state = ArmState(positions={}, velocities={})
+        self._hold_target: dict[str, float] | None = None
+        self._was_latched = False
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -129,14 +137,41 @@ class Controller:
 
     def tick(self) -> None:
         """One iteration. Called by the loop thread, or directly by tests."""
-        state = self.arm.read_state()
+        if self.watchdog is not None:
+            self.watchdog.observe_tick(self._expected_period_s)
+
+        try:
+            state = self.arm.read_state()
+        except Exception:
+            # A failed read is not fatal on its own -- CAN drops frames. The
+            # watchdog decides when a run of them means we have lost the arm.
+            log.exception("arm read failed")
+            if self.watchdog is not None:
+                self.watchdog.observe_read(ok=False)
+            state = self._last_state
+        else:
+            self._last_state = state
+            if self.watchdog is not None:
+                self.watchdog.observe_read(ok=True)
+
         self._record_rate()
 
         with self._lock:
-            if self.latch.is_latched:
+            latched = self.latch.is_latched
+            if latched:
                 self._tick_latched(state)
             else:
+                if self._was_latched and self.watchdog is not None:
+                    # Clearing a stop starts a fresh assessment; suspicion
+                    # accumulated before the stop is about the old situation.
+                    self.watchdog.reset()
                 self._tick_running()
+            self._was_latched = latched
+
+            if self.watchdog is not None:
+                self.watchdog.observe_hold(
+                    state.positions if self._hold_target else None, self._hold_target
+                )
 
             self._publish(state)
 
@@ -155,12 +190,20 @@ class Controller:
             self._executor.abort("emergency stop engaged")
 
         self.arm.hold(frozen)
+        self._hold_target = dict(frozen)
 
     def _tick_running(self) -> None:
         if self._teaching:
-            return  # the arm floats; nothing to command
+            # The arm floats; nothing to command, and nothing to hold it to.
+            self._hold_target = None
+            return
         if self._executor is not None and not self._executor.is_finished:
             self._executor.tick()
+            # Mid-move a large error is the point, so drift is only judged
+            # against a hold, never against a moving target.
+            self._hold_target = None
+            return
+        self._hold_target = None
 
     def _record_rate(self) -> None:
         now = self._clock()
@@ -213,6 +256,7 @@ class Controller:
         if self._thread is not None:
             raise RuntimeError("already started")
         self._stop_event.clear()
+        self._expected_period_s = 1.0 / rate_hz
         self._thread = threading.Thread(
             target=self._run, args=(rate_hz,), name="control-loop", daemon=True
         )

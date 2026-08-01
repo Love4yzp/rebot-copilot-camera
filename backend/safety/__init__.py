@@ -1,3 +1,10 @@
 from .latch import LatchSnapshot, LatchSource, SafetyLatch
+from .watchdog import Watchdog, WatchdogConfig
 
-__all__ = ["SafetyLatch", "LatchSnapshot", "LatchSource"]
+__all__ = [
+    "SafetyLatch",
+    "LatchSnapshot",
+    "LatchSource",
+    "Watchdog",
+    "WatchdogConfig",
+]
