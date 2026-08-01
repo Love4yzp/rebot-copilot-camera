@@ -1,5 +1,6 @@
 # runtime data — teach/playback routines live here, never committed
-routines/
+# (root-anchored: an unanchored "routines/" also swallows backend/routines/)
+/routines/
 
 # python
 __pycache__/
