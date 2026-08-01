@@ -36,8 +36,8 @@
 | **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#73` fix: 动作离开控制循环 |
-| **备注** | **71/73 完成，273 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
+| **上一个完成的** | `#74` fix: `--sim` 里的模拟臂从来没动过 |
+| **备注** | **72/74 完成，278 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
 
@@ -217,6 +217,7 @@
 | 71 | L | feat: 颜色改为状态通道 + tally 条（视觉系统重做） | DONE | 原配色是 GitHub 深色主题套在机械臂上：蓝色 accent 同时是按钮/进度/选中/链接，而「臂正朝人移动」只配到柔和蓝呼吸。改为底盘全灰阶、**删除品牌色**，四个彩色各自独占一个机器状态（红=急停 / 琥珀=在动 / 绿=到位 / 白=快门），借用 tally 灯与机械警示灯约定。签名元素 **tally 条**：顶端 4px 满幅光带报机器状态 —— 操作者站在臂旁读不到 12px 状态字，但两米外余光能读一条横贯屏幕的光带。单锚点进度移进卡片内部（反馈回到手指落下的地方）；配置模式换成工作台底纹而非虚线边框（前注意级别区分「点了臂会不会动」）；示教弹层改底部横条并自带急停；3D 收进抽屉，预览由 hover 改选中语义；数字键 1–9 触发锚点；删除锚点改 8 秒撤销（复用 `POST /waypoints` 的 `index`）。无障碍补 `:focus-visible` / `prefers-reduced-motion` / `--mark-dim` 提到 7:1。自托管 Saira Condensed latin 子集（设备离线，不能挂 CDN）。顺手修：mock 结束时把 playback 置 null，与真 controller 不一致，导致「已到位」在预览里永远出不来 |
 | 72 | L | fix: 3D 视图从来没画出过臂（三个叠在一起的 bug） | DONE | 一直以为是 submodule 没拉 —— 网格文件其实在。真因三层：① mesh 路径用 `packages` 解析，但那只管 `package://` URI，这个 URDF 写的是相对包根的普通相对路径，要用 `workingPath`；② `workingPath` 是**拼接**不是 join，少个尾斜杠就拼成 `…-v3meshes/`；③ 最隐蔽的一个 —— `{status && <div/>}` 在 `status === ""` 时求值为**空字符串**而非 `false`，React 把它当文本子节点走 `setTextContent(node, '')` 快路径，**把命令式 append 的 canvas 一起抹掉**，所以模型加载成功了却连画布都没有。改成显式 `? :` 三元。另外抽屉原本 `position: fixed; top: 0` 盖住急停条和底栏右端，改为与卡片板共享一个定位行，结构上只能盖住卡片。renderer 构造加 try/catch —— 黑框必须自己说明为什么黑 |
 | 73 | L | fix: 动作离开控制循环（插件系统的地基） | DONE | **pre-existing bug，可复现**：executor 在 `Controller.tick()` 里直接调快门驱动，而 `Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒 —— 控制循环正是撑住 48V 臂的东西。实测基线：5 连拍配上每帧阻塞 600ms 的驱动，最坏 tick 间隔 **619ms**，越过 watchdog 的 `late_tick_grace_s=0.5` → **急停触发，5 帧只打出 2 帧，整轮中止**。一台仅仅是慢的相机，看起来和丢了臂一模一样。改后同场景最坏间隔 **13ms**，5 帧全中，不触发。新增 `backend/actions/`：`ActionProvider` Protocol（`ActionContext` 里**没有 arm 句柄** —— 插件结构上够不到运动闸门，与「闩锁不进 executor」同一手法）、`ThreadedRunner`（每 provider 一条 worker，一次一个任务；超时在**读侧**判定，因为 Python 杀不掉线程，超时后该 provider 停用到线程返回，而不是让下个锚点排在尸体后面）、`ShutterProvider`。executor 由「直接调用」改为「投递 + 每 tick 轮询」；连拍分帧仍留在 executor，好让急停落在**帧与帧之间**。`Job.error` 也结算截止时间 —— 只读 error 会拿到 `None`，读起来像成功。runner 的时钟**不跟控制循环的时钟**：动作截止时间量的是 provider 真跑了多久，那是墙钟。既有测试**断言一行没改**，只换了 fixture 接线（假时钟的 fixture 用 `InlineRunner`；线程隔离由 `test_action_runner.py` 单独证明）。+13 测试 |
+| 74 | L | fix: `--sim` 里的模拟臂从来没动过 | DONE | **pre-existing bug**：`Controller.tick()` 只**读**臂，而 `SimArm.step(dt)` 要调用方驱动 —— 服务里没有任何东西调它。后果：`uv run -m backend.app --sim` 起来后每一次 play/goto 都以 `waypoint 0 not reached within 6.0s` 收场，示教/录点/播放这条主流程在真服务上一步也走不通（PROGRESS 里「全程实测过」那句因此复现不出来）。加 `SimArm(self_driven=True)`：**有人读它时它自己追上时钟**。为什么不用线程 —— 线程版没法用假时钟测，而 read_state 版可以，于是「服务能播完一条 routine」变成一条确定性测试（只 tick controller，不碰 `arm.step()`）。默认仍是 `False`：测试自己拿着时钟，一个会自走的臂会让所有时序断言取决于谁最后读过它。`create_arm` 的两条 sim 路径都走 `_sim_arm()`，服务拿到的一定是自走的。+5 测试 |
 
 ---
 
@@ -236,5 +237,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 11 | **11** | 11 |
-| **合计** | **73** | **71** | **62** |
+| 后续新增 | 12 | **12** | 12 |
+| **合计** | **74** | **72** | **63** |

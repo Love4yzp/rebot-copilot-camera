@@ -387,3 +387,50 @@ def test_shutter_test_reports_a_dead_link_rather_than_raising(rig):
     assert body["ok"] is False
     assert body["connected"] is False
     assert "no link" in body["error"]
+
+
+def test_the_service_arm_moves_without_anything_stepping_it(tmp_path: Path):
+    """The regression that made `--sim` useless.
+
+    Controller.tick() only reads the arm, so a simulator that has to be
+    step()ed by hand never moves in a running service: every play and every
+    goto ended in "waypoint 0 not reached within 6.0s". This drives nothing but
+    the control loop, exactly as the service does.
+    """
+    clock = FakeClock()
+    arm = SimArm(JOINTS, clock=clock, tau=0.05, self_driven=True)
+    arm.connect()
+    app.state.latch = SafetyLatch(clock=clock)
+    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.broadcaster = Broadcaster()
+    shutter = SimShutter()
+    app.state.controller = Controller(
+        arm=arm,
+        shutter=shutter,
+        latch=app.state.latch,
+        broadcaster=app.state.broadcaster,
+        clock=clock,
+        actions=InlineRunner([ShutterProvider(shutter)]),
+    )
+    client = TestClient(app)
+
+    rid = client.post("/api/routines", json={"name": "sim"}).json()["id"]
+    client.post(
+        f"/api/routines/{rid}/waypoints",
+        json={
+            "joints": {"joint1": 0.3, "joint2": 0.0},
+            "settle_ms": 50,
+            "actions": [{"type": "shutter"}],
+        },
+    )
+    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 200
+
+    for _ in range(5000):
+        clock.now += 0.01
+        app.state.controller.tick()   # no arm.step() — that is the point
+        if not app.state.controller.is_playing:
+            break
+
+    assert app.state.controller.executor.phase.value == "done"
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.3, abs=0.02)
+    assert shutter.shots == 1

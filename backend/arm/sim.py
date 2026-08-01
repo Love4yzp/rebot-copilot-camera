@@ -35,6 +35,7 @@ class SimArm:
         clock: Callable[[], float],
         initial: Mapping[str, float] | None = None,
         tau: float = DEFAULT_TAU,
+        self_driven: bool = False,
     ) -> None:
         if tau <= 0:
             raise ValueError("tau must be positive")
@@ -42,6 +43,7 @@ class SimArm:
         self._joint_names = tuple(joint_names)
         self._clock = clock
         self._tau = tau
+        self._self_driven = self_driven
         self._lock = threading.RLock()
 
         start = dict.fromkeys(self._joint_names, 0.0)
@@ -84,6 +86,16 @@ class SimArm:
 
     def read_state(self) -> ArmState:
         with self._lock:
+            # A self-driven arm catches up with the clock whenever anyone looks
+            # at it. Tests call step() by hand on a fake clock, but the running
+            # service has nothing that would -- the control loop only reads --
+            # so without this the simulated arm never moves and every playback
+            # ends in "waypoint 0 not reached". The simulator is the whole
+            # no-hardware development loop; one that cannot move is not one.
+            if self._self_driven:
+                dt = self._clock() - self._t
+                if dt > 0:
+                    self.step(dt)
             return ArmState(
                 positions=dict(self._q),
                 velocities=dict(self._velocities),

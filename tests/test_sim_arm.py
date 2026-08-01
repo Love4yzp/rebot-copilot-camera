@@ -203,3 +203,62 @@ def test_negative_dt_is_rejected(arm: SimArm):
 def test_zero_tau_is_rejected(clock: FakeClock):
     with pytest.raises(ValueError):
         SimArm(JOINTS, clock=clock, tau=0.0)
+
+
+# ── self-driving ─────────────────────────────────────────────────────────────
+
+
+def test_a_self_driven_arm_moves_with_nothing_stepping_it():
+    """What the running service needs.
+
+    Controller.tick() only ever *reads* the arm; nothing in the service calls
+    step(). An arm built the way the tests build one therefore sits frozen in
+    `uv run -m backend.app --sim`, and every playback ends in "not reached".
+    """
+    clock = FakeClock()
+    arm = SimArm(("joint1",), clock=clock, tau=0.05, self_driven=True)
+    arm.connect()
+    arm.move_to({"joint1": 1.0}, 1.0)
+
+    clock.now += 1.0
+    assert arm.read_state().positions["joint1"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_a_self_driven_arm_reports_velocity_between_reads():
+    """Float/lock reads velocity every tick, so catching up must produce one."""
+    clock = FakeClock()
+    arm = SimArm(("joint1",), clock=clock, tau=0.05, self_driven=True)
+    arm.connect()
+    arm.move_to({"joint1": 1.0}, 1.0)
+
+    clock.now += 0.01
+    arm.read_state()
+    clock.now += 0.01
+    assert arm.read_state().velocities["joint1"] > 0
+
+
+def test_reading_a_self_driven_arm_twice_at_one_instant_keeps_the_velocity():
+    """Two readers in the same tick must not difference over dt=0 and wipe it."""
+    clock = FakeClock()
+    arm = SimArm(("joint1",), clock=clock, tau=0.05, self_driven=True)
+    arm.connect()
+    arm.move_to({"joint1": 1.0}, 1.0)
+
+    clock.now += 0.01
+    arm.read_state()
+    clock.now += 0.01
+    moving = arm.read_state().velocities["joint1"]
+
+    assert arm.read_state().velocities["joint1"] == moving
+
+
+def test_the_default_arm_still_only_moves_when_stepped():
+    """The tests own the clock; an arm that advanced itself under them would
+    make every timing assertion depend on who read it last."""
+    clock = FakeClock()
+    arm = SimArm(("joint1",), clock=clock, tau=0.05)
+    arm.connect()
+    arm.move_to({"joint1": 1.0}, 1.0)
+
+    clock.now += 1.0
+    assert arm.read_state().positions["joint1"] == 0.0

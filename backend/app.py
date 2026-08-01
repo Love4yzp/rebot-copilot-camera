@@ -85,7 +85,7 @@ app.state.agent_lease = AgentLease()
 app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
 app.state.simulated = True
 app.state.controller = Controller(
-    arm=SimArm(assets.joint_names(), clock=time.monotonic),
+    arm=SimArm(assets.joint_names(), clock=time.monotonic, self_driven=True),
     shutter=SimShutter(),
     latch=app.state.latch,
     broadcaster=app.state.broadcaster,

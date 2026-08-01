@@ -35,7 +35,7 @@ def create_arm(
 
     if force_sim:
         log.info("sim mode requested: using SimArm")
-        return SimArm(assets.joint_names(), clock=clock), True
+        return _sim_arm(clock), True
 
     try:
         from .session import ArmSession
@@ -49,4 +49,14 @@ def create_arm(
         # arm, and a genuine bug in the arm layer, and the operator needs to see
         # which -- so the reason is logged rather than swallowed into "sim mode".
         log.warning("real arm unavailable (%s: %s) — falling back to SimArm", type(exc).__name__, exc)
-        return SimArm(assets.joint_names(), clock=clock), True
+        return _sim_arm(clock), True
+
+
+def _sim_arm(clock: Callable[[], float]) -> SimArm:
+    """A simulator wired for a running service, not for a test.
+
+    ``self_driven`` is the difference: tests advance the simulation by calling
+    ``step()`` on a fake clock, and nothing in the service ever would, so an
+    arm built the test way sits frozen and every routine times out.
+    """
+    return SimArm(assets.joint_names(), clock=clock, self_driven=True)
