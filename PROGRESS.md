@@ -30,11 +30,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#43` feat: RoutineExecutor |
+| **当前 commit** | `#12` feat: 控制循环 |
 | **状态** | `TODO` |
-| **Phase** | Phase 8 — 序列执行器 |
-| **上一个完成的** | `#27` test: waypoint 编辑 |
-| **备注** | 19/62 完成，91 个测试绿，ruff 干净。Phase 0/4 全通，Phase 3 纯逻辑部分完成。**下一步整块吃 Phase 8（#43–50 执行器）** —— 纯逻辑，注入时钟/arm/shutter，做完主干就通了。其中 #49「播放中途急停」是全项目最重要的集成测试。之后回头补 Phase 7 的 sim 部分（#39/#40/#41 快门协议，不需要板子）。等硬件的：#6/#7 实测、#9 ArmSession、#12 控制频率、#16 循环尊重闩锁。 |
+| **Phase** | Phase 2 — 臂层封装（回头补控制循环） |
+| **上一个完成的** | `#49` test: 播放中途 abort（逻辑侧） |
+| **备注** | 25/62 完成，111 个测试绿，ruff 干净。纯逻辑主干打通：Routine 模型 → store → CRUD → 执行器 → 快门 sim，全程假时钟零 sleep。**下一步 #12/#13 控制循环 + WebSocket**，然后 #16（循环尊重闩锁）、#47/#48（播放接线）—— 这三个一通，急停就是端到端的了。之后 #20/#21 看门狗、#40/#41 串口协议（不需要板子）、Phase 5 示教、Phase 6 校验、Phase 9 前端。 |
 
 ---
 
@@ -153,7 +153,7 @@
 |---|---|---|---|---|
 | 37 | E | feat: ESP32 固件 `firmware/esp32-shutter/`，PlatformIO，行协议 `#<id> <CMD>` → `#<id> OK/ERR` | BLOCKED | B4；**必须 `-D ARDUINO_USB_CDC_ON_BOOT=1`** |
 | 38 | L | docs: 固件 README（烧录 / 相机菜单 `无线通信设置 > 蓝牙功能` 设"遥控" / 协议表 / 故障） | TODO | |
-| 39 | L | feat: `ShutterDriver` Protocol + `SimShutter`（可注入失败） | TODO | |
+| 39 | L | feat: `ShutterDriver` Protocol + `SimShutter`（可注入失败） | DONE | 失败**抛异常不返 bool** —— bool 返回值最容易在调用点被丢掉，而执行器必须区分「继续」和「停拍」。`ShutterNotConnected` 与 `ShutterTimeout` 分开：前者意味着剩下每一帧都会同样失败 |
 | 40 | L | feat: `Esp32Shutter` 串口客户端（自增 id、单条在途、超时可配、id 不匹配丢弃、自动重连） | TODO | |
 | 41 | L | test: 协议编解码（内存双向管道当假串口：往返/超时/ERR/id 不匹配/粘包/重连） | TODO | |
 | 42 | E | feat: 快门自检端点 `POST /api/shutter/test`，health 含连接状态与固件版本 | BLOCKED | B4 |
@@ -162,13 +162,13 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 43 | L | feat: `RoutineExecutor` 纯逻辑（注入时钟/arm/shutter）：移动 → 等到位 → settle → 依次 actions → 下一点 | TODO | 点间运动优先调上游 `trajectory/` |
-| 44 | L | test: 执行器时序（假时钟：按序走完 / settle 等够 / 到位超时 fault / 空 routine） | TODO | |
-| 45 | L | feat: action 分发 + 失败策略（`sleep` / `shutter`；**shutter 默认失败即中止**） | TODO | 静默失败会整轮素材废掉才发现 |
-| 46 | L | test: action 失败分支（报错中止 / 重试第二次成功 / 超时按失败处理） | TODO | |
+| 43 | L | feat: `RoutineExecutor` 纯逻辑（注入时钟/arm/shutter） | DONE | **急停不接进来** —— 执行器只暴露 `abort()`，由控制循环在看到闩锁时调用，这样它结构上就不可能自己决定恢复。给 `ArmDriver` 加了 `move_to(q, duration)` 与 `hold(q)` 的区分：前者播放用，后者急停用，合并会让急停和一次极快的移动无法区分。点间轨迹规划待接上游 `trajectory/`（#50） |
+| 44 | L | test: 执行器时序 | DONE | 20 例，假时钟驱动零 sleep。settle 的断言写在循环内 —— 写在循环后会漏掉「settle 刚结束那一 tick 就开枪」是正确行为这件事 |
+| 45 | L | feat: action 分发 + 失败策略（abort / skip / retry N） | DONE | `shutter` 默认 abort |
+| 46 | L | test: action 失败分支 | DONE | 含「BLE 断链时臂走完整轮而素材全空」这个最贵失败模式 |
 | 47 | L | feat: playback 模式接入控制循环，进度经 WS 广播（第几点/总数/当前阶段） | TODO | |
 | 48 | L | feat: 播放控制端点，开始前对整条序列做限位与碰撞**预检** | TODO | 不合法直接 400，别让臂动起来才发现 |
-| 49 | L | test: **播放期间急停**（立刻冻结 / 执行器中止 / 不自动恢复 / clear 后是 idle） | TODO | **全项目最重要的集成测试** |
+| 49 | L | test: 播放中途 abort 干净中止且不自动恢复 | DONE（一半） | abort 后继续 tick 两千次，帧数与点位下标纹丝不动。**控制循环侧的接线（闩锁 → abort → 臂冻结）还没做**，等 #16/#47，到时候补端到端那一半 |
 | 50 | L | feat: 首点平滑接入（限速过渡，不直接下发目标位） | TODO | 继承老项目 `Transition` 模式 |
 
 ### Phase 9 — 前端
@@ -211,9 +211,9 @@
 | 4 数据模型 | 6 | **6** | 6 |
 | 5 示教 | 5 | 0 | 4 |
 | 6 安全校验 | 4 | 0 | 4 |
-| 7 快门 | 6 | 0 | 4 |
-| 8 执行器 | 8 | 0 | 8 |
+| 7 快门 | 6 | **1** | 4 |
+| 8 执行器 | 8 | **5** | 8 |
 | 9 前端 | 7 | 0 | 7 |
 | 10 部署 | 4 | 0 | 1 |
 | 11 Agent API | 1 | 0 | 1 |
-| **合计** | **62** | **19** | **51** |
+| **合计** | **62** | **25** | **51** |
