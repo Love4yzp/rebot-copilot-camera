@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.actions import InlineRunner, ShutterProvider
 from backend.agent import AgentLease
 from backend.app import app
 from backend.arm import SimArm
@@ -37,12 +38,17 @@ def rig(tmp_path: Path):
     app.state.routine_store = RoutineStore(tmp_path / "routines")
     app.state.broadcaster = Broadcaster()
     app.state.agent_lease = AgentLease(clock=clock)
+    shutter = SimShutter()
     app.state.controller = Controller(
         arm=arm,
-        shutter=SimShutter(),
+        shutter=shutter,
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=clock,
+        # Inline, so the fake clock above drives everything and no assertion
+        # depends on thread scheduling. That the threaded runner keeps the loop
+        # free while a provider blocks is tested in test_action_runner.py.
+        actions=InlineRunner([ShutterProvider(shutter)]),
     )
     return TestClient(app), clock, arm
 

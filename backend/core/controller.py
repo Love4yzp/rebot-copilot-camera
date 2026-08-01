@@ -25,6 +25,8 @@ import threading
 import time
 from typing import Callable
 
+from ..actions.runner import ActionRunner, ThreadedRunner
+from ..actions.shutter import ShutterProvider
 from ..arm.base import ArmDriver
 from ..routines.models import Routine
 from ..arm.base import ArmState
@@ -50,9 +52,20 @@ class Controller:
         watchdog: Watchdog | None = None,
         expected_period_s: float = 0.01,
         floatlock: FloatLockConfig | None = None,
+        actions: ActionRunner | None = None,
     ) -> None:
         self.arm = arm
+        # The driver stays reachable: /api/shutter/test checks the link from a
+        # request thread, which is a different question from running an action.
         self.shutter = shutter
+        # Actions run off this loop. Defaulting to a threaded runner here means
+        # nothing that constructs a Controller can accidentally get a runner
+        # that blocks the loop -- the one shape this whole layer exists to stop.
+        #
+        # The loop's clock is deliberately *not* passed down. An action's
+        # deadline measures how long a provider has really been working, and a
+        # provider works in wall time whatever the loop thinks the time is.
+        self.actions = actions or ThreadedRunner([ShutterProvider(shutter)])
         self.latch = latch
         self.broadcaster = broadcaster
         self._clock = clock or time.monotonic
@@ -98,7 +111,7 @@ class Controller:
             executor = RoutineExecutor(
                 routine,
                 arm=self.arm,
-                shutter=self.shutter,
+                actions=self.actions,
                 clock=self._clock,
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": _progress_payload(p)}

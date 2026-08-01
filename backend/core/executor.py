@@ -1,9 +1,15 @@
 """Routine execution: move, wait for arrival, settle, run actions, next.
 
-Pure logic. The clock, the arm and the shutter are all injected, nothing here
-sleeps, and nothing imports FastAPI. The control loop calls :meth:`tick` once
-per iteration and the executor advances at most one step; that keeps the whole
-photography workflow testable at whatever speed a fake clock runs at.
+Pure logic. The clock, the arm and the action runner are all injected, nothing
+here sleeps, and nothing imports FastAPI. The control loop calls :meth:`tick`
+once per iteration and the executor advances at most one step; that keeps the
+whole photography workflow testable at whatever speed a fake clock runs at.
+
+Actions are *submitted*, not called. Providers block — a shutter waits on a
+camera waking over BLE — and this runs inside the control loop, which is what
+holds the arm up. So :mod:`backend.actions.runner` takes the work off-thread
+and the executor polls a job once per tick. Everything else about an action is
+unchanged: bursts are still paced here, so an abort lands between frames.
 
 The emergency stop is *not* wired in here. The executor exposes :meth:`abort`
 and the control loop calls it when it sees the latch engaged. Keeping the latch
@@ -19,9 +25,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Mapping
 
+from ..actions.base import ActionContext, ActionError
+from ..actions.runner import ActionRunner, Job
+from ..actions.shutter import ShutterParams
 from ..arm.base import ArmDriver
 from ..routines.models import FailurePolicy, Routine, ShutterAction, SleepAction, Waypoint
-from ..shutter.base import ShutterDriver, ShutterError
 
 log = logging.getLogger(__name__)
 
@@ -73,17 +81,19 @@ class RoutineExecutor:
         self,
         routine: Routine,
         arm: ArmDriver,
-        shutter: ShutterDriver,
+        actions: ActionRunner,
         clock: Callable[[], float],
         arrival_eps: float = DEFAULT_ARRIVAL_EPS,
         on_progress: Callable[[Progress], None] | None = None,
+        on_event: Callable[[str, dict], None] | None = None,
     ) -> None:
         self._routine = routine
         self._arm = arm
-        self._shutter = shutter
+        self._actions = actions
         self._clock = clock
         self._arrival_eps = arrival_eps
         self._on_progress = on_progress
+        self._on_event = on_event
 
         self._phase = Phase.IDLE
         self._wp_index = 0
@@ -96,6 +106,8 @@ class RoutineExecutor:
         self._attempts = 0
         #: Frames fired so far within the current shutter action (a burst).
         self._shots_fired = 0
+        #: The action currently in flight on a worker thread, if any.
+        self._job: Job | None = None
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -133,6 +145,27 @@ class RoutineExecutor:
         if self._on_progress is not None:
             self._on_progress(self.progress())
 
+    def _emit_event(self, name: str, data: dict) -> None:
+        """Publish a semantic event. Never blocks, never raises: subscribers are
+        watching a shoot, not taking part in one."""
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(name, data)
+        except Exception:  # pragma: no cover — a sink must not break a routine
+            log.exception("event sink raised on %s", name)
+
+    def _context(self, waypoint: Waypoint) -> ActionContext:
+        """What a provider is told. Note the absence of the arm."""
+        return ActionContext(
+            routine_id=self._routine.id,
+            routine_name=self._routine.name,
+            waypoint_index=self._wp_index,
+            waypoint_note=waypoint.note,
+            joints=dict(self._arm.read_state().positions),
+            emit=self._emit_event,
+        )
+
     # ── control ──────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -155,9 +188,16 @@ class RoutineExecutor:
         deliberately left alone here -- whoever aborted is responsible for the
         arm, and for a stop that means holding it, not letting the executor
         issue one last command on its way out.
+
+        An action already in flight is abandoned rather than cancelled. A serial
+        write on its way to a camera cannot be recalled; what stops here is
+        anything happening *because* of how it turns out.
         """
         if self.is_finished:
             return
+        if self._job is not None:
+            self._job.abandon()
+            self._job = None
         self._phase = Phase.ABORTED
         self._error = reason
         log.warning("routine %s aborted: %s", self._routine.id, reason)
@@ -251,6 +291,7 @@ class RoutineExecutor:
         self._action_index = 0
         self._attempts = 0
         self._shots_fired = 0
+        self._job = None
         self._emit()
         self._tick_acting()
 
@@ -278,36 +319,53 @@ class RoutineExecutor:
             self._next_action()
 
     def _run_fallible_action(self, action) -> None:
-        if isinstance(action, ShutterAction) and self._shots_fired > 0:
-            # Mid-burst: wait out the inter-frame interval, one frame per tick.
+        """Submit the action, then poll it once per tick until it resolves.
+
+        Between submitting and resolving the executor does nothing at all, and
+        that is the point: the control loop goes on ticking while a provider
+        sits on a serial exchange.
+        """
+        if self._job is None and self._shots_fired > 0:
+            # Mid-burst: wait out the inter-frame interval before the next one.
             if self._shots_fired >= action.count:
                 self._next_action()
                 return
             if self._clock() < self._sleep_until:
                 return
-        try:
-            if isinstance(action, ShutterAction):
-                # Refocus every frame: between frames of a burst the subject
-                # has usually moved — that is why there is a burst at all.
-                if action.focus_first:
-                    self._shutter.focus()
-                self._shutter.shoot()
-                self._shots_fired += 1
-                if self._shots_fired < action.count:
-                    self._sleep_until = self._clock() + action.interval_s
-                    self._emit()
-                    return
-                self._next_action()
+
+        if self._job is None:
+            if not isinstance(action, ShutterAction):  # pragma: no cover — closed union
+                self._handle_action_failure(
+                    action, ActionError(f"no provider for action type {action.type!r}")
+                )
                 return
-            else:  # pragma: no cover — the union is closed
-                raise ShutterError(f"no handler for action type {action.type!r}")
-        except ShutterError as exc:
-            self._handle_action_failure(action, exc)
+            self._job = self._actions.submit(
+                "shutter",
+                ShutterParams(
+                    focus_first=action.focus_first,
+                    count=action.count,
+                    interval_s=action.interval_s,
+                ),
+                self._context(self._routine.waypoints[self._wp_index]),
+                action.timeout_s,
+            )
+
+        if not self._job.done:
             return
 
+        job, self._job = self._job, None
+        if job.error is not None:
+            self._handle_action_failure(action, job.error)
+            return
+
+        self._shots_fired += 1
+        if self._shots_fired < action.count:
+            self._sleep_until = self._clock() + action.interval_s
+            self._emit()
+            return
         self._next_action()
 
-    def _handle_action_failure(self, action, exc: Exception) -> None:
+    def _handle_action_failure(self, action, exc: BaseException) -> None:
         self._attempts += 1
         where = f"waypoint {self._wp_index}, action {self._action_index} ({action.type})"
 
@@ -317,11 +375,28 @@ class RoutineExecutor:
             return
 
         if action.on_failure is FailurePolicy.RETRY and self._attempts <= action.retries:
-            log.warning("%s failed, retry %d/%d: %s", where, self._attempts, action.retries, exc)
-            self._emit()
-            return
+            if self._may_retry(action):
+                log.warning(
+                    "%s failed, retry %d/%d: %s", where, self._attempts, action.retries, exc
+                )
+                self._emit()
+                return
 
         self.abort(f"{where} failed: {exc}")
+
+    def _may_retry(self, action) -> bool:
+        """Whether re-running this action is safe.
+
+        A provider declares ``retryable = False`` when its side effect is not
+        repeatable — a strobe that has not recycled, something dispensed. The
+        host downgrades the policy to abort rather than guessing, and says so,
+        because a silently ignored retry setting is worse than either.
+        """
+        provider = self._actions.provider(getattr(action, "provider", "shutter"))
+        if provider is None or getattr(provider, "retryable", True):
+            return True
+        log.warning("%s declares itself not retryable; aborting instead", provider.id)
+        return False
 
     def _next_action(self) -> None:
         self._action_index += 1

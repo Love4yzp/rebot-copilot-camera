@@ -7,6 +7,7 @@ separate units that each behave correctly on their own.
 
 import pytest
 
+from backend.actions import InlineRunner, ShutterProvider
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
 from backend.routines import Routine, ShutterAction, Waypoint
@@ -44,6 +45,9 @@ class Rig:
             clock=self.clock,
             watchdog=self.watchdog,
             expected_period_s=DT,
+            # Inline, so a fake clock and real worker threads never race. The
+            # loop-stays-free property is the subject of test_action_runner.py.
+            actions=InlineRunner([ShutterProvider(self.shutter)]),
         )
 
     def step(self, n: int = 1) -> None:

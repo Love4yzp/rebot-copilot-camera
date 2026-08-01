@@ -1,10 +1,16 @@
 """RoutineExecutor timing and failure handling.
 
 Driven entirely by a fake clock. No test here sleeps, and none needs hardware.
+
+Actions run through an :class:`InlineRunner`, so a submitted action resolves
+before ``submit`` returns and every assertion below is about the executor's own
+timing rather than about thread scheduling. That the real runner keeps provider
+work off the control loop is a different claim, tested in test_action_runner.py.
 """
 
 import pytest
 
+from backend.actions import InlineRunner, ShutterProvider
 from backend.arm import SimArm
 from backend.core import Phase, RoutineExecutor
 from backend.routines import Routine, ShutterAction, SleepAction, Waypoint
@@ -30,11 +36,12 @@ class Harness:
         self.arm = SimArm(JOINTS, clock=self.clock, tau=0.05)
         self.arm.connect()
         self.shutter = SimShutter(connected=connected)
+        self.actions = InlineRunner([ShutterProvider(self.shutter)])
         self.events: list = []
         self.executor = RoutineExecutor(
             routine,
             arm=self.arm,
-            shutter=self.shutter,
+            actions=self.actions,
             clock=self.clock,
             on_progress=self.events.append,
         )

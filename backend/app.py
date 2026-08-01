@@ -59,6 +59,10 @@ async def lifespan(app: FastAPI):
     finally:
         # Stopping the loop stops commanding, but never disables the motors.
         app.state.controller.stop()
+        # Then the action workers. After the loop, because a worker that is
+        # mid-exchange with a camera should not be interrupted by a shutdown
+        # the loop has not finished acknowledging yet.
+        app.state.controller.actions.close()
         log.info("control loop stopped")
 
 
