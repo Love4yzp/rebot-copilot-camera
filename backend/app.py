@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
 from .agent import AgentLease
-from .api import agent, control, estop, routines
+from .api import agent, control, estop, logs, routines
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
@@ -93,6 +93,7 @@ app.include_router(estop.router)
 app.include_router(routines.router)
 app.include_router(control.router)
 app.include_router(agent.router)
+app.include_router(logs.router)
 
 
 @app.get("/api/health")

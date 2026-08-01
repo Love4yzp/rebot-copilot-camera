@@ -5,6 +5,7 @@ import { useControlSocket } from "./useControlSocket";
 import { ArmView3D } from "./components/ArmView3D";
 import { EstopBar } from "./components/EstopBar";
 import { JointReadout } from "./components/JointReadout";
+import { LogDrawer } from "./components/LogDrawer";
 import { PlaybackBar } from "./components/PlaybackBar";
 import { RoutineList } from "./components/RoutineList";
 import { WaypointEditor } from "./components/WaypointEditor";
@@ -93,6 +94,8 @@ function Workspace() {
           <JointReadout positions={state?.positions ?? {}} velocities={state?.velocities ?? {}} />
         </div>
       </div>
+
+      <LogDrawer />
 
       <PlaybackBar
         routine={routine}

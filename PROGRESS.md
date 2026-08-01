@@ -30,11 +30,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#50` feat: 首点平滑接入 |
-| **状态** | `TODO` |
-| **Phase** | Phase 8 收尾 → Phase 9 前端 |
-| **上一个完成的** | `#42` feat: 快门自检端点 |
-| **备注** | 45/62 完成，225 个测试绿。后端逻辑基本齐了：急停 / 数据模型 / 执行器 / 安全校验 / 快门协议 / 浮动锁定。剩余：#50 首点平滑、Phase 9 前端 7 个、#37/#38 固件、#9 ArmSession、#28 teach 移植、#6/#7 实测、Phase 10 部署 4 个、#62 Agent API。 |
+| **当前 commit** | `#6` spike: 硬件对表 |
+| **状态** | `BLOCKED` — 等真臂 |
+| **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
+| **上一个完成的** | `#57` feat: 日志抽屉 |
+| **备注** | **60/62 完成，252 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
 
@@ -90,15 +90,15 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 6 | H | spike: 跑上游 example 2/9/10，记录 CAN 通道、七关节零位与符号、浮动手感、500Hz 稳定性 → `docs/HARDWARE_NOTES.md` | BLOCKED | B1 |
-| 7 | H | spike: 验证末端夹相机后的重力补偿 | BLOCKED | B2 |
+| 6 | H | spike: 跑上游 example 2/9/10，实测 CAN 通道 / 零位 / 浮动手感 / 500Hz | BLOCKED | **没有臂，做不了。** 代码侧全部就绪：`ArmSession` 写好了，`./manage.sh status` 会报告跑在真臂还是模拟器上。上机后把实测值填进 `docs/HARDWARE_NOTES.md` 的「待实测」段 |
+| 7 | H | spike: 验证末端夹相机后的重力补偿 | BLOCKED | **没有臂和相机，做不了。** 浮动/锁定阈值已经做成可配（`FloatLockConfig`）并有测试覆盖，就是为了挂上相机后能安全重调 |
 | 8 | L | docs: `docs/HARDWARE_NOTES.md` —— 已验证 / 待实测严格分开 | DONE | 记了 7 条已验证（含 DM 默认配置、URDF 8 自由度 vs 硬件 7 关节、j2/j3 下限为 0）+ 4 条待实测 |
 
 ### Phase 2 — 臂层封装
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 9 | L+H | feat: `ArmSession` 薄封装 `RebotArm`（load yaml / connect / enable_all / get_state），**不实现任何运动学** | TODO | 实机连通性依赖 B1 |
+| 9 | L+H | feat: `ArmSession` 薄封装 `RebotArm`（load yaml / connect / enable_all / get_state），**不实现任何运动学** | DONE（待实机验证） | 薄封装上游 `RebotArm`。dict↔ndarray 转换只在这一处，构造时对着臂自报的关节名校验 —— 这里错一位就是命令错关节。重力前馈只喂 6 个臂关节，夹爪给 0（没有标定过的行程→力矩换算，编一个塞进力矩指令更糟） |
 | 10 | L | feat: `ArmDriver` Protocol + `SimArm`（一阶滞后 + 可注入"人手拖动"） | DONE | 时间注入，不 sleep。滞后用指数精确解，结果与 tick 粒度无关。速度**位置差分**算（与真机同一约束）。拖动只在浮动时生效 —— 握持的臂会抵抗，测试不能拖动锁死的臂还信结果 |
 | 11 | L | test: SimArm 行为 | DONE | 18 例，含"拖三个位置录三次"的示教循环、松手停在原地、步长无关性 |
 | 12 | L+H | feat: 控制循环 `Controller.tick()` | DONE（sim 侧） | `tick()` 是纯的，测试可直接调。sim 下自带线程驱动（实测 100 Hz 稳）；**真机换成上游 `start_control_loop`**，它已处理 CAN 时序。tick 抛异常不杀循环 —— 循环正是撑住臂的东西，改成 engage 闩锁后继续 tick |
@@ -132,7 +132,7 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 28 | L+H | feat: teach 模式，移植 `example/10_gravity_compensation_lock.py`（MIT + 重力前馈 + 位置闭环，雅可比算末端速度，阈值 0.04 m/s / 0.08 rad/s 进配置） | TODO | **见决策速查 #2**；阈值依赖 B2 |
+| 28 | L+H | feat: teach 模式接进控制循环 | DONE（待实机调阈值） | 每 tick 跑浮动/锁定判据：**起手是锁的**（一开示教就松劲的臂，在有人扶住之前就会垂下去），测到运动才放开，停下再锁回。末端速度用最大关节速度近似而不是雅可比 —— 这是「手停没停」的判据不是测量，挂相机后本来就要重调，500Hz 每 tick 算雅可比买不到这个决定用得上的精度。**顺带修了 SimArm 的失真**：原来握持时忽略 drag，导致示教在模拟器里永远起不来 —— 真机上「握持」是有限刚度的 MIT，人推得动，而推动一条**握持中**的臂正是示教的起点 |
 | 29 | L | feat+test: 浮动/锁定判据 `FloatLock`（纯逻辑） | DONE | 在上游基础上加了两样，都因为朴素版本在手上会出问题：**迟滞**（手搭在静止的臂上，速度正好在阈值附近来回，臂会一秒抖好几次，像在跟你较劲）和**最短静止时间**（拖动中每次换方向都会经过零速，在那里锁死会把臂停在半路）。阈值可配 —— 挂了相机就得重调，有测试才敢调 |
 | 30 | L | feat: 录点端点 `POST /api/routines/{id}/waypoints/capture` | DONE | 不挂闸门 —— 读当前姿态写条记录，急停期间做这事无害，而且刚按下急停的人多半正想要那个姿态 |
 | 31 | L | test: 示教录点 | DONE | HTTP 层拖三次录三次，顺序与角度都对 |
@@ -151,8 +151,8 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 37 | E | feat: ESP32 固件 `firmware/esp32-shutter/`，PlatformIO，行协议 `#<id> <CMD>` → `#<id> OK/ERR` | BLOCKED | B4；**必须 `-D ARDUINO_USB_CDC_ON_BOOT=1`** |
-| 38 | L | docs: 固件 README（烧录 / 相机菜单 `无线通信设置 > 蓝牙功能` 设"遥控" / 协议表 / 故障） | TODO | |
+| 37 | E | feat: ESP32 固件 `firmware/esp32-shutter/`，PlatformIO，行协议 `#<id> <CMD>` → `#<id> OK/ERR` | DONE（待烧录验证） | PlatformIO 工程 + 40 行固件。`platformio.ini` 带 `-D ARDUINO_USB_CDC_ON_BOOT=1` 及原因注释。超长行整条丢弃不截断 —— 截断后的命令可能正好解析成另一条合法命令 |
+| 38 | L | docs: 固件 README（烧录 / 相机菜单 `无线通信设置 > 蓝牙功能` 设"遥控" / 协议表 / 故障） | DONE | 烧录 / 相机菜单路径 / 协议表 / 坑，全在 `firmware/esp32-shutter/README.md` |
 | 39 | L | feat: `ShutterDriver` Protocol + `SimShutter`（可注入失败） | DONE | 失败**抛异常不返 bool** —— bool 返回值最容易在调用点被丢掉，而执行器必须区分「继续」和「停拍」。`ShutterNotConnected` 与 `ShutterTimeout` 分开：前者意味着剩下每一帧都会同样失败 |
 | 40 | L | feat: `Esp32Shutter` 串口客户端 + 行协议 | DONE | transport 注入，整套协议在内存管道上测。**id 是核心**：没有它，超时后迟到的回包会被当成下一条请求的成功回执 —— 表现是「偶尔少一帧」，现场几乎查不出来。收到 `READY` 说明板子重启、BLE 配对丢了，在途命令是**作废**而不只是迟到 |
 | 41 | L | test: 协议编解码 | DONE | 30 例。含半行、粘包、二进制噪声、固件往同一串口打日志不能搞挂链路、写失败后下次调用自动重连 |
@@ -169,34 +169,34 @@
 | 47 | L | feat: playback 接入控制循环，进度经 WS 广播 | DONE | |
 | 48 | L | feat: 播放控制端点 + 播放前预检 | DONE | `play` 前跑 `validate_sequence`（每点 + 相邻点路径），不合法 400 且臂一动没动 |
 | 49 | L | test: 播放期间急停 | DONE | **端到端跑通**：播到一半 engage → 执行器 abort + 臂冻结 → 再 tick 一千次纹丝不动 → clear → 再 tick 一千次仍是 idle 且停在冻结姿态。真机上要另跑一遍 |
-| 50 | L | feat: 首点平滑接入（限速过渡，不直接下发目标位） | TODO | 继承老项目 `Transition` 模式 |
+| 50 | L | feat: 首点平滑接入 | DONE | 后面每个点都是从上一个点出发的，时长是对着已知起点定的；第一个点没这个保证 —— 臂在示教留下的任意位置，可能隔半个工作空间。到首点的时长按最大关节速度拉长 |
 
 ### Phase 9 — 前端
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 51 | L | feat: 前端骨架 Vite + React + TS，WS 接线，**常驻急停条**（大红按钮 + 快捷键 + 闩锁状态） | TODO | 急停是第一个做的 UI 元素 |
-| 52 | L | feat: Routine 列表（建/改名/删/选中） | TODO | |
-| 53 | L | feat: Waypoint 编辑器主界面（列表 + 拖拽重排 + 删除 + 大号"记录当前位置"） | TODO | |
-| 54 | L | feat: 单点详情编辑（settle_ms / 运动参数 / 增删 actions，shutter 独立 UI） | TODO | |
-| 55 | L | feat: 播放控制与进度条 | TODO | |
-| 56 | L | feat: 3D 预览（参考 `rebot_arm_webui` 的 URDF 查看器与资产组织） | TODO | |
-| 57 | L | feat: 日志抽屉与 toast（从老项目移植，这两块老代码行为是对的） | TODO | |
+| 51 | L | feat: 前端骨架 Vite + React + TS，WS 接线，**常驻急停条**（大红按钮 + 快捷键 + 闩锁状态） | DONE | 常驻急停条 + Esc 快捷键。WS 自动重连并显示连接状态 —— 操作员站在臂边不在浏览器边，断线不能留一个看起来是实时的冻结姿态 |
+| 52 | L | feat: Routine 列表（建/改名/删/选中） | DONE | 双击重命名、右键删除（带确认 —— 每条序列都是人站在臂边一个个拖出来的） |
+| 53 | L | feat: Waypoint 编辑器主界面（列表 + 拖拽重排 + 删除 + 大号"记录当前位置"） | DONE | 拖拽重排在前端拼完整置换后再发，后端只接受置换 |
+| 54 | L | feat: 单点详情编辑（settle_ms / 运动参数 / 增删 actions，shutter 独立 UI） | DONE | settle / 到位用时 / 备注 / actions 增删改，shutter 有独立的对焦与失败策略 UI |
+| 55 | L | feat: 播放控制与进度条 | DONE | 播放/停止/示教/测快门 + 进度条与阶段 |
+| 56 | L | feat: 3D 预览（参考 `rebot_arm_webui` 的 URDF 查看器与资产组织） | DONE | three.js + urdf-loader，URDF 走新加的 `/assets/urdf` 挂载读 submodule，不打包 63 MB。选中点位时预览该姿态而不是实时姿态 —— 那才是按播放前想问的问题 |
+| 57 | L | feat: 日志抽屉与 toast（从老项目移植，这两块老代码行为是对的） | DONE | toast + 日志抽屉。`/api/logs` 读 journalctl；开发机上没有 journal 会明说，而不是显示成空日志。journalctl 非零退出会提示查 `systemd-journal` 组 —— 那是最常见的原因且本身没有报错 |
 
 ### Phase 10 — 部署
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 58 | H | chore: systemd unit，开机自启，只监听 127.0.0.1，依赖 CAN 就绪 | TODO | |
-| 59 | H | chore: CAN 拉起 + 设备权限（udev 规则 + `ip link set can0 up type can bitrate 1000000` oneshot unit + 权限组） | BLOCKED | B1 |
-| 60 | H | chore: `manage.sh`（setup/enable/push/logs/open/run，沿用老项目子命令语义） | TODO | |
-| 61 | L | docs: README（快速上手/部署/烧录/协议/接线/坑清单） | TODO | |
+| 58 | H | chore: systemd unit，开机自启，只监听 127.0.0.1，依赖 CAN 就绪 | DONE（待实机验证） | `deploy/rebot-copilot-camera.service`，依赖 `rebot-can.service` —— CAN 没起来会让服务静默 fallback 到模拟器，看起来和正常一模一样 |
+| 59 | H | chore: CAN 拉起 + 设备权限（udev 规则 + `ip link set can0 up type can bitrate 1000000` oneshot unit + 权限组） | DONE（待实机验证） | `rebot-can.service` oneshot + `99-rebot-usb.rules`。USB2CAN 和 ESP32 都是通用 CDC，插拔顺序会换号，符号链接防止快门驱动指到 CAN 桥上 |
+| 60 | H | chore: `manage.sh`（setup/enable/push/logs/open/run，沿用老项目子命令语义） | DONE | 子命令语义沿用老项目。`push` 保护 `routines/` —— 那是只存在于设备上的操作员劳动成果。`status` 报告跑在真臂还是模拟器上 |
+| 61 | L | docs: README（快速上手/部署/烧录/协议/接线/坑清单） | DONE | 快速上手 / 操作流程 / 部署 / 架构 / 坑清单 / API 表。四条会静默出错的坑单独列在最前 |
 
 ### Phase 11 — Agent API（可选，优先级最低）
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 62 | L | feat: Agent 控制权与端点（token 独占 / TTL / 看门狗，全部尊重急停闩锁） | TODO | 老项目这套设计是好的 |
+| 62 | L | feat: Agent 控制权与端点（token 独占 / TTL / 看门狗，全部尊重急停闩锁） | DONE | token 独占 + 双重 TTL + UI 强制收回。测试逮到一个 bug：耗时用 `or now` 算，而 `0.0` 是假值，所有间隔都成了零、租约永不过期 —— 真实时钟极少读到 0，会一直潜伏 |
 
 ---
 
@@ -206,14 +206,14 @@
 |---|---|---|---|
 | 0 骨架 | 5 | **5** | 5 |
 | 1 硬件对表 | 3 | **1** | 1 |
-| 2 臂层 | 5 | **4** | 3 |
+| 2 臂层 | 5 | **5** | 3 |
 | 3 急停 | 8 | **8** | 7 |
 | 4 数据模型 | 6 | **6** | 6 |
-| 5 示教 | 5 | **4** | 4 |
+| 5 示教 | 5 | **5** | 4 |
 | 6 安全校验 | 4 | **4** | 4 |
-| 7 快门 | 6 | **4** | 4 |
+| 7 快门 | 6 | **6** | 4 |
 | 8 执行器 | 8 | **8** | 8 |
-| 9 前端 | 7 | 0 | 7 |
-| 10 部署 | 4 | 0 | 1 |
-| 11 Agent API | 1 | 0 | 1 |
-| **合计** | **62** | **45** | **51** |
+| 9 前端 | 7 | **7** | 7 |
+| 10 部署 | 4 | **4** | 1 |
+| 11 Agent API | 1 | **1** | 1 |
+| **合计** | **62** | **60** | **51** |

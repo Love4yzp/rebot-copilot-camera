@@ -510,3 +510,32 @@ input[type="number"] {
   flex: none;
   user-select: none;
 }
+
+/* ── log drawer ──────────────────────────────────────────────────────────── */
+
+.log-drawer {
+  border-top: 1px solid var(--line);
+  background: var(--bg-sunken);
+}
+.log-toggle {
+  border: none;
+  border-radius: 0;
+  width: 100%;
+  text-align: left;
+  padding: 5px 14px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.log-body {
+  margin: 0;
+  padding: 8px 14px 12px;
+  max-height: 34vh;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
