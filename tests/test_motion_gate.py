@@ -25,6 +25,15 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/estop"): "engaging the stop must never be blocked by the stop",
     ("POST", "/api/estop/clear"): "the escape hatch cannot be gated on what it escapes",
+    # Routine editing is pure data. Editing while stopped is often exactly what
+    # the operator is doing *because* the arm is stopped.
+    ("POST", "/api/routines"): "creates a record, moves nothing",
+    ("PATCH", "/api/routines/{rid}"): "renames a record, moves nothing",
+    ("DELETE", "/api/routines/{rid}"): "deletes a record, moves nothing",
+    ("POST", "/api/routines/{rid}/waypoints"): "edits stored poses, moves nothing",
+    ("PATCH", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
+    ("DELETE", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
+    ("POST", "/api/routines/{rid}/waypoints/reorder"): "edits stored poses, moves nothing",
 }
 
 

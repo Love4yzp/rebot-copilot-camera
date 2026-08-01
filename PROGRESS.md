@@ -30,11 +30,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#22` feat: Routine 数据模型 |
+| **当前 commit** | `#43` feat: RoutineExecutor |
 | **状态** | `TODO` |
-| **Phase** | Phase 4 — Routine 数据模型与存储 |
-| **上一个完成的** | `#11` test: SimArm 行为 |
-| **备注** | 13/62 完成，51 个测试绿。地基齐了：`SafetyLatch` + 运动闸门 + `SimArm`。**下一步整块吃 Phase 4（#22–27 数据模型与存储）再吃 Phase 8（#43–50 执行器）**，两块全是纯逻辑零硬件依赖，做完项目主干就通了。剩下等硬件的：#6/#7 实测、#9 ArmSession 连真臂、#12 控制频率、#16 循环尊重闩锁、#20/#21 看门狗（可先写纯逻辑部分）。 |
+| **Phase** | Phase 8 — 序列执行器 |
+| **上一个完成的** | `#27` test: waypoint 编辑 |
+| **备注** | 19/62 完成，91 个测试绿，ruff 干净。Phase 0/4 全通，Phase 3 纯逻辑部分完成。**下一步整块吃 Phase 8（#43–50 执行器）** —— 纯逻辑，注入时钟/arm/shutter，做完主干就通了。其中 #49「播放中途急停」是全项目最重要的集成测试。之后回头补 Phase 7 的 sim 部分（#39/#40/#41 快门协议，不需要板子）。等硬件的：#6/#7 实测、#9 ArmSession、#12 控制频率、#16 循环尊重闩锁。 |
 
 ---
 
@@ -121,12 +121,12 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 22 | L | feat: Pydantic 模型 `Action`(判别式联合) / `Waypoint` / `Routine`，第一版就带 `schema_version` | TODO | |
-| 23 | L | feat: `RoutineStore`，一 routine 一 JSON，原子写（tmp + rename），损坏文件跳过不挂整个列表 | TODO | |
-| 24 | L | test: store 往返（CRUD / schema 版本 / 损坏容错 / 原子写不产生半截文件） | TODO | |
-| 25 | L | feat: Routine REST CRUD | TODO | |
-| 26 | L | feat: Waypoint 编辑端点（插入/删除/改 settle 与 actions/重排序） | TODO | |
-| 27 | L | test: waypoint 编辑（重排序 / 删中间点 / 非法索引 404） | TODO | |
+| 22 | L | feat: Pydantic 模型 `Action`(判别式联合) / `Waypoint` / `Routine` | DONE | `shutter` 默认 `on_failure=abort`。关节**名与限位不在模型里校验** —— 限位从 URDF 读（#33），模型只保证形状（非空 + 有限值，NaN 会活着穿过 JSON 然后被下发） |
+| 23 | L | feat: `RoutineStore`，一 routine 一 JSON，原子写，损坏文件跳过 | DONE | tmp 文件建在同目录 —— `os.replace` 只在同一文件系统内原子，`/tmp` 经常不是。id 走白名单正则，防路径逃逸 |
+| 24 | L | test: store 往返 | DONE | 21 例，含"写失败后旧版本完好且不留 tmp 残骸" |
+| 25 | L | feat: Routine REST CRUD | DONE | |
+| 26 | L | feat: Waypoint 编辑端点（插入/删除/改 settle 与 actions/重排序） | DONE | 按**列表下标**寻址（编辑器就是可重排列表）。重排序要求是完整置换，否则静默丢点或重复，操作员拍到一半才发现。合并用"dump + update + 重新校验"，不用 `model_copy(update=)` —— 后者跳过校验器，非法值直接落盘 |
+| 27 | L | test: waypoint 编辑 | DONE | 20 例，含"急停期间仍可编辑"（这正是操作员停下来要干的事） |
 
 ### Phase 5 — 示教模式（移植上游浮动/锁定）
 
@@ -208,7 +208,7 @@
 | 1 硬件对表 | 3 | **1** | 1 |
 | 2 臂层 | 5 | **2** | 3 |
 | 3 急停 | 8 | **5** | 7 |
-| 4 数据模型 | 6 | 0 | 6 |
+| 4 数据模型 | 6 | **6** | 6 |
 | 5 示教 | 5 | 0 | 4 |
 | 6 安全校验 | 4 | 0 | 4 |
 | 7 快门 | 6 | 0 | 4 |
@@ -216,4 +216,4 @@
 | 9 前端 | 7 | 0 | 7 |
 | 10 部署 | 4 | 0 | 1 |
 | 11 Agent API | 1 | 0 | 1 |
-| **合计** | **62** | **13** | **51** |
+| **合计** | **62** | **19** | **51** |

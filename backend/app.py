@@ -18,8 +18,9 @@ import time
 
 from fastapi import FastAPI
 
-from . import __version__, assets
-from .api import estop
+from . import __version__, assets, config
+from .api import estop, routines
+from .routines import RoutineStore
 from .safety import SafetyLatch
 
 log = logging.getLogger(__name__)
@@ -35,8 +36,10 @@ app = FastAPI(
 #: One latch for the whole process. The control loop reads it every tick and
 #: the API gates on it, so it must be a single shared instance.
 app.state.latch = SafetyLatch()
+app.state.routine_store = RoutineStore(config.ROUTINES_DIR)
 
 app.include_router(estop.router)
+app.include_router(routines.router)
 
 
 @app.get("/api/health")
