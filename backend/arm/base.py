@@ -54,11 +54,23 @@ class ArmDriver(Protocol):
     def read_state(self) -> ArmState: ...
 
     def hold(self, q_target: Mapping[str, float]) -> None:
-        """Command the arm to hold ``q_target`` (MIT + gravity feedforward).
+        """Pin the arm at ``q_target``, immediately (MIT + gravity feedforward).
 
         This is also the emergency-stop path: while the latch is engaged the
         control loop keeps calling ``hold`` with the frozen pose. Holding is
         what keeps the arm up, so this must never be swapped for a disable.
+        """
+        ...
+
+    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
+        """Travel to ``q_target`` over roughly ``duration_s``.
+
+        Distinct from :meth:`hold` on purpose. Holding is "be here now" and is
+        what the emergency stop uses; moving is "get there over this long" and
+        is what playback uses. Collapsing them would make a stop indistinguishable
+        from a very fast move.
+
+        On real hardware this defers to upstream's trajectory planner.
         """
         ...
 

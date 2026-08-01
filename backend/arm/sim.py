@@ -97,6 +97,18 @@ class SimArm:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
             self._q_target.update(q_target)
 
+    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
+        """Approximate a timed move with the first-order lag.
+
+        The simulator does not plan a trajectory; it just retargets, and the
+        lag gets it there. That is enough to exercise arrival detection, settle
+        timing and action sequencing, which is what the executor tests need.
+        Real timing fidelity belongs to the hardware arm's trajectory planner.
+        """
+        if duration_s <= 0:
+            raise ValueError("duration_s must be positive")
+        self.hold(q_target)
+
     def set_float(self, enabled: bool) -> None:
         """Enter or leave float. Leaving re-targets wherever the arm now is.
 
