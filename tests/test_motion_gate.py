@@ -39,6 +39,7 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
         "POST",
         "/api/routines/{rid}/waypoints/capture",
     ): "reads the current pose and writes a record; useful precisely while stopped",
+    ("POST", "/api/shutter/test"): "fires the shutter, moves no joints",
 }
 
 

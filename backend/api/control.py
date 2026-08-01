@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from ..core import Broadcaster, Controller
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
 from ..safety.kinematics import validate_pose, validate_sequence
+from ..shutter import ShutterError
 from .gate import require_arm_available
 
 log = logging.getLogger(__name__)
@@ -188,3 +189,51 @@ async def state_socket(websocket: WebSocket) -> None:
         log.exception("websocket stream failed")
     finally:
         broadcaster.unsubscribe(sub)
+
+
+# ── shutter self-test ────────────────────────────────────────────────────────
+
+
+class ShutterTestResult(BaseModel):
+    ok: bool
+    connected: bool
+    fired: bool
+    firmware_version: str | None = None
+    error: str | None = None
+
+
+@router.post("/api/shutter/test", response_model=ShutterTestResult)
+def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> ShutterTestResult:
+    """Check the host-to-ESP32-to-camera chain.
+
+    Pings by default and only fires when asked, so it can be used to confirm
+    the link without burning a frame. Run this when setting up on site: a dead
+    BLE link is silent until the arm has walked a whole set with nothing
+    landing on the card.
+
+    Not behind the motion gate — it moves no joints, and confirming the shutter
+    while the arm is safely stopped is a reasonable thing to want.
+    """
+    shutter = _controller(request).shutter
+
+    try:
+        shutter.ping()
+        if focus:
+            shutter.focus()
+        if shoot:
+            shutter.shoot()
+    except ShutterError as exc:
+        return ShutterTestResult(
+            ok=False,
+            connected=shutter.is_connected,
+            fired=False,
+            firmware_version=getattr(shutter, "firmware_version", None),
+            error=str(exc),
+        )
+
+    return ShutterTestResult(
+        ok=True,
+        connected=shutter.is_connected,
+        fired=shoot,
+        firmware_version=getattr(shutter, "firmware_version", None),
+    )

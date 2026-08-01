@@ -223,3 +223,43 @@ def test_play_preflights_the_path_between_legal_waypoints(client: TestClient):
 def test_a_clean_routine_still_plays(client: TestClient):
     rid = make_routine(client, 0.2, 0.5)
     assert client.post(f"/api/routines/{rid}/play").status_code == 200
+
+
+# ── shutter self-test ────────────────────────────────────────────────────────
+
+
+def test_shutter_test_pings_without_burning_a_frame(rig):
+    client, controller, _, _ = rig
+
+    r = client.post("/api/shutter/test")
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "connected": True,
+        "fired": False,
+        "firmware_version": None,
+        "error": None,
+    }
+    assert controller.shutter.pings == 1
+    assert controller.shutter.shots == 0
+
+
+def test_shutter_test_can_fire_on_request(rig):
+    client, controller, _, _ = rig
+
+    body = client.post("/api/shutter/test?focus=true&shoot=true").json()
+    assert body["fired"] is True
+    assert controller.shutter.focuses == 1
+    assert controller.shutter.shots == 1
+
+
+def test_shutter_test_reports_a_dead_link_rather_than_raising(rig):
+    """Setting up on site, this is how a dead BLE link gets found before the
+    arm walks a whole set with nothing landing on the card."""
+    client, controller, _, _ = rig
+    controller.shutter.set_connected(False)
+
+    body = client.post("/api/shutter/test").json()
+    assert body["ok"] is False
+    assert body["connected"] is False
+    assert "no link" in body["error"]
