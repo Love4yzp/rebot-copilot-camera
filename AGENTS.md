@@ -168,7 +168,7 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 |---|---|---|
 | `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
 | [`PROGRESS.md`](./PROGRESS.md) | 状态机：62 个 commit 的进度、阻塞项、交接协议 | 接手一个 session 时 |
-| [`README.md`](./README.md) | 人类向：操作流程、部署、API、坑清单 | 要用这个服务时 |
+| [`README.md`](./README.md) | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API、坑清单 | 要用这个服务时；用户报故障时先翻它的故障排查段 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计文档与决策记录 | 想知道某个设计为什么这样时 |
