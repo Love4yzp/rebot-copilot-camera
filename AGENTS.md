@@ -1,16 +1,8 @@
-# AGENTS.md
+# 改这个仓库之前
 
-给在这个仓库里干活的 agent。人类看 [`README.md`](./README.md)。
+**这份代码能让一条 48V 的机械臂动起来。** 下面四条铁律，违反了都**不会报错** —— 只是结果错了，而错的方式是臂掉下来、算错力矩、或者拍完一整轮全是空片。
 
-**这个服务能让一条 48V 的机械臂动起来。** 下面「四条铁律」里的每一条，违反了都不会报错 —— 只是结果是错的，而错的方式是臂掉下来、算错力矩、或者拍了一整轮空片。
-
----
-
-## 这是什么
-
-reBot-RS 单臂末端夹佳能相机做**自动化多视角拍摄**。人零力拖动示教点位 → 臂沿点位序列走位 → 每点稳定后经 USB 通知 XIAO ESP32-S3 → ESP32 用 BLE 冒充佳能无线遥控器按快门。
-
-跑在 reComputer R2x 上，systemd + uv，只监听 `127.0.0.1`，外部走 SSH 隧道，**没有认证层**。
+项目在做什么、怎么用，看 [`README.md`](./README.md)。这里只讲改代码要知道的。
 
 ---
 
@@ -40,17 +32,15 @@ cd frontend && npm run dev                   # 热更新，proxy 到 18790
 
 ### 1. 急停绝不能调 `RebotArm.estop()` 或 `disable_all()`
 
-上游那个方法就是一行 `self.disable_all()`（`vendor/reBotArm_control_py/reBotArm_control_py/actuator/rebotarm.py:687`），MotorBridge 文档也把 `disable_all()` 写成 "Emergency stop all motors"。**语义是电机失能、力矩归零、臂自由落体。** 一条 48V 的臂举着相机，掉电就是掉下来。
+上游那个方法就是一行 `self.disable_all()`（`rebotarm.py:687`）。**语义是电机失能、力矩归零、臂自由落体** —— 一条 48V 的臂举着相机，掉电就是掉下来。
 
 本项目的急停是**保持力矩钉在原地**：冻结姿态 + 继续 MIT + 重力补偿。
 
-`tests/test_controller.py::test_nothing_in_the_backend_ever_disables_the_motors` 走 AST 扫 `backend/` 下每个模块，出现这两个名字的**属性访问**就失败。用 AST 不用文本匹配 —— 解释这条坑的注释必须提到这两个名字。
+`tests/test_controller.py::test_nothing_in_the_backend_ever_disables_the_motors` 走 AST 扫 `backend/` 下每个模块，出现这两个名字的**属性访问**就失败。用 AST 不用文本匹配 —— 因为解释这条坑的注释必须提到这两个名字。
 
 ### 2. 不许用上游的默认资产解析
 
-上游的 `vendor/reBotArm_control_py/config/rebotarm.yaml` 里 `hardware_yaml` 指向 `rebotarm_dm.yaml` —— **B601-DM 那条臂**，不同的 URDF（`reBot-DevArm_fixend.urdf`）、不同的末端 frame（`end_link`）。
-
-`load_robot_model()` / `load_dynamics_model()` 不传参会返回一个**合法但属于错误机器人**的模型。文件存在，所以不报错。FK、重力补偿、碰撞全部算另一条臂 —— 而重力补偿正是零力拖动的地基。
+上游默认配置指向的是 **B601-DM 那条臂**。`load_robot_model()` / `load_dynamics_model()` 不传参会返回一个**合法但属于错误机器人**的模型 —— 文件存在，所以不报错，只是 FK、重力补偿、碰撞全算另一条臂，而重力补偿正是零力拖动的地基。
 
 一律走 `backend/assets.py`，显式传 `urdf_path=str(assets.urdf_path())`，启动调 `assets.assert_rs_model()`。
 
@@ -60,9 +50,9 @@ cd frontend && npm run dev                   # 热更新，proxy 到 18790
 
 ### 4. 不重造运动学/动力学
 
-FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`Seeed-Projects/reBotArm_control_py`](https://github.com/Seeed-Projects/reBotArm_control_py)，**只调不写**。它是这套硬件的官方实现，重力模型已标定（承载关节误差 5–11%）。
+FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](https://github.com/Seeed-Projects/reBotArm_control_py)，**只调不写**。它是这套硬件的官方实现，重力模型已标定。
 
-证据与更多细节见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。
+**这四条的源码级证据、以及其它硬件事实（自由度错位、限位边界、碰撞对、关节映射）全在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。** 碰硬件相关代码前读那份。
 
 ---
 
@@ -167,36 +157,13 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
 | `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
-| [`PROGRESS.md`](./PROGRESS.md) | 状态机：62 个 commit 的进度、阻塞项、交接协议 | 接手一个 session 时 |
-| [`README.md`](./README.md) | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API、坑清单 | 要用这个服务时；用户报故障时先翻它的故障排查段 |
+| [`PROGRESS.md`](./PROGRESS.md) | 状态机：现在做到哪、什么被卡住、交接协议 | 接手一个 session 时 |
+| [`README.md`](./README.md) | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API | 要用这个服务时；用户报故障先翻它的故障排查表 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计文档与决策记录 | 想知道某个设计为什么这样时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。
 
----
+**每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、进度在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。
 
-## 硬件事实
-
-| 项 | 值 |
-|---|---|
-| 臂 | reBot-RS，6 关节 + 夹爪，RobStride 准直驱，48V |
-| 通信 | CAN，`channel: can0`，`rate: 500`。**socketcan 还是 USB2CAN 串口桥未实测**（见 PROGRESS 阻塞 B1） |
-| 关节映射 | `joint1..6` = motor_id `0x01..0x06`（1–3 型号 `rs-06`，4–6 型号 `rs-00`），`gripper` = `0x07`（`rs-00`），feedback_id 统一 `0xFD` |
-| URDF | `00-arm-rs_asm-v3.urdf`，末端 frame `gripper_end`，30 个 STL 共 63 MB（留 submodule，不复制） |
-| **自由度错位** | URDF `nq=8`（`joint1..6` + `joint_left`/`joint_right` 两个米制平移指关节），硬件 7 关节（夹爪一个电机）。**不是 1:1。** 夹爪不做限位校验、不给重力前馈 —— 没有标定过的换算，编一个再去信它更糟 |
-| **限位边界** | `joint2`/`joint3` 下限恰好是 `0.0`，而静止伸直姿态就是 q=0。限位校验必须留容差（当前 0.02 rad），否则臂会因为「站着不动」被拒 |
-| 碰撞对 | 44 对候选，8 对是相邻连杆（拧在一起本来就贴着，用「静止姿态下相撞即为结构性」排除），剩 36 对 |
-| 快门 | XIAO ESP32-S3 原生 USB CDC。PlatformIO **必须** `-D ARDUINO_USB_CDC_ON_BOOT=1`，否则 `Serial` 走 UART0 引脚，主机侧收不到数据**且不报错** |
-| 相机 | 佳能，机身菜单 `无线通信设置 > 蓝牙功能` 要设成「遥控」（不是「智能手机」） |
-
-无硬件时自动 fallback 到 `SimArm` + `SimShutter`，**fallback 一定会打日志说明原因** —— 一个开开心心跑在模拟器上的服务，看起来和正常的一模一样。
-
----
-
-## 当前状态
-
-62 个计划 commit 里 **60 个已实现**，252 个测试绿。只剩 `#6` / `#7` 两个硬件实测（跑上游 example、验证挂相机后的重力补偿）—— **没有臂就是做不了，不是没做**。
-
-上机第一步：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器，再按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益 —— 这两处做成可配就是为了这一刻。

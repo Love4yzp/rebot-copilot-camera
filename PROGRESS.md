@@ -1,6 +1,6 @@
-# PROGRESS — rebot-copilot-camera
+# 做到哪了
 
-**这是项目的状态机。任何 agent 接手前先读完本文件。**
+**项目状态机。接手一个 session 先读这里。**
 
 本文件只回答三个问题：**现在在哪 / 下一步做什么 / 什么被卡住了**。
 铁律与代码约定在 [`AGENTS.md`](./AGENTS.md)，原始设计与决策记录在 [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1)。
@@ -73,7 +73,11 @@
 
 ---
 
-## 全部 commit
+## 计划表（归档）
+
+下面 62 行是最初规划的 commit，60 行已完成。**留着是为了对照原计划看偏离了什么**，不是待办清单 —— 待办只有 `▶ 当前` 那一格。
+
+每行的备注只记**偏离原计划的地方和原因**；完整理由在对应的 git commit message 里，那里比这里详细。
 
 ### Phase 0 — 仓库骨架与上游依赖
 

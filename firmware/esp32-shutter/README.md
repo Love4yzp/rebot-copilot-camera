@@ -1,6 +1,6 @@
-# esp32-shutter
+# 快门桥固件（XIAO ESP32-S3）
 
-XIAO ESP32-S3 固件。从 USB CDC 收命令行，用 BLE 冒充佳能无线遥控器按快门。
+从 USB CDC 收命令行，用 BLE 冒充佳能无线遥控器按快门。
 
 依赖 [`maxmacstn/ESP32-Canon-BLE-Remote`](https://github.com/maxmacstn/ESP32-Canon-BLE-Remote) —— 它是个**库不是固件**，只管怎么用 BLE 跟佳能说话，什么时候按快门归调用方管（它自带的 example 里调用方是一个物理按钮的 GPIO 中断）。本固件把那个决定权交给主机。
 
