@@ -1150,7 +1150,7 @@ select:focus {
   padding: 12px;
   border: 1px solid var(--edge);
   border-radius: 8px;
-  background: var(--body-raised, transparent);
+  background: var(--body-lift);
 }
 /* Unavailable is dimmed, never hidden: the anchor really does carry this
  * action, and a row that vanished would read as lost configuration. */
@@ -1192,7 +1192,9 @@ select:focus {
   border: 1px dashed var(--edge);
   border-radius: 8px;
   background: none;
-  color: var(--ink);
+  /* --ink is the deepest chrome *background*, not a text colour; using it here
+   * put near-black text on a near-black panel. --mark is the foreground. */
+  color: var(--mark);
   font: inherit;
 }
 .sheet__add-btn:hover {
