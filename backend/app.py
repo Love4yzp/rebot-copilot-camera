@@ -19,6 +19,8 @@ import time
 from fastapi import FastAPI
 
 from . import __version__, assets
+from .api import estop
+from .safety import SafetyLatch
 
 log = logging.getLogger(__name__)
 
@@ -30,14 +32,26 @@ app = FastAPI(
     description="Automated multi-view photography with a reBot-RS arm.",
 )
 
+#: One latch for the whole process. The control loop reads it every tick and
+#: the API gates on it, so it must be a single shared instance.
+app.state.latch = SafetyLatch()
+
+app.include_router(estop.router)
+
 
 @app.get("/api/health")
 def health() -> dict:
     """Liveness plus enough identity to tell two deployments apart."""
+    latch = app.state.latch.snapshot()
     return {
         "status": "ok",
         "version": __version__,
         "uptime_s": round(time.time() - STARTED_AT, 3),
+        "estop": {
+            "latched": latch.latched,
+            "reason": latch.reason,
+            "source": latch.source.value if latch.source else None,
+        },
         "arm": {
             "urdf": str(assets.urdf_path()),
             "end_effector_frame": assets.end_effector_frame(),
