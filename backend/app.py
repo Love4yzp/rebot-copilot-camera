@@ -16,30 +16,69 @@ import argparse
 import logging
 import time
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from . import __version__, assets, config
-from .api import estop, routines
+from .api import control, estop, routines
+from .arm import SimArm
+from .core import Broadcaster, Controller
 from .routines import RoutineStore
 from .safety import SafetyLatch
+from .shutter import SimShutter
 
 log = logging.getLogger(__name__)
 
 STARTED_AT = time.time()
 
+#: Loop rate for the simulated arm. The real arm defers to upstream's
+#: start_control_loop at the yaml's 500 Hz, pending the R2x measurement (B3).
+SIM_LOOP_HZ = 100.0
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run the control loop for the lifetime of the server.
+
+    Started here rather than at import time so that importing the app -- which
+    every test does -- does not spin a thread that commands an arm.
+    """
+    app.state.controller.start(rate_hz=SIM_LOOP_HZ)
+    log.info("control loop started at %.0f Hz", SIM_LOOP_HZ)
+    try:
+        yield
+    finally:
+        # Stopping the loop stops commanding, but never disables the motors.
+        app.state.controller.stop()
+        log.info("control loop stopped")
+
+
 app = FastAPI(
     title="rebot-copilot-camera",
     version=__version__,
     description="Automated multi-view photography with a reBot-RS arm.",
+    lifespan=lifespan,
 )
 
 #: One latch for the whole process. The control loop reads it every tick and
 #: the API gates on it, so it must be a single shared instance.
 app.state.latch = SafetyLatch()
 app.state.routine_store = RoutineStore(config.ROUTINES_DIR)
+app.state.broadcaster = Broadcaster()
+
+# Simulated hardware by default. The real ArmSession (plan commit #9) swaps in
+# here once CAN transport is confirmed; everything above the arm is unaware.
+app.state.controller = Controller(
+    arm=SimArm(assets.joint_names(), clock=time.monotonic),
+    shutter=SimShutter(),
+    latch=app.state.latch,
+    broadcaster=app.state.broadcaster,
+)
 
 app.include_router(estop.router)
 app.include_router(routines.router)
+app.include_router(control.router)
 
 
 @app.get("/api/health")

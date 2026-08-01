@@ -34,6 +34,11 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     ("PATCH", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
     ("DELETE", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
     ("POST", "/api/routines/{rid}/waypoints/reorder"): "edits stored poses, moves nothing",
+    ("POST", "/api/playback/stop"): "stopping must work while stopped",
+    (
+        "POST",
+        "/api/routines/{rid}/waypoints/capture",
+    ): "reads the current pose and writes a record; useful precisely while stopped",
 }
 
 
