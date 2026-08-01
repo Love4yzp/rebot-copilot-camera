@@ -20,3 +20,6 @@ backend/static/
 
 # os
 .DS_Store
+
+# typescript incremental build cache
+*.tsbuildinfo
