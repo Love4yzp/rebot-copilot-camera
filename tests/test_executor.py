@@ -300,3 +300,38 @@ def test_progress_carries_routine_identity_and_totals():
     assert p.routine_name == "round the subject"
     assert p.waypoint_total == 3
     assert p.waypoint_index == 0
+
+
+# ── first-waypoint approach ──────────────────────────────────────────────────
+
+
+def test_the_approach_to_the_first_waypoint_is_speed_limited():
+    """Later waypoints start from the previous one, so their stored duration
+    was chosen against a known pose. The first starts from wherever teaching
+    left the arm, and honouring a short duration there would fling it."""
+    from backend.core.executor import FIRST_APPROACH_MAX_SPEED
+
+    far = 2.0
+    h = Harness(routine(wp(far, duration_s=0.1)))
+    h.executor.start()
+
+    commanded = h.executor._arrival_deadline - h.clock.now
+    assert commanded > 0.1 * 3, "the stored duration was used unchanged"
+    assert commanded >= (far / FIRST_APPROACH_MAX_SPEED) * 3 * 0.99
+
+
+def test_a_short_first_hop_keeps_its_own_duration():
+    h = Harness(routine(wp(0.05, duration_s=2.0)))
+    h.executor.start()
+
+    assert h.executor._arrival_deadline - h.clock.now == pytest.approx(2.0 * 3)
+
+
+def test_later_waypoints_are_not_stretched():
+    h = Harness(routine(wp(0.0, duration_s=1.0), wp(2.0, duration_s=1.0)))
+    h.executor.start()
+    while h.executor.progress().waypoint_index == 0 and not h.executor.is_finished:
+        h.step()
+
+    assert h.executor.progress().waypoint_index == 1
+    assert h.executor._arrival_deadline - h.clock.now == pytest.approx(1.0 * 3, abs=0.05)

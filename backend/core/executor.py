@@ -27,6 +27,13 @@ log = logging.getLogger(__name__)
 
 #: Per-joint tolerance for "we have arrived", in radians.
 DEFAULT_ARRIVAL_EPS = 0.01
+#: Ceiling on joint speed for the approach to the *first* waypoint, rad/s.
+#:
+#: Every later waypoint is reached from the one before it, so its duration was
+#: chosen against a known starting pose. The first has no such guarantee: the
+#: arm is wherever teaching left it, which may be most of the workspace away.
+#: Honouring the stored duration there turns a long move into a fast one.
+FIRST_APPROACH_MAX_SPEED = 0.5
 #: How much longer than a waypoint's own duration to wait before calling it
 #: stuck. Generous, because a stall is reported as a fault and stops the shoot.
 ARRIVAL_TIMEOUT_FACTOR = 3.0
@@ -171,14 +178,42 @@ class RoutineExecutor:
     def _begin_move(self) -> None:
         waypoint = self._routine.waypoints[self._wp_index]
         now = self._clock()
+        duration = waypoint.duration_s
+
+        if self._wp_index == 0:
+            duration = self._first_approach_duration(waypoint)
 
         self._phase = Phase.MOVING
         self._phase_started_at = now
         self._arrival_deadline = now + max(
-            ARRIVAL_TIMEOUT_FLOOR_S, waypoint.duration_s * ARRIVAL_TIMEOUT_FACTOR
+            ARRIVAL_TIMEOUT_FLOOR_S, duration * ARRIVAL_TIMEOUT_FACTOR
         )
-        self._arm.move_to(waypoint.joints, waypoint.duration_s)
+        self._arm.move_to(waypoint.joints, duration)
         self._emit()
+
+    def _first_approach_duration(self, waypoint: Waypoint) -> float:
+        """Stretch the first move so no joint exceeds a safe speed.
+
+        Later waypoints start from the previous one, so their stored duration
+        was chosen against a known starting pose. The first starts from
+        wherever the arm happens to be — often across the workspace — and using
+        the stored duration there would fling it.
+        """
+        positions = self._arm.read_state().positions
+        largest_move = max(
+            (abs(positions.get(name, target) - target) for name, target in waypoint.joints.items()),
+            default=0.0,
+        )
+        needed = largest_move / FIRST_APPROACH_MAX_SPEED
+        if needed > waypoint.duration_s:
+            log.info(
+                "stretching approach to first waypoint: %.1fs -> %.1fs (%.2f rad to cover)",
+                waypoint.duration_s,
+                needed,
+                largest_move,
+            )
+            return needed
+        return waypoint.duration_s
 
     def _tick_moving(self) -> None:
         waypoint = self._routine.waypoints[self._wp_index]
