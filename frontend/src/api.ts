@@ -1,4 +1,11 @@
-import type { Action, EstopState, PlaybackState, Routine, RoutineSummary } from "./types";
+import type {
+  Action,
+  EstopState,
+  PlaybackState,
+  ProviderInfo,
+  Routine,
+  RoutineSummary,
+} from "./types";
 
 /** Error carrying the server's structured reason, so the UI can show it. */
 export class ApiError extends Error {
@@ -115,11 +122,20 @@ export const api = {
       post<Routine>(`/api/routines/${routineId}/waypoints/reorder`, { order }),
   },
 
+  // ── plugins ─────────────────────────────────────────────────────────────
+  plugins: {
+    /** Every installed action provider, working or not. */
+    list: () => request<ProviderInfo[]>("/api/plugins"),
+    /** Re-run every provider's self-test. Moves no joints, burns no frame. */
+    probe: () => post<ProviderInfo[]>("/api/plugins/probe"),
+  },
+
   // ── motion ──────────────────────────────────────────────────────────────
-  play: (routineId: string) => post<PlaybackState>(`/api/routines/${routineId}/play`),
+  play: (routineId: string, source = "ui") =>
+    post<PlaybackState>(`/api/routines/${routineId}/play`, { source }),
   /** Single-shot goto: move to one anchor, settle, fire its actions, hold. */
-  goto: (routineId: string, index: number) =>
-    post<unknown>(`/api/routines/${routineId}/waypoints/${index}/goto`),
+  goto: (routineId: string, index: number, source = "ui") =>
+    post<unknown>(`/api/routines/${routineId}/waypoints/${index}/goto`, { source }),
   stopPlayback: () => post<PlaybackState>("/api/playback/stop"),
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
   testShutter: (shoot: boolean) => post<{ ok: boolean; error: string | null }>(

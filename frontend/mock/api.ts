@@ -101,6 +101,7 @@ export function handleApi(
         reason: state.estop.reason,
         source: state.estop.source,
       },
+      shutter: { simulated: true },
       arm: {
         simulated: true,
         urdf: "vendor/reBotArm_control_py/urdf/00-arm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf",
@@ -363,6 +364,40 @@ export function handleApi(
     state.mode = reqBody.enabled ? "teach" : "idle";
     return json(200, playbackState(state));
   }
+  // ── plugins ───────────────────────────────────────────────────────────────
+  // Only the shutter, and always healthy: the preview has no serial port and
+  // no way to install a package. The shape must match backend/api/plugins.py
+  // and the field list must match ShutterProvider.fields(), because the edit
+  // sheet draws itself from this and a preview that drew a different form
+  // would be previewing an app that does not exist.
+  if (pathname === "/api/plugins" && (method === "GET" || method === "POST")) {
+    return json(200, [
+      {
+        id: "shutter",
+        label: "快门",
+        available: true,
+        reason: null,
+        retryable: true,
+        fields: [
+          { key: "count", kind: "stepper", label: "次数", default: 1, min: 1, max: 10 },
+          {
+            key: "interval_s",
+            kind: "tiers",
+            label: "间隔",
+            default: 1,
+            values: [0.5, 1, 2, 5],
+            unit: "秒",
+            when: { key: "count", min: 2 },
+          },
+          { key: "focus_first", kind: "switch", label: "先对焦", default: true },
+        ],
+      },
+    ]);
+  }
+  if (pathname === "/api/plugins/probe" && method === "POST") {
+    return handleApi(state, "GET", "/api/plugins", query, body);
+  }
+
   if (pathname === "/api/shutter/test" && method === "POST") {
     const shoot = query.get("shoot") === "true";
     return json(200, {

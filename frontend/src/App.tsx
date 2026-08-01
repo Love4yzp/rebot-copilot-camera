@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api";
-import type { Routine, RoutineSummary, Waypoint } from "./types";
+import type { ProviderInfo, Routine, RoutineSummary, Waypoint } from "./types";
 import { useControlSocket } from "./useControlSocket";
 import { AnchorBoard } from "./components/AnchorBoard";
 import type { AnchorCardStatus } from "./components/AnchorCard";
@@ -47,6 +47,10 @@ function Workspace() {
   const [teachFlow, setTeachFlow] = useState<{ names: string[] | null } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Installed action providers. Loaded once: plugins arrive by installing a
+  // package and restarting the service, so the list cannot change under a
+  // running page. The edit sheet draws its trigger controls from this.
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
 
   const refreshList = useCallback(async () => {
     const list = await attempt(() => api.routines.list());
@@ -56,6 +60,15 @@ function Workspace() {
   useEffect(() => {
     void refreshList();
   }, [refreshList]);
+
+  // A provider list that fails to load must not take the board with it: the
+  // anchors and the arm still work, only the trigger editor is poorer.
+  useEffect(() => {
+    api.plugins
+      .list()
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, []);
 
   // Land on something usable. Reopening the app on the collection that was
   // last in use is right far more often than landing on an empty board, and a
@@ -388,6 +401,7 @@ function Workspace() {
         <AnchorEditSheet
           routine={routine}
           index={editingAnchor}
+          providers={providers}
           onClose={(updated) => {
             if (updated) {
               setRoutine(updated);

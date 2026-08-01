@@ -22,7 +22,49 @@ export interface SleepAction {
   retries: number;
 }
 
-export type Action = ShutterAction | SleepAction;
+/** An action carried out by an installed provider (a plugin). */
+export interface PluginAction {
+  type: "plugin";
+  provider: string;
+  params: Record<string, unknown>;
+  timeout_s: number;
+  on_failure: FailurePolicy;
+  retries: number;
+}
+
+export type Action = ShutterAction | SleepAction | PluginAction;
+
+/**
+ * One control in the anchor edit sheet, as described by the provider.
+ *
+ * Only three kinds, and that is the contract: they are the three this app
+ * already implements, and those have been through the touch-target, focus and
+ * reduced-motion pass. A plugin that shipped its own markup would ship its own
+ * colours, and here colour is a status channel rather than decoration.
+ */
+export interface ProviderField {
+  key: string;
+  kind: "switch" | "stepper" | "tiers";
+  label: string;
+  default: unknown;
+  min?: number;
+  max?: number;
+  values?: number[];
+  unit?: string;
+  /** Show only once another field reaches a threshold: `{key, min}`. */
+  when?: { key: string; min: number };
+}
+
+/** What `GET /api/plugins` reports about one action provider. */
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  available: boolean;
+  /** Why it is unavailable. Shown verbatim — never hide a broken provider. */
+  reason: string | null;
+  retryable: boolean;
+  fields: ProviderField[];
+}
 
 export interface Waypoint {
   id: string;
@@ -78,6 +120,8 @@ export interface PlaybackState {
   teaching: boolean;
   rate_hz: number;
   playback: PlaybackProgress | null;
+  /** Who asked for the running routine. A label, never a permission. */
+  source?: string | null;
 }
 
 /** One control-loop tick, as broadcast over /ws. */

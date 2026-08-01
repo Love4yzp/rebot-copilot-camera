@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { api } from "../api";
-import type { Action, Routine, ShutterAction, Waypoint } from "../types";
+import type { Action, ProviderInfo, Routine, ShutterAction, Waypoint } from "../types";
 import { Dialog } from "./Dialog";
+import { ProviderFields } from "./ProviderFields";
 import { useToast } from "./Toasts";
 
 interface Props {
   routine: Routine;
   index: number;
+  /** Installed action providers, from `GET /api/plugins`. */
+  providers: ProviderInfo[];
   /** Closed with the latest routine if anything was saved, null if untouched. */
   onClose: (updated: Routine | null) => void;
   /** Deleted: the parent offers an undo, so it needs the pose that just went away. */
@@ -20,71 +23,90 @@ const SPEED_TIERS = [
   { label: "快", duration_s: 1.2 },
 ] as const;
 
-const INTERVAL_TIERS = [0.5, 1, 2, 5] as const;
-
 /** 按当前值就近归档:自定义秒数也显示为离它最近的那一档。 */
-function nearest(values: readonly number[], value: number): number {
+function nearestSpeedTier(duration_s: number): number {
+  const values = SPEED_TIERS.map((t) => t.duration_s);
   let best = 0;
   for (let i = 1; i < values.length; i++) {
-    if (Math.abs(values[i] - value) < Math.abs(values[best] - value)) best = i;
+    if (Math.abs(values[i] - duration_s) < Math.abs(values[best] - duration_s)) best = i;
   }
   return best;
 }
-
-const nearestSpeedTier = (duration_s: number) =>
-  nearest(SPEED_TIERS.map((t) => t.duration_s), duration_s);
-
-const nearestIntervalTier = (interval_s: number) => nearest(INTERVAL_TIERS, interval_s);
 
 /**
  * The fixed defaults live here: on_failure / retries / timeout_s are
  * deliberately not in the UI, so this is the one place they are chosen.
  * settle_ms is never sent — the backend keeps the stored value.
  */
-function withFixedFields(action: Partial<ShutterAction>): ShutterAction {
-  return {
-    type: "shutter",
-    focus_first: true,
-    count: 1,
-    interval_s: 0,
-    ...action,
-    on_failure: "abort",
-    retries: 0,
-    timeout_s: 5,
-  };
+const POLICY = { on_failure: "abort", retries: 0, timeout_s: 5 } as const;
+
+/** Read an action's editable parameters, whatever kind of action it is. */
+function paramsOf(action: Action): Record<string, unknown> {
+  if (action.type === "plugin") return { ...action.params };
+  if (action.type === "shutter") {
+    const { count, interval_s, focus_first } = action;
+    return { count, interval_s, focus_first };
+  }
+  return { duration_s: (action as { duration_s: number }).duration_s };
+}
+
+/** Which provider drew an action, or null for the ones with no provider. */
+function providerIdOf(action: Action): string | null {
+  if (action.type === "plugin") return action.provider;
+  if (action.type === "shutter") return "shutter";
+  return null;
 }
 
 /**
- * Edit sheet for one anchor: name, three-tier speed, trigger config, delete.
+ * Rebuild a stored action from edited params.
+ *
+ * The shutter keeps its own typed shape rather than becoming a PluginAction:
+ * routines already on disk are typed, and the backend validates them on every
+ * load. Only unknown providers go through the generic form.
+ */
+function toAction(providerId: string, params: Record<string, unknown>): Action {
+  if (providerId === "shutter") {
+    return {
+      type: "shutter",
+      focus_first: Boolean(params.focus_first ?? true),
+      count: Number(params.count ?? 1),
+      interval_s: Number(params.interval_s ?? 0),
+      ...POLICY,
+    } as ShutterAction;
+  }
+  return { type: "plugin", provider: providerId, params, ...POLICY } as Action;
+}
+
+/**
+ * Edit sheet for one anchor: name, three-tier speed, its triggers, delete.
+ *
+ * The trigger half is drawn from `GET /api/plugins` rather than hard-coded for
+ * the shutter, so installing a provider makes it appear here with no change to
+ * this file. Actions are a list and their **order is what runs** — putting a
+ * relay before the shutter is how "do this first" is expressed, and it needs no
+ * mechanism beyond the up/down buttons.
  *
  * Every control saves immediately (api.waypoints.update) and the returned
- * routine replaces the local copy; close hands the latest routine (or null
- * when nothing changed) back to the parent. Displayed values come from local
- * UI state, not from patch responses, so an in-flight edit is never clobbered
- * by a late response.
+ * routine replaces the local copy; close hands the latest routine (or null when
+ * nothing changed) back to the parent. Displayed values come from local UI
+ * state, not from patch responses, so an in-flight edit is never clobbered by a
+ * late response.
  *
  * Delete is one tap with an undo, not two taps with a confirm. An anchor is a
- * pose somebody walked over and pushed the arm into, so it must be
- * recoverable — but a confirm dialog only slows down the deletes that were
- * intended, and does nothing for the one that was not.
+ * pose somebody walked over and pushed the arm into, so it must be recoverable
+ * — but a confirm dialog only slows down the deletes that were intended, and
+ * does nothing for the one that was not.
  */
-export function AnchorEditSheet({ routine, index, onClose, onRemoved }: Props) {
+export function AnchorEditSheet({ routine, index, providers, onClose, onRemoved }: Props) {
   const { attempt } = useToast();
 
   const [latest, setLatest] = useState<Routine | null>(null);
   const current = latest ?? routine;
   const waypoint = current.waypoints[index];
 
-  const existing = waypoint.actions.find((a): a is ShutterAction => a.type === "shutter") ?? null;
-
   const [note, setNote] = useState(waypoint.note);
   const [tier, setTier] = useState(() => nearestSpeedTier(waypoint.duration_s));
-  const [triggerOn, setTriggerOn] = useState(existing !== null);
-  const [count, setCount] = useState(Math.min(10, Math.max(1, existing?.count ?? 1)));
-  const [intervalTier, setIntervalTier] = useState(() =>
-    nearestIntervalTier(existing?.interval_s ?? 1),
-  );
-  const [focusFirst, setFocusFirst] = useState(existing?.focus_first ?? true);
+  const [actions, setActions] = useState<Action[]>(waypoint.actions);
 
   const patch = async (body: Parameters<typeof api.waypoints.update>[2]) => {
     const updated = await attempt(() => api.waypoints.update(current.id, index, body));
@@ -92,13 +114,33 @@ export function AnchorEditSheet({ routine, index, onClose, onRemoved }: Props) {
     return updated;
   };
 
-  /** Rebuild the actions array around the (first) shutter action. */
-  const setShutter = (fields: Partial<ShutterAction> | null) => {
-    const rest = waypoint.actions.filter((a) => a.type !== "shutter");
-    const actions: Action[] =
-      fields === null ? rest : [...rest, withFixedFields({ ...(existing ?? undefined), ...fields })];
-    return patch({ actions });
+  const commitActions = (next: Action[]) => {
+    setActions(next);
+    void patch({ actions: next });
   };
+
+  const addAction = (providerId: string) => {
+    const provider = providers.find((p) => p.id === providerId);
+    const params = Object.fromEntries((provider?.fields ?? []).map((f) => [f.key, f.default]));
+    commitActions([...actions, toAction(providerId, params)]);
+  };
+
+  const editAction = (at: number, key: string, value: unknown) => {
+    const providerId = providerIdOf(actions[at]);
+    if (providerId === null) return;
+    const params = { ...paramsOf(actions[at]), [key]: value };
+    commitActions(actions.map((a, i) => (i === at ? toAction(providerId, params) : a)));
+  };
+
+  const moveAction = (at: number, by: number) => {
+    const to = at + by;
+    if (to < 0 || to >= actions.length) return;
+    const next = [...actions];
+    [next[at], next[to]] = [next[to], next[at]];
+    commitActions(next);
+  };
+
+  const removeAction = (at: number) => commitActions(actions.filter((_, i) => i !== at));
 
   const commitNote = () => {
     const trimmed = note.trim();
@@ -108,43 +150,6 @@ export function AnchorEditSheet({ routine, index, onClose, onRemoved }: Props) {
   const pickTier = (i: number) => {
     setTier(i);
     void patch({ duration_s: SPEED_TIERS[i].duration_s });
-  };
-
-  const toggleTrigger = (on: boolean) => {
-    setTriggerOn(on);
-    if (on) {
-      void setShutter({
-        focus_first: focusFirst,
-        count,
-        interval_s: count > 1 ? INTERVAL_TIERS[intervalTier] : 0,
-      });
-    } else {
-      void setShutter(null);
-    }
-  };
-
-  const stepCount = (next: number) => {
-    const clamped = Math.min(10, Math.max(1, next));
-    setCount(clamped);
-    void setShutter({
-      focus_first: focusFirst,
-      count: clamped,
-      interval_s: clamped > 1 ? INTERVAL_TIERS[intervalTier] : 0,
-    });
-  };
-
-  const pickInterval = (i: number) => {
-    setIntervalTier(i);
-    void setShutter({ focus_first: focusFirst, count, interval_s: INTERVAL_TIERS[i] });
-  };
-
-  const toggleFocus = (on: boolean) => {
-    setFocusFirst(on);
-    void setShutter({
-      focus_first: on,
-      count,
-      interval_s: count > 1 ? INTERVAL_TIERS[intervalTier] : 0,
-    });
   };
 
   const close = async () => {
@@ -212,78 +217,89 @@ export function AnchorEditSheet({ routine, index, onClose, onRemoved }: Props) {
         </div>
       </div>
 
-      <div className="sheet__field">
+      <div className="sheet__actions-list">
         <span className="sheet__label">触发</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={triggerOn}
-          className={`sheet__switch ${triggerOn ? "on" : ""}`}
-          onClick={() => toggleTrigger(!triggerOn)}
-        >
-          {triggerOn ? "开" : "关"}
-        </button>
-      </div>
+        {actions.length === 0 && <p className="hint">到位后什么都不做</p>}
 
-      {triggerOn && (
-        <>
-          <div className="sheet__field">
-            <span className="sheet__label">次数</span>
-            <div className="sheet__stepper">
-              <button
-                type="button"
-                className="sheet__stepper-btn"
-                onClick={() => stepCount(count - 1)}
-                disabled={count <= 1}
-                aria-label="减少次数"
-              >
-                −
-              </button>
-              <span className="sheet__stepper-num">{count}</span>
-              <button
-                type="button"
-                className="sheet__stepper-btn"
-                onClick={() => stepCount(count + 1)}
-                disabled={count >= 10}
-                aria-label="增加次数"
-              >
-                +
-              </button>
-            </div>
-          </div>
+        {actions.map((action, at) => {
+          const providerId = providerIdOf(action);
+          const provider = providers.find((p) => p.id === providerId);
+          const params = paramsOf(action);
+          // An uninstalled provider is shown, not hidden: the anchor really
+          // does carry this action, and a row that vanished would read as the
+          // operator having lost their configuration.
+          const missing = providerId !== null && provider === undefined;
 
-          {count > 1 && (
-            <div className="sheet__field">
-              <span className="sheet__label">间隔</span>
-              <div className="sheet__tiers" role="radiogroup" aria-label="间隔">
-                {INTERVAL_TIERS.map((seconds, i) => (
+          return (
+            <div className={`sheet__action ${provider?.available === false || missing ? "down" : ""}`} key={at}>
+              <div className="sheet__action-head">
+                <span className="sheet__action-name">
+                  {provider?.label ?? providerId ?? "等待"}
+                </span>
+                <div className="sheet__action-tools">
                   <button
-                    key={seconds}
                     type="button"
-                    role="radio"
-                    aria-checked={intervalTier === i}
-                    className={`sheet__tier ${intervalTier === i ? "selected" : ""}`}
-                    onClick={() => pickInterval(i)}
+                    className="ghost"
+                    onClick={() => moveAction(at, -1)}
+                    disabled={at === 0}
+                    aria-label="上移"
                   >
-                    {seconds} 秒
+                    ↑
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => moveAction(at, 1)}
+                    disabled={at === actions.length - 1}
+                    aria-label="下移"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => removeAction(at)}
+                    aria-label="删除这个触发"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
 
-          <div className="sheet__field">
-            <label className="sheet__check">
-              <input
-                type="checkbox"
-                checked={focusFirst}
-                onChange={(event) => toggleFocus(event.target.checked)}
-              />
-              先对焦
-            </label>
-          </div>
-        </>
-      )}
+              {missing && <p className="sheet__action-reason">没有安装 {providerId} 插件</p>}
+              {provider && !provider.available && (
+                <p className="sheet__action-reason">{provider.reason ?? "当前不可用"}</p>
+              )}
+
+              {provider && (
+                <ProviderFields
+                  fields={provider.fields}
+                  values={params}
+                  onChange={(key, value) => editAction(at, key, value)}
+                />
+              )}
+            </div>
+          );
+        })}
+
+        <div className="sheet__add">
+          {providers.map((provider) => (
+            <button
+              key={provider.id}
+              type="button"
+              className="sheet__add-btn"
+              onClick={() => addAction(provider.id)}
+              // Adding one that is down is allowed: an operator often lays out
+              // a shoot before the accessory is plugged in. The pre-flight
+              // refuses to *play* it, which is where the arm is at stake.
+              title={provider.available ? undefined : (provider.reason ?? "当前不可用")}
+            >
+              + {provider.label}
+              {provider.available ? "" : " ⚠"}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="sheet__actions">
         <button type="button" className="primary" onClick={() => void close()}>
