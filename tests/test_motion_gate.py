@@ -40,6 +40,11 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
         "/api/routines/{rid}/waypoints/capture",
     ): "reads the current pose and writes a record; useful precisely while stopped",
     ("POST", "/api/shutter/test"): "fires the shutter, moves no joints",
+    # Agent lease management. Taking or giving back control moves nothing, and
+    # a person must be able to revoke an agent's lease while the arm is stopped.
+    ("POST", "/api/agent/acquire"): "takes a lease, moves nothing",
+    ("POST", "/api/agent/release"): "gives a lease back; must work while stopped",
+    ("POST", "/api/agent/control/stop"): "stopping must work while stopped",
 }
 
 

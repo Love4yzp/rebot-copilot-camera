@@ -22,7 +22,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
-from .api import control, estop, routines
+from .agent import AgentLease
+from .api import agent, control, estop, routines
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
@@ -73,6 +74,7 @@ app = FastAPI(
 app.state.latch = SafetyLatch()
 app.state.routine_store = RoutineStore(config.ROUTINES_DIR)
 app.state.broadcaster = Broadcaster()
+app.state.agent_lease = AgentLease()
 
 # The arm is chosen at import time so tests get a simulator without touching
 # CAN. main() re-chooses it, so the running service can use real hardware.
@@ -90,6 +92,7 @@ app.state.controller = Controller(
 app.include_router(estop.router)
 app.include_router(routines.router)
 app.include_router(control.router)
+app.include_router(agent.router)
 
 
 @app.get("/api/health")
