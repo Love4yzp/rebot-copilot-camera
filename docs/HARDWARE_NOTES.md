@@ -22,7 +22,7 @@ def estop(self) -> None:
 
 ### 2. 上游默认配置指向的是**另一条臂**
 
-`config/rebotarm.yaml` 里 `hardware_yaml: "rebotarm_dm.yaml"` —— B601-**DM** 变体。
+上游 `vendor/reBotArm_control_py/config/rebotarm.yaml` 里 `hardware_yaml: "rebotarm_dm.yaml"` —— B601-**DM** 变体。
 
 `kinematics/robot_model.py:40-53` 的 `_resolve_urdf(urdf_path=None)` 会走这条链，最终加载 `urdf/reBot-DevArm_fixend_description/urdf/reBot-DevArm_fixend.urdf`，末端 frame `end_link`。
 
@@ -83,6 +83,34 @@ error: Multiple top-level packages discovered in a flat-layout: ['urdf', 'config
 
 URDF + 30 个 STL 共 63 MB，留在 submodule 里，不复制进本仓库。
 
+### 8. 碰撞对里有 8 对是结构性的
+
+URDF 不带 SRDF，`addAllCollisionPairs()` 给出 **44 对**候选，其中 8 对在静止姿态下就相撞：
+
+```
+base_link↔link1  link1↔link2  link2↔link3  link3↔link4
+link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔gripper_right
+```
+
+全是相邻连杆 —— 拧在一起本来就贴着。不排掉的话**每一个姿态都是自碰撞**。
+
+`backend/safety/kinematics.py` 用「静止姿态下相撞即为结构性」来排除，剩 **36 对**真实的。这个判据是自校准的：换 URDF 也不用手动维护排除表。
+
+### 9. 重力向量是 URDF 的 8 维，不是硬件的 7 维
+
+`compute_generalized_gravity()` 返回 `nv = 8` 维（`joint1..6` + 两个夹爪指关节），硬件是 7 关节。**只有 6 个臂关节对得上。**
+
+`ArmSession._gravity_torque()` 只喂 6 个臂关节角进去（上游 `pad_q_for_model` 负责补齐到 8 维），取回前 6 维，**夹爪给 0** —— 没有标定过的「指关节行程 → 夹爪电机力矩」换算，编一个再塞进力矩指令比给 0 更糟。
+
+实测值（开发机上算的，不是实机测的）：
+
+| 姿态 | joint2 | joint3 | joint4 |
+|---|---|---|---|
+| 静止 q=0 | 1.545 | 6.764 | 2.001 |
+| 肘展开 `j2=1.2, j3=0.6` | -3.834 | 6.796 | 1.775 |
+
+单位 N·m。j2 从 +1.5 变 -3.8 符合物理直觉（重心越过支点）。**上机后要拿实际电流对一遍。**
+
 ---
 
 ## 待实测 —— 上真机前不要当事实用
@@ -101,11 +129,15 @@ URDF + 30 个 STL 共 63 MB，留在 submodule 里，不复制进本仓库。
 
 ### B3. R2x 上 500 Hz 能否稳住
 
-`rate: 500` 是上游 yaml 默认值，没说在什么算力上测的。跑控制循环测实际 tick 抖动，不稳就降频并在这里记录实测值。
+`rate: 500` 是上游 yaml 默认值，没说在什么算力上测的。
+
+**已知**：sim 模式下自带的线程驱动在 macOS 上 100 Hz 稳（`/api/control` 的 `rate_hz` 实测 100–101）。真机上控制循环换成上游的 `start_control_loop`，它自己管 CAN 时序。上机后测实际 tick 抖动，不稳就降频并在这里记录实测值。
 
 ### B4. XIAO ESP32-S3 板子是否在手
 
-未确认。挡住 Phase 7 的固件烧录与快门自检。
+未确认。
+
+**已知**：固件（`firmware/esp32-shutter/`）和主机侧客户端（`backend/shutter/esp32.py`）都写完了，行协议在内存管道上有 30 个测试覆盖 —— 半行、粘包、二进制噪声、迟到回包、断开重连都测了。缺的只是烧到板子上跑一遍：`cd firmware/esp32-shutter && pio run -t upload`，然后 `POST /api/shutter/test`。
 
 ### 其它待确认
 

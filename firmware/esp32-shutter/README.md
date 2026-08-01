@@ -18,8 +18,13 @@ pio device monitor        # 应立刻看到 READY 1.0.0
 
 1. 机身菜单 `无线通信设置 > 蓝牙功能` 设成 **「遥控」**（不是「智能手机」）。**不设这个配不上。**
 2. 选「配对」，相机进入等待状态。
-3. 主机发 `PAIR`，或直接 `curl -X POST http://127.0.0.1:18790/api/shutter/test`（先确认链路）。
+3. 主机发 `PAIR`（板子扫 30 秒）。后端没有暴露这一步的端点 —— 配对是一次性动作，直接串口发就行：
+   ```bash
+   pio device monitor          # 然后手打： #1 PAIR
+   ```
 4. 配对信息存在板子上，之后上电自动重连。
+5. 验证整条链路：`curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'`。
+   **注意 `/api/shutter/test` 不带 `?shoot=true` 时只发 `PING`** —— 那只证明主机和板子之间通，不证明相机能拍。
 
 ## 协议
 

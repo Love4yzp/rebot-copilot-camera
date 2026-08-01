@@ -2,8 +2,8 @@
 
 **这是项目的状态机。任何 agent 接手前先读完本文件。**
 
-完整设计与理由在 [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1)。
 本文件只回答三个问题：**现在在哪 / 下一步做什么 / 什么被卡住了**。
+铁律与代码约定在 [`AGENTS.md`](./AGENTS.md)，原始设计与决策记录在 [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1)。
 
 ---
 
@@ -11,11 +11,13 @@
 
 接手一个 session：
 
-1. 读本文件 `▶ 当前` 段 —— 得到当前 commit 编号。
-2. 读 issue #1 的 `## Commits` 段里对应编号的描述 —— 得到该 commit 的完整要求。
-3. 检查 `🚧 阻塞` 段 —— 该 commit 是否依赖未解决的阻塞项。
-4. 做完 → **在同一个 git commit 里把本文件的状态一起改掉**，不要分开提交，否则状态会和代码漂移。
-5. 更新 `▶ 当前` 指向下一个 `TODO`。
+1. 读 [`AGENTS.md`](./AGENTS.md) —— 四条铁律，违反了不会报错只会让结果错。
+2. 读本文件 `▶ 当前` 段 —— 得到当前 commit 编号。
+3. 读 issue #1 的 `## Commits` 段里对应编号的描述 —— 得到该 commit 的完整要求。
+4. 检查 `🚧 阻塞` 段 —— 该 commit 是否依赖未解决的阻塞项。
+5. 做完 → **在同一个 git commit 里把本文件的状态一起改掉**，不要分开提交，否则状态会和代码漂移。
+
+**原计划的 62 个 commit 已完成 60 个**，只剩两个硬件实测。后续新增工作在表末追加行，沿用同样的编号与状态约定。
 
 状态值：`TODO` 未开始 / `WIP` 进行中 / `DONE` 已提交 / `BLOCKED` 被阻塞项挡住 / `SKIP` 明确跳过（写理由）。
 
@@ -44,7 +46,7 @@
 |---|---|---|
 | `L` | 开发机就能做完（写码 + 单测 + sim） | 可用（macOS） |
 | `H` | 需要真臂 / r2x / CAN 总线才能验证 | **暂不可用** |
-| `E` | 需要 XIAO ESP32-S3 板子才能烧录验证 | 状态未知 |
+| `E` | 需要 XIAO ESP32-S3 板子才能烧录验证 | 未确认是否在手（B4） |
 
 `H` / `E` 的 commit 分两半：代码和测试在开发机写完并标 `DONE`，实机验证记进 `docs/HARDWARE_NOTES.md`。若实机验证推翻了实现，开新 commit 修，不回改状态。
 
@@ -52,25 +54,22 @@
 
 ## 🚧 阻塞 / 待验证
 
-| # | 项 | 挡住哪些 commit | 怎么解 |
-|---|---|---|---|
-| B1 | CAN 接入形态未定：`config/rebotarm_rs.yaml` 写 `channel: can0`（socketcan），上游 README 又提到 USB2CAN 串口桥 `/dev/ttyACM0` | #6 #9 #59 | 在 r2x 上 `ip link show can0` + `ls /dev/ttyACM*`，跑上游 `example/2_zero_and_read.py` |
-| B2 | 末端挂佳能机身后重力补偿是否还准（上游标定是**空载**，误差 5–11%） | #7 #28 | 挂机身实测浮动手感；不准则在 URDF 末端加相机等效质量/质心，或重调速度阈值 |
-| B3 | R2x 上 500 Hz 控制频率能否稳住（yaml 默认值，上游没说在什么算力上测的） | #12 | 跑控制循环测实际 tick 抖动，不稳就降频并记录 |
-| B4 | XIAO ESP32-S3 板子是否在手 | #37 #42 | 确认后开 Phase 7 |
+这四项**只挡验证，不挡代码** —— 相关实现都已写完并有测试，缺的是在真机上确认数值。
 
-阻塞项不挡纯逻辑 commit。Phase 3 / 4 / 8 全是纯逻辑，**没有硬件也能一路做完**，且是全项目最该先做的部分（急停 + 数据模型 + 执行器）。
+| # | 项 | 影响 | 怎么解 |
+|---|---|---|---|
+| B1 | CAN 接入形态未定：`config/rebotarm_rs.yaml` 写 `channel: can0`（socketcan），上游 README 又提到 USB2CAN 串口桥 `/dev/ttyACM0` | 挡 #6 验证。`ArmSession` 与 `rebot-can.service` 按 socketcan 写的，若实际是串口桥要改这两处 | 在 r2x 上 `ip link show can0` + `ls /dev/ttyACM*`，跑上游 `example/2_zero_and_read.py` |
+| B2 | 末端挂佳能机身后重力补偿是否还准（上游标定是**空载**，误差 5–11%） | 挡 #7 验证。`FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益都做成可配就是为了这里重调 | 挂机身实测浮动手感；不准则在 URDF 末端加相机等效质量/质心，或重调阈值 |
+| B3 | R2x 上 500 Hz 控制频率能否稳住（yaml 默认值，上游没说在什么算力上测的） | 只影响频率取值。sim 下实测 100 Hz 稳，真机换成上游 `start_control_loop` | 跑控制循环测实际 tick 抖动，不稳就降频并记录 |
+| B4 | XIAO ESP32-S3 板子是否在手 | 挡固件烧录验证。固件与主机侧协议都写完了，协议在内存管道上有 30 个测试 | 有板子就 `cd firmware/esp32-shutter && pio run -t upload` |
 
 ---
 
-## 决策速查（最容易做错的四条）
+## 决策速查
 
-1. **急停绝不能调 `RebotArm.estop()`。** 上游那个方法实现就是一行 `self.disable_all()`（`vendor/reBotArm_control_py/reBotArm_control_py/actuator/rebotarm.py:687`），语义是电机失能、力矩归零、臂自由落体，跟本项目"保持力矩钉在原地"的需求完全相反。MotorBridge 文档同样把 `disable_all()` 写成 "Emergency stop all motors"。本项目急停 = 冻结 `q_target` + 继续 MIT + 重力补偿维持。代码里必须留注释说明为什么不用这个同名方法。
-2. **不许用上游的默认资产解析。** 上游 `config/rebotarm.yaml` 的 `hardware_yaml` 指向 `rebotarm_dm.yaml` —— **B601-DM 那条臂**，URDF 和末端 frame 都不同。`load_robot_model()` 不传参会静默返回一个合法但属于错误机器人的模型，**文件存在所以不报错**，只是 FK / 重力补偿 / 碰撞全算错。一律走 `backend/assets.py`，显式传 `urdf_path=str(assets.urdf_path())`。
-3. **速度不能读 `mechVel (0x701A)`。** 该固件上这个寄存器不是 rad/s。速度必须由位置差分算。浮动/锁定的判据正是末端速度，读错会导致锁不住或锁太早。
-4. **不重造运动学/动力学。** FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 `Seeed-Projects/reBotArm_control_py`，本项目只调不写。
+四条铁律（急停不能调 `estop()`／不许用上游默认资产解析／速度不能读 `mechVel`／不重造运动学）写在 [`AGENTS.md`](./AGENTS.md)，**只维护那一份** —— 两份副本会漂移，而漂移掉的正是这类救命细节。
 
-证据与更多细节见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。
+源码级证据见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。
 
 ---
 
