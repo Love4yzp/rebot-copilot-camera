@@ -313,21 +313,37 @@ function Workspace() {
         onStartWizard={startWizard}
       />
 
-      <AnchorBoard
-        routine={routine}
-        noCollections={summaries.length === 0}
-        config={config}
-        statusAt={statusAt}
-        motionBlocked={motionBlocked}
-        onGoto={(index) => void goto(index)}
-        onEditAnchor={setEditingAnchor}
-        onMove={(index, dir) => void move(index, dir)}
-        onCreateCollection={() => setMenuOpen(true)}
-        onRecordFirst={() => {
-          setConfig(true);
-          setTeachFlow({ names: null });
-        }}
-      />
+      {/* The drawer shares this row so it can only ever cover the cards —
+        * never the emergency stop above it or the run controls below. */}
+      <div className="board-row">
+        <AnchorBoard
+          routine={routine}
+          noCollections={summaries.length === 0}
+          config={config}
+          statusAt={statusAt}
+          motionBlocked={motionBlocked}
+          onGoto={(index) => void goto(index)}
+          onEditAnchor={setEditingAnchor}
+          onMove={(index, dir) => void move(index, dir)}
+          onCreateCollection={() => setMenuOpen(true)}
+          onRecordFirst={() => {
+            setConfig(true);
+            setTeachFlow({ names: null });
+          }}
+        />
+
+        <ViewerDrawer
+          open={viewerOpen}
+          onClose={() => setViewerOpen(false)}
+          positions={state?.positions ?? {}}
+          preview={mode === "playback" ? null : (previewWaypoint?.joints ?? null)}
+          previewName={
+            previewWaypoint && mode !== "playback"
+              ? previewWaypoint.note.trim() || `锚点 ${(editingAnchor ?? 0) + 1}`
+              : null
+          }
+        />
+      </div>
 
       <LogDrawer rateHz={state?.rate_hz ?? 0} />
 
@@ -367,18 +383,6 @@ function Workspace() {
           + 录锚点
         </button>
       )}
-
-      <ViewerDrawer
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        positions={state?.positions ?? {}}
-        preview={mode === "playback" ? null : (previewWaypoint?.joints ?? null)}
-        previewName={
-          previewWaypoint && mode !== "playback"
-            ? previewWaypoint.note.trim() || `锚点 ${(editingAnchor ?? 0) + 1}`
-            : null
-        }
-      />
 
       {editingAnchor !== null && routine && routine.waypoints[editingAnchor] && (
         <AnchorEditSheet

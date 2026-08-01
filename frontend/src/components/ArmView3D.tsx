@@ -3,7 +3,8 @@ import * as THREE from "three";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 
-const URDF_URL = "/assets/urdf/00-arm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf";
+const URDF_PACKAGE_ROOT = "/assets/urdf/00-arm-rs_asm-v3";
+const URDF_URL = `${URDF_PACKAGE_ROOT}/urdf/00-arm-rs_asm-v3.urdf`;
 
 interface Props {
   /** Live joint angles from the control loop. */
@@ -47,13 +48,32 @@ export function ArmView3D({ positions, preview }: Props) {
     const grid = new THREE.GridHelper(2, 20, 0x2a3341, 0x1a2029);
     scene.add(grid);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // A WebGL context is not guaranteed — a software renderer, an exhausted
+    // context pool, or a locked-down browser all fail here. Failing loudly
+    // matters more than usual: without this the panel is a black rectangle
+    // with no text, and the operator cannot tell a broken viewer from an arm
+    // that happens to be out of frame.
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (error) {
+      setStatus(`3D 无法初始化 — ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     host.appendChild(renderer.domElement);
 
     const loader = new URDFLoader();
-    // URDF mesh paths are relative to the package root, not to the .urdf file.
-    loader.packages = "/assets/urdf/00-arm-rs_asm-v3";
+    // This URDF writes plain relative mesh paths (`meshes/base_link.STL`), and
+    // they are relative to the package root — one level above the .urdf file's
+    // own directory. `workingPath` is the knob for that; `packages` is not, it
+    // only rewrites `package://` URIs, of which this file has none. Setting
+    // only `packages` left every mesh resolving against `…/urdf/` and 404ing,
+    // which is why the viewer had never drawn an arm.
+    // The trailing slash is load-bearing: workingPath is concatenated, not
+    // joined, so without it every mesh resolves to `…-v3meshes/base_link.STL`.
+    loader.workingPath = `${URDF_PACKAGE_ROOT}/`;
+    loader.packages = URDF_PACKAGE_ROOT;
 
     // Meshes arrive after the URDF itself parses, so a missing mesh directory
     // resolves the load "successfully" and leaves an empty scene. Without this
@@ -184,9 +204,15 @@ export function ArmView3D({ positions, preview }: Props) {
 
   // Which pose is on screen is named by the drawer header, not here — one
   // label, one job.
+  //
+  // The ternary is not a style preference. `{status && <div/>}` renders the
+  // empty string when status is "", and React treats a lone text child by
+  // calling setTextContent on the host — which wipes the canvas this
+  // component appended imperatively. An explicit null renders nothing at all
+  // and leaves the canvas alone.
   return (
     <div className="viewer" ref={mount}>
-      {status && <div className="overlay">{status}</div>}
+      {status ? <div className="overlay">{status}</div> : null}
     </div>
   );
 }

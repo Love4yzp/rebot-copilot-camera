@@ -853,12 +853,22 @@ select:focus {
  * into one cramped file on an iPad in portrait. It is a reference, not a
  * control, so it became a drawer and the cards took the screen back. */
 
+/* The board and the drawer share one positioned row, so the drawer slides over
+ * the cards and nothing else. Pinning it to the viewport instead put it on top
+ * of the emergency stop bar and the right end of the run controls. */
+.board-row {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+}
+
 .viewer-drawer {
-  position: fixed;
+  position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: 30;
+  z-index: 5;
   width: min(430px, 92vw);
   display: flex;
   flex-direction: column;
