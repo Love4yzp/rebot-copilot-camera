@@ -16,25 +16,34 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
 from ..routines import Action, Routine, RoutineNotFound, RoutineStore, RoutineSummary, Waypoint
+from ..safety.kinematics import validate_pose
 
 router = APIRouter(prefix="/api/routines", tags=["routines"])
 
 
 def _validated_waypoint(data: dict) -> Waypoint:
-    """Build a Waypoint from request data, reporting failures as 422.
+    """Build a Waypoint from request data, reporting failures as 422 or 400.
+
+    Two layers, and they mean different things. Shape problems (negative
+    settle, a NaN angle) are 422 -- the request is malformed. Joint limits and
+    self-collision are 400: the request is well-formed but describes a pose
+    this arm must not be asked to reach.
 
     The request models keep their fields optional so a PATCH can omit them,
-    which means the real constraints (positive duration, non-negative settle,
-    finite angles) only bite here. Without this the caller would get a 500 for
-    what is plainly a bad request.
+    which is why the model's own constraints only bite here.
     """
     try:
-        return Waypoint.model_validate(data)
+        waypoint = Waypoint.model_validate(data)
     except ValidationError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             exc.errors(include_url=False),
         ) from None
+
+    unsafe = validate_pose(waypoint.joints)
+    if unsafe:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe})
+    return waypoint
 
 
 def _store(request: Request) -> RoutineStore:

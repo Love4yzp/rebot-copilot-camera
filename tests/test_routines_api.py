@@ -182,3 +182,47 @@ def test_summary_reports_waypoint_and_shutter_counts(client: TestClient, rid: st
     summary = client.get("/api/routines").json()[0]
     assert summary["waypoint_count"] == 2
     assert summary["shutter_count"] == 1
+
+
+# ── safety validation ────────────────────────────────────────────────────────
+
+
+def test_out_of_range_waypoint_is_rejected_with_the_joint_name(client: TestClient, rid: str):
+    r = client.post(f"/api/routines/{rid}/waypoints", json={"joints": {"joint1": 9.0}})
+    assert r.status_code == 400
+
+    detail = r.json()["detail"]
+    assert detail["error"] == "unsafe_pose"
+    assert any("joint1" in reason for reason in detail["reasons"])
+
+
+def test_self_colliding_waypoint_is_rejected(client: TestClient, rid: str):
+    """link3 folded back into the base — legal per joint, illegal as a pose."""
+    folded = {
+        "joint1": 2.394,
+        "joint2": 3.039,
+        "joint3": 0.046,
+        "joint4": 1.142,
+        "joint5": 1.511,
+        "joint6": 2.871,
+    }
+    r = client.post(f"/api/routines/{rid}/waypoints", json={"joints": folded})
+    assert r.status_code == 400
+    assert any("collides" in reason for reason in r.json()["detail"]["reasons"])
+
+
+def test_patching_a_waypoint_out_of_range_is_rejected(client: TestClient, rid: str):
+    add(client, rid, 0.1)
+    r = client.patch(f"/api/routines/{rid}/waypoints/0", json={"joints": {"joint1": 9.0}})
+    assert r.status_code == 400
+    assert angles(client.get(f"/api/routines/{rid}").json()) == [0.1]
+
+
+def test_rest_pose_is_accepted_despite_sitting_on_joint2s_lower_bound(client, rid: str):
+    """joint2's lower limit is exactly 0.0 and the arm rests at 0. Without
+    tolerance the arm would be rejected for standing still."""
+    r = client.post(
+        f"/api/routines/{rid}/waypoints",
+        json={"joints": {f"joint{i}": 0.0 for i in range(1, 7)}},
+    )
+    assert r.status_code == 201

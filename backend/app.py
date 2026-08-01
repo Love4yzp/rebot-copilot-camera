@@ -26,6 +26,7 @@ from .arm import SimArm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
 from .safety import SafetyLatch, Watchdog
+from .safety.kinematics import arm_model
 from .shutter import SimShutter
 
 log = logging.getLogger(__name__)
@@ -44,6 +45,11 @@ async def lifespan(app: FastAPI):
     Started here rather than at import time so that importing the app -- which
     every test does -- does not spin a thread that commands an arm.
     """
+    # Parsing 30 STL meshes takes a couple of seconds. Do it now rather than
+    # inside the first request that needs a collision check.
+    model = arm_model()
+    log.info("kinematics ready: %d collision pairs", len(model.geom.collisionPairs))
+
     app.state.controller.start(rate_hz=SIM_LOOP_HZ)
     log.info("control loop started at %.0f Hz", SIM_LOOP_HZ)
     try:

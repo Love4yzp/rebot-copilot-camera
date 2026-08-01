@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..core import Broadcaster, Controller
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
+from ..safety.kinematics import validate_pose, validate_sequence
 from .gate import require_arm_available
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,16 @@ def play_routine(rid: str, request: Request) -> PlaybackState:
     if not routine.waypoints:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "routine has no waypoints")
 
+    # Pre-flight the whole sequence, including the straight lines between
+    # consecutive poses. Two legal waypoints can have an illegal path between
+    # them, and discovering that by watching the arm reach it is the expensive
+    # way to find out. Nothing has moved yet at this point.
+    unsafe = validate_sequence([w.joints for w in routine.waypoints])
+    if unsafe:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_routine", "reasons": unsafe}
+        )
+
     try:
         _controller(request).play(routine)
     except RuntimeError as exc:
@@ -131,7 +142,17 @@ def capture_waypoint(rid: str, request: Request, body: CaptureRequest | None = N
     controller = _controller(request)
 
     fields = body.model_dump(exclude_none=True, exclude={"index"})
-    waypoint = Waypoint(joints=dict(controller.arm.read_state().positions), **fields)
+    pose = dict(controller.arm.read_state().positions)
+    waypoint = Waypoint(joints=pose, **fields)
+
+    # Deliberately a warning, not a rejection. The arm is physically at this
+    # pose; refusing to record where it actually is would be absurd. But if the
+    # model calls it unsafe, the model and reality disagree -- a bad URDF, a
+    # miscalibrated zero -- and that is worth saying out loud before playback
+    # trusts the same model to pre-flight the routine.
+    unsafe = validate_pose(pose)
+    if unsafe:
+        log.warning("captured a pose the model considers unsafe: %s", "; ".join(unsafe))
 
     if body.index is None:
         routine.waypoints.append(waypoint)

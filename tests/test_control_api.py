@@ -193,3 +193,33 @@ def test_websocket_reports_the_stop(rig):
 
     assert message["data"]["mode"] == "estop"
     assert message["data"]["estop"]["reason"] == "cable snagged"
+
+
+# ── pre-flight ───────────────────────────────────────────────────────────────
+
+
+def test_play_preflights_the_path_between_legal_waypoints(client: TestClient):
+    """Both poses are legal; the straight line between them goes through the
+    base. Refuse before anything moves."""
+    a = {
+        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
+        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
+    }
+    b = {
+        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
+        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
+    }
+    rid = client.post("/api/routines", json={"name": "through the base"}).json()["id"]
+    for pose in (a, b):
+        assert client.post(f"/api/routines/{rid}/waypoints", json={"joints": pose}).status_code == 201
+
+    r = client.post(f"/api/routines/{rid}/play")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "unsafe_routine"
+    assert any("path 0->1" in reason for reason in r.json()["detail"]["reasons"])
+    assert client.get("/api/control").json()["playing"] is False
+
+
+def test_a_clean_routine_still_plays(client: TestClient):
+    rid = make_routine(client, 0.2, 0.5)
+    assert client.post(f"/api/routines/{rid}/play").status_code == 200
