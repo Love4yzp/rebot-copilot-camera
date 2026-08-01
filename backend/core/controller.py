@@ -32,6 +32,7 @@ from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..shutter.base import ShutterDriver
 from .broadcaster import Broadcaster
 from .executor import Phase, RoutineExecutor
+from .floatlock import FloatLock, FloatLockConfig
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class Controller:
         clock: Callable[[], float] | None = None,
         watchdog: Watchdog | None = None,
         expected_period_s: float = 0.01,
+        floatlock: FloatLockConfig | None = None,
     ) -> None:
         self.arm = arm
         self.shutter = shutter
@@ -63,6 +65,8 @@ class Controller:
         self._last_state = ArmState(positions={}, velocities={})
         self._hold_target: dict[str, float] | None = None
         self._was_latched = False
+        self._floatlock = FloatLock(floatlock)
+        self._float_engaged = False
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -131,7 +135,12 @@ class Controller:
             if enabled and self.is_playing:
                 self.stop_playback("teaching started")
             self._teaching = enabled
-            self.arm.set_float(enabled)
+            self._floatlock.reset()
+            # Starts locked, so an arm nobody is holding yet does not sag.
+            self._float_engaged = False
+            self._hold_target = dict(self.arm.read_state().positions) if enabled else None
+            if not enabled:
+                self.arm.set_float(False)
 
     # ── the loop ─────────────────────────────────────────────────────────────
 
@@ -184,6 +193,8 @@ class Controller:
         if self._teaching:
             # A floating arm under an engaged stop is a dropped arm.
             self._teaching = False
+            self._floatlock.reset()
+            self._float_engaged = False
             self.arm.set_float(False)
 
         if self._executor is not None and not self._executor.is_finished:
@@ -194,8 +205,7 @@ class Controller:
 
     def _tick_running(self) -> None:
         if self._teaching:
-            # The arm floats; nothing to command, and nothing to hold it to.
-            self._hold_target = None
+            self._tick_teaching()
             return
         if self._executor is not None and not self._executor.is_finished:
             self._executor.tick()
@@ -204,6 +214,44 @@ class Controller:
             self._hold_target = None
             return
         self._hold_target = None
+
+    def _tick_teaching(self) -> None:
+        """Zero-force drag: follow the hand while it moves, hold when it stops.
+
+        The decision is velocity-based (see :mod:`backend.core.floatlock`), and
+        the velocity comes from the arm's finite-differenced joint speeds rather
+        than from the motor's velocity register, which is not rad/s on this
+        firmware.
+
+        End-effector speed is approximated by the largest joint speed rather
+        than computed through the Jacobian. That is deliberate: the threshold is
+        a "has the hand stopped" test, not a measurement, it has to be retuned
+        once a camera is mounted anyway, and a per-tick Jacobian at 500 Hz buys
+        precision this decision does not use.
+        """
+        state = self._last_state
+        speed = max((abs(v) for v in state.velocities.values()), default=0.0)
+
+        following = self._floatlock.update(speed, 0.0, self._clock())
+
+        if following:
+            # Free: the arm compensates gravity and does not resist.
+            if not self._float_engaged:
+                self.arm.set_float(True)
+                self._float_engaged = True
+            self._hold_target = None
+            return
+
+        # Locked: pin it where the operator let go. Re-asserted only on the
+        # transition, so the target cannot creep tick by tick.
+        if self._float_engaged:
+            self.arm.set_float(False)
+            self._float_engaged = False
+            self._hold_target = dict(state.positions)
+            log.debug("teach: locked at %s", self._hold_target)
+
+        if self._hold_target:
+            self.arm.hold(self._hold_target)
 
     def _record_rate(self) -> None:
         now = self._clock()

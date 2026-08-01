@@ -135,11 +135,21 @@ def test_drag_moves_a_floating_arm(arm: SimArm):
     assert arm.read_state().positions["joint1"] == pytest.approx(0.5)
 
 
-def test_drag_is_ignored_while_held(arm: SimArm):
-    """A held arm resists. Tests must not be able to drag a locked arm and
-    believe the result."""
+def test_a_held_arm_can_be_pushed_but_returns(arm: SimArm):
+    """Real hardware behaves this way, and it matters.
+
+    "Held" is an MIT hold at finite stiffness, so an operator can push through
+    it — which is exactly how drag teaching *starts*: the arm is locked until
+    something moves it, and the thing that moves it is a hand on a held arm. A
+    simulator that refused to be pushed would make the teach loop unreachable.
+
+    The difference from floating is what happens next: this one springs back.
+    """
     arm.drag({"joint1": 0.3})
-    assert arm.read_state().positions["joint1"] == 0.0
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.3), "pushed"
+
+    run(arm, seconds=2.0)
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.0, abs=1e-3), "returned"
 
 
 def test_releasing_float_holds_at_the_dragged_position(arm: SimArm):

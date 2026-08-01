@@ -94,23 +94,54 @@ def test_cannot_start_two_routines(rig: Rig):
         rig.controller.play(Routine(name="b", waypoints=[wp(0.1)]))
 
 
-def test_teaching_floats_the_arm_and_stops_playback(rig: Rig):
+def test_teaching_stops_playback(rig: Rig):
     rig.controller.play(Routine(name="x", waypoints=[wp(0.9)]))
     rig.step(3)
 
     rig.controller.set_teaching(True)
 
-    assert rig.arm.is_floating is True
     assert rig.controller.mode == "teach"
     assert rig.controller.executor.phase is Phase.ABORTED
+
+
+def test_teaching_starts_locked_and_floats_once_pushed(rig: Rig):
+    """The arm must not go slack the moment teaching is enabled — nobody is
+    holding it yet. It floats when the loop sees it actually moving."""
+    rig.controller.set_teaching(True)
+    rig.step(3)
+    assert rig.arm.is_floating is False, "went slack before anyone touched it"
+
+    rig.arm.drag({"joint1": 0.05})
+    rig.step(2)
+    assert rig.arm.is_floating is True, "did not release when pushed"
+
+
+def test_letting_go_locks_the_arm_where_it_was_left(rig: Rig):
+    rig.controller.set_teaching(True)
+    for _ in range(20):
+        rig.arm.drag({"joint1": 0.02})
+        rig.step()
+    assert rig.arm.is_floating is True
+
+    # Hand off: no more drag, so velocity decays and the decider locks.
+    rig.step(200)
+    assert rig.arm.is_floating is False
+
+    settled = rig.arm.read_state().positions["joint1"]
+    rig.step(500)
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(settled, abs=1e-3)
+    assert settled > 0.3, "should have stayed where it was dragged"
 
 
 def test_a_floating_arm_is_not_commanded(rig: Rig):
     rig.controller.set_teaching(True)
     rig.arm.drag({"joint1": 0.4})
-    rig.step(100)
+    rig.step(2)
+    assert rig.arm.is_floating is True
 
-    assert rig.arm.read_state().positions["joint1"] == pytest.approx(0.4)
+    before = rig.arm.read_state().positions["joint1"]
+    rig.step(3)
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(before)
 
 
 # ── emergency stop ───────────────────────────────────────────────────────────
@@ -181,7 +212,8 @@ def test_stop_during_teaching_clamps_the_arm(rig: Rig):
     """A floating arm under an engaged stop is a dropped arm."""
     rig.controller.set_teaching(True)
     rig.arm.drag({"joint1": 0.6})
-    rig.step()
+    rig.step(2)
+    assert rig.arm.is_floating is True
 
     rig.latch.engage("stop", LatchSource.WATCHDOG)
     rig.step()
@@ -190,9 +222,10 @@ def test_stop_during_teaching_clamps_the_arm(rig: Rig):
     assert rig.controller.is_teaching is False
     assert rig.controller.mode == "estop"
 
-    rig.arm.drag({"joint1": 5.0})  # ignored: no longer floating
-    rig.step(200)
-    assert rig.arm.read_state().positions["joint1"] == pytest.approx(0.6, abs=1e-6)
+    frozen = rig.arm.read_state().positions["joint1"]
+    rig.arm.drag({"joint1": 5.0})  # pushed, but held: it must come back
+    rig.step(500)
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(frozen, abs=1e-3)
 
 
 def test_play_is_refused_while_stopped(rig: Rig):

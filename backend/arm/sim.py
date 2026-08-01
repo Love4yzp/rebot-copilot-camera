@@ -131,20 +131,26 @@ class SimArm:
     def drag(self, delta: Mapping[str, float]) -> None:
         """Simulate a human pushing the arm by ``delta`` radians per joint.
 
-        Only has an effect while floating: a held arm resists. That asymmetry
-        is the whole point of the teach workflow, so the simulator enforces it
-        rather than letting tests drag a locked arm and believe the result.
+        Works whether or not the arm is floating, because on real hardware it
+        does: "held" is an MIT hold at finite stiffness, and a person can push
+        through it. That is not a detail -- it is how drag teaching *starts*.
+        The arm is locked until something moves it, and the thing that moves it
+        is the operator pushing a held arm. A simulator that refused to be
+        pushed while held would make the teach loop unreachable.
+
+        The difference between held and floating is what happens next: a
+        floating arm stays where it was put, a held one is pulled back to its
+        target by the next :meth:`step`.
         """
         with self._lock:
-            if not self._floating:
-                return
             unknown = set(delta) - set(self._joint_names)
             if unknown:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
             for name, d in delta.items():
                 self._q[name] += d
-            # A dragged arm's target follows it, so releasing holds it here.
-            self._q_target = dict(self._q)
+            if self._floating:
+                # Nothing pulls a floating arm back, so it stays put on release.
+                self._q_target = dict(self._q)
 
     def step(self, dt: float) -> None:
         """Advance the simulation by ``dt`` seconds.

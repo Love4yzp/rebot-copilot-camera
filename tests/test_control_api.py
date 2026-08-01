@@ -108,13 +108,16 @@ def test_play_on_unknown_routine_is_404(client: TestClient):
 # ── teaching ─────────────────────────────────────────────────────────────────
 
 
-def test_teach_toggles_float(rig):
+def test_teach_toggles_the_mode(rig):
+    """The endpoint switches modes; whether the arm is currently floating is
+    the control loop's decision, made from measured motion."""
     client, controller, arm, _ = rig
 
     assert client.post("/api/teach", json={"enabled": True}).json()["teaching"] is True
-    assert arm.is_floating is True
+    assert controller.mode == "teach"
 
     assert client.post("/api/teach", json={"enabled": False}).json()["teaching"] is False
+    assert controller.mode == "idle"
     assert arm.is_floating is False
 
 
