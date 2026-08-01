@@ -33,8 +33,8 @@
 | **当前 commit** | `#10` feat: SimArm |
 | **状态** | `TODO` |
 | **Phase** | Phase 2 — 臂层封装 |
-| **上一个完成的** | `#8` docs: 硬件陷阱记录 |
-| **备注** | Phase 0 全通（`uv sync` + `uv run pytest` 7 绿）。#6/#7 卡真机。**建议下一步不按编号走，直接跳 Phase 3（急停）和 Phase 4（数据模型）** —— 那 14 个 commit 全是纯逻辑零硬件依赖，且急停是全项目唯一"错了会撞坏硬件"的部分。#9 ArmSession 要连真臂才验证得了，先做 #10 SimArm 把地基垫上。 |
+| **上一个完成的** | `#19` test: 闸门覆盖 |
+| **备注** | Phase 0 全通，Phase 3 的纯逻辑部分（#14/#15/#17/#18/#19）也完成，33 个测试绿。剩 #16 等控制循环（#12）、#20/#21 看门狗。**下一步做 #10 SimArm** —— 它是后面所有无硬件测试的地基（示教录点、执行器时序、播放中急停都要靠它）。之后可以直接吃 Phase 4（数据模型 6 个）和 Phase 8（执行器 8 个），全是纯逻辑。 |
 
 ---
 
@@ -108,12 +108,12 @@
 
 | # | 环境 | 描述 | 状态 | 备注 |
 |---|---|---|---|---|
-| 14 | L | feat: `SafetyLatch`（engage/clear/is_latched/snapshot），纯逻辑不碰硬件 | TODO | |
-| 15 | L | test: 闩锁状态机（重复 engage 保留首因 / clear 后可再 engage / 未锁时 clear 幂等） | TODO | |
-| 16 | L+H | feat: 控制循环尊重闩锁，冻结 `q_target` 并继续 MIT + 重力补偿维持 | TODO | **见决策速查 #1** |
-| 17 | L | feat: 急停 REST 端点（`POST /api/estop` / `/clear` / `GET`），状态进 WS 和 health | TODO | |
-| 18 | L | feat: API 运动闸门（FastAPI 依赖，闩锁期间 409 带原因） | TODO | |
-| 19 | L | test: 闸门覆盖，**反射路由表**遍历所有运动端点，不硬编码列表 | TODO | 新增端点漏挂时要失败 |
+| 14 | L | feat: `SafetyLatch`（engage/clear/is_latched/snapshot/record_freeze_pose），纯逻辑不碰硬件 | DONE | 冻结姿态由控制循环下一 tick 回填（`record_freeze_pose`），latch 本身不碰硬件。`source` 在边界强制转 enum |
+| 15 | L | test: 闩锁状态机 | DONE | 11 例，含并发 engage 只能有一个赢家 |
+| 16 | L+H | feat: 控制循环尊重闩锁，冻结 `q_target` 并继续 MIT + 重力补偿维持 | TODO | **见决策速查 #1**。等 #12 控制循环 |
+| 17 | L | feat: 急停 REST 端点（`POST /api/estop` / `/clear` / `GET`），状态进 health | DONE | engage 永远 200 不 409 —— 会跟你吵架的急停是坏急停；重复 engage 返 `changed: false` 并保留首因 |
+| 18 | L | feat: API 运动闸门（FastAPI 依赖，闩锁期间 409 带原因） | DONE | `backend/api/gate.py`。409 而非 503：臂不是不可用，是调用方必须显式解除的状态 |
+| 19 | L | test: 闸门覆盖，**反射路由表**遍历所有运动端点，不硬编码列表 | DONE | **差点成为空转测试**：FastAPI 0.141 的 `include_router` 不把子路由摊平进 `app.routes`，而是塞进一个不透明的 `_IncludedRouter`，朴素遍历一个端点都看不见。改用 `effective_candidates()` 递归，并加一条 **OpenAPI 交叉校验** —— 下次 FastAPI 改内部结构会大声失败而不是静默失效。已实测：临时加一个未挂闸门的端点，测试确实报错 |
 | 20 | L | feat: 看门狗自动触发（tick 超时 / 连续 CAN 读失败 / 跟踪误差超阈值） | TODO | |
 | 21 | L | test: 看门狗，假时钟 + 会报错的假臂，三条件各一例 | TODO | |
 
@@ -207,7 +207,7 @@
 | 0 骨架 | 5 | **5** | 5 |
 | 1 硬件对表 | 3 | **1** | 1 |
 | 2 臂层 | 5 | 0 | 3 |
-| 3 急停 | 8 | 0 | 7 |
+| 3 急停 | 8 | **5** | 7 |
 | 4 数据模型 | 6 | 0 | 6 |
 | 5 示教 | 5 | 0 | 4 |
 | 6 安全校验 | 4 | 0 | 4 |
@@ -216,4 +216,4 @@
 | 9 前端 | 7 | 0 | 7 |
 | 10 部署 | 4 | 0 | 1 |
 | 11 Agent API | 1 | 0 | 1 |
-| **合计** | **62** | **6** | **51** |
+| **合计** | **62** | **11** | **51** |
