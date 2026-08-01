@@ -291,3 +291,69 @@ def test_shoot_gets_a_longer_timeout_than_ping():
         shutter.shoot()
 
     assert clock.now - after_ping > after_ping
+
+
+from backend.actions import ActionContext  # noqa: E402
+
+_ANY_CONTEXT = ActionContext(
+    routine_id="r", routine_name="r", waypoint_index=0, waypoint_note=""
+)
+
+
+# ── choosing a driver ────────────────────────────────────────────────────────
+
+
+def test_sim_is_only_ever_chosen_when_asked_for():
+    """A simulated shutter reports every frame as fired.
+
+    Falling back to one the way the arm falls back to SimArm would let an
+    operator walk a whole set believing they had the shots, and find out when
+    they review the card. So the only route to a simulator is asking for one.
+    """
+    from backend.shutter import SimShutter, create_shutter
+
+    shutter, simulated = create_shutter(force_sim=True)
+    assert simulated and isinstance(shutter, SimShutter)
+
+    shutter, simulated = create_shutter(port="/dev/definitely-not-here")
+    assert not simulated and not isinstance(shutter, SimShutter)
+
+
+def test_a_missing_board_costs_a_command_not_the_startup():
+    """The driver connects lazily, so a service can come up and let an operator
+    lay out anchors with no board plugged in — and the first frame says so."""
+    from backend.shutter import ShutterNotConnected, create_shutter
+
+    shutter, _ = create_shutter(port="/dev/definitely-not-here")
+
+    assert not shutter.is_connected
+    with pytest.raises(ShutterNotConnected):
+        shutter.shoot()
+
+
+def test_swapping_the_driver_swaps_what_routines_fire():
+    """main() re-chooses hardware after import. A swap that moved only
+    controller.shutter would leave routines firing into the old driver while
+    the self-test talked to the new one, and nothing would raise."""
+    from backend.actions import ThreadedRunner
+    from backend.arm import SimArm
+    from backend.core import Broadcaster, Controller
+    from backend.safety import SafetyLatch
+    from backend.shutter import SimShutter
+
+    first, second = SimShutter(), SimShutter()
+    controller = Controller(
+        arm=SimArm(("joint1",), clock=lambda: 0.0),
+        shutter=first,
+        latch=SafetyLatch(),
+        broadcaster=Broadcaster(),
+        actions=ThreadedRunner(),
+    )
+    controller.set_shutter(second)
+
+    provider = controller.actions.provider("shutter")
+    provider.run(provider.params_model(), _ANY_CONTEXT)
+
+    assert controller.shutter is second
+    assert second.shots == 1
+    assert first.shots == 0

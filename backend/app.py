@@ -29,7 +29,7 @@ from .core import Broadcaster, Controller
 from .routines import RoutineStore
 from .safety import SafetyLatch, Watchdog
 from .safety.kinematics import arm_model
-from .shutter import SimShutter
+from .shutter import SimShutter, create_shutter
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ app.state.agent_lease = AgentLease()
 # CAN. main() re-chooses it, so the running service can use real hardware.
 app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
 app.state.simulated = True
+app.state.shutter_simulated = True
 app.state.controller = Controller(
     arm=SimArm(assets.joint_names(), clock=time.monotonic, self_driven=True),
     shutter=SimShutter(),
@@ -113,6 +114,7 @@ def health() -> dict:
             "reason": latch.reason,
             "source": latch.source.value if latch.source else None,
         },
+        "shutter": {"simulated": app.state.shutter_simulated},
         "arm": {
             "simulated": app.state.simulated,
             "urdf": str(assets.urdf_path()),
@@ -157,6 +159,13 @@ def main() -> None:
     arm, simulated = create_arm(force_sim=args.sim)
     app.state.simulated = simulated
     app.state.controller.arm = arm
+
+    # The shutter is chosen the same way, but never falls back: a simulated
+    # shutter reports every frame as fired, and an operator who walks a whole
+    # set on that finds out when they review it. See backend/shutter/factory.
+    shutter, shutter_simulated = create_shutter(force_sim=args.sim)
+    app.state.shutter_simulated = shutter_simulated
+    app.state.controller.set_shutter(shutter)
 
     import uvicorn
 

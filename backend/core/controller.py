@@ -86,6 +86,19 @@ class Controller:
         self._tick_times: list[float] = []
         self.rate_hz = 0.0
 
+    def set_shutter(self, driver: ShutterDriver) -> None:
+        """Swap the shutter driver, provider included.
+
+        Both move together on purpose. ``main()`` re-chooses the hardware after
+        import time, and a swap that updated ``self.shutter`` alone would leave
+        the runner holding a provider wrapped around the old driver: the
+        self-test would talk to the real board while every routine kept firing
+        into the simulator. Nothing would raise.
+        """
+        with self._lock:
+            self.shutter = driver
+            self.actions.register(ShutterProvider(driver))
+
     # ── playback ─────────────────────────────────────────────────────────────
 
     @property
