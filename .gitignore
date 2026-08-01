@@ -1,0 +1,22 @@
+# runtime data — teach/playback routines live here, never committed
+routines/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# node / frontend
+node_modules/
+frontend/dist/
+backend/static/
+
+# platformio (firmware/esp32-shutter)
+.pio/
+.vscode/
+
+# os
+.DS_Store

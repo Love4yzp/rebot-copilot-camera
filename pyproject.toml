@@ -1,0 +1,59 @@
+[project]
+name = "rebot-copilot-camera"
+version = "0.1.0"
+description = "Automated multi-view photography: a reBot-RS arm carries a Canon camera through taught waypoints and fires the shutter over BLE at each pose."
+readme = "README.md"
+# Upper bound inherited from the upstream arm library (reBotArm_control_py pins
+# >=3.10,<3.12). Keeping the same window here means the `arm` extra can always
+# be installed into this environment without a resolver conflict.
+requires-python = ">=3.10,<3.12"
+license = { file = "LICENSE" }
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pyserial>=3.5",
+    "pyyaml>=6.0",
+    "numpy>=1.23.4",
+    # Runtime dependencies of the vendored arm layer (see [tool.hatch] below).
+    # Declared here rather than inherited, because the vendored package is not
+    # pip-installable and so contributes no metadata of its own.
+    "pin>=3.9.0",
+    "motorbridge>=0.4.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The arm layer is a git submodule, not a dependency.
+#
+# `reBotArm_control_py` is not on PyPI and cannot be pip-installed from git
+# either: it ships no [build-system], and setuptools' flat-layout autodiscovery
+# aborts on its sibling `urdf/` and `config/` directories ("Multiple top-level
+# packages discovered in a flat-layout"). Upstream `rebot_arm_webui` vendors it
+# for the same reason.
+#
+# A submodule keeps the exact upstream commit pinned in git — upgrading is a
+# `git -C vendor/reBotArm_control_py checkout <sha>`, not a manual re-merge of
+# copied files. Mapping it in here makes `import reBotArm_control_py` work
+# without touching sys.path at runtime.
+#
+# Clone with `--recursive`, or run `git submodule update --init` before `uv sync`.
+[tool.hatch.build.targets.wheel]
+packages = ["backend", "vendor/reBotArm_control_py/reBotArm_control_py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
