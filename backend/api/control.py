@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
+from ..actions import validate_providers
 from ..core import Broadcaster, Controller
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
 from ..safety.kinematics import validate_pose, validate_sequence
@@ -88,6 +89,16 @@ def play_routine(rid: str, request: Request) -> PlaybackState:
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_routine", "reasons": unsafe}
         )
 
+    # And pre-flight the actions the same way. A routine outlives the plugin it
+    # was written against -- packages get uninstalled, boards get unplugged --
+    # and an unavailable provider means walking the whole set to deliver
+    # nothing, which is the failure the abort-by-default policy exists for.
+    missing = validate_providers(routine, request.app.state.plugins)
+    if missing:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
+        )
+
     try:
         _controller(request).play(routine)
     except RuntimeError as exc:
@@ -133,6 +144,14 @@ def goto_waypoint(rid: str, index: int, request: Request) -> PlaybackState:
     if unsafe:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_path", "reasons": unsafe}
+        )
+
+    missing = validate_providers(
+        Routine(name="preflight", waypoints=[waypoint]), request.app.state.plugins
+    )
+    if missing:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
         )
 
     label = waypoint.note or f"#{index + 1}"

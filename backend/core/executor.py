@@ -25,11 +25,20 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Mapping
 
-from ..actions.base import ActionContext, ActionError
+from pydantic import BaseModel
+
+from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
 from ..actions.shutter import ShutterParams
 from ..arm.base import ArmDriver
-from ..routines.models import FailurePolicy, Routine, ShutterAction, SleepAction, Waypoint
+from ..routines.models import (
+    FailurePolicy,
+    PluginAction,
+    Routine,
+    ShutterAction,
+    SleepAction,
+    Waypoint,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +55,22 @@ FIRST_APPROACH_MAX_SPEED = 0.5
 #: stuck. Generous, because a stall is reported as a fault and stops the shoot.
 ARRIVAL_TIMEOUT_FACTOR = 3.0
 ARRIVAL_TIMEOUT_FLOOR_S = 2.0
+
+
+@dataclass(frozen=True)
+class _Dispatch:
+    """One action, resolved to something the runner can be handed.
+
+    ``repeat``/``interval_s`` stay out here rather than inside a provider so an
+    emergency stop lands *between* frames of a burst. A provider that looped
+    internally would be uninterruptible, and the whole burst would be shot
+    before anyone noticed the stop.
+    """
+
+    provider_id: str
+    params: BaseModel
+    repeat: int = 1
+    interval_s: float = 0.0
 
 
 class Phase(str, Enum):
@@ -104,8 +129,11 @@ class RoutineExecutor:
         self._arrival_deadline = 0.0
         self._sleep_until = 0.0
         self._attempts = 0
-        #: Frames fired so far within the current shutter action (a burst).
+        #: Frames fired so far within the current action (a burst).
         self._shots_fired = 0
+        #: How many the current action wants, and the gap between them.
+        self._repeat = 1
+        self._interval_s = 0.0
         #: The action currently in flight on a worker thread, if any.
         self._job: Job | None = None
 
@@ -327,25 +355,26 @@ class RoutineExecutor:
         """
         if self._job is None and self._shots_fired > 0:
             # Mid-burst: wait out the inter-frame interval before the next one.
-            if self._shots_fired >= action.count:
+            if self._shots_fired >= self._repeat:
                 self._next_action()
                 return
             if self._clock() < self._sleep_until:
                 return
 
         if self._job is None:
-            if not isinstance(action, ShutterAction):  # pragma: no cover — closed union
-                self._handle_action_failure(
-                    action, ActionError(f"no provider for action type {action.type!r}")
-                )
+            try:
+                dispatch = self._dispatch(action)
+            except Exception as exc:
+                # Bad params on a stored action. The API validates them on the
+                # way in, so reaching here means the routine predates the
+                # provider or the provider changed its model under it.
+                self._handle_action_failure(action, exc)
                 return
+            self._repeat = dispatch.repeat
+            self._interval_s = dispatch.interval_s
             self._job = self._actions.submit(
-                "shutter",
-                ShutterParams(
-                    focus_first=action.focus_first,
-                    count=action.count,
-                    interval_s=action.interval_s,
-                ),
+                dispatch.provider_id,
+                dispatch.params,
                 self._context(self._routine.waypoints[self._wp_index]),
                 action.timeout_s,
             )
@@ -359,8 +388,8 @@ class RoutineExecutor:
             return
 
         self._shots_fired += 1
-        if self._shots_fired < action.count:
-            self._sleep_until = self._clock() + action.interval_s
+        if self._shots_fired < self._repeat:
+            self._sleep_until = self._clock() + self._interval_s
             self._emit()
             return
         self._next_action()
@@ -384,6 +413,28 @@ class RoutineExecutor:
 
         self.abort(f"{where} failed: {exc}")
 
+    def _dispatch(self, action) -> _Dispatch:
+        """Turn a stored action into a provider call. Raises on bad params."""
+        if isinstance(action, ShutterAction):
+            return _Dispatch(
+                provider_id="shutter",
+                params=ShutterParams(
+                    focus_first=action.focus_first,
+                    count=action.count,
+                    interval_s=action.interval_s,
+                ),
+                repeat=action.count,
+                interval_s=action.interval_s,
+            )
+        if isinstance(action, PluginAction):
+            provider = self._actions.provider(action.provider)
+            if provider is None:
+                raise ActionError(f"no provider {action.provider!r} is installed")
+            # Validated here as well as at the API boundary: a routine can
+            # outlive the plugin version it was written against.
+            return _Dispatch(action.provider, provider.params_model.model_validate(action.params))
+        raise ActionError(f"no provider for action type {action.type!r}")  # pragma: no cover
+
     def _may_retry(self, action) -> bool:
         """Whether re-running this action is safe.
 
@@ -392,7 +443,8 @@ class RoutineExecutor:
         host downgrades the policy to abort rather than guessing, and says so,
         because a silently ignored retry setting is worse than either.
         """
-        provider = self._actions.provider(getattr(action, "provider", "shutter"))
+        provider_id = action.provider if isinstance(action, PluginAction) else "shutter"
+        provider: ActionProvider | None = self._actions.provider(provider_id)
         if provider is None or getattr(provider, "retryable", True):
             return True
         log.warning("%s declares itself not retryable; aborting instead", provider.id)

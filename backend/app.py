@@ -23,7 +23,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
 from .agent import AgentLease
-from .api import agent, control, estop, logs, routines
+from .actions import ActionRegistry, ShutterProvider, ThreadedRunner
+from .api import agent, control, estop, logs, plugins, routines
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
@@ -85,13 +86,23 @@ app.state.agent_lease = AgentLease()
 app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
 app.state.simulated = True
 app.state.shutter_simulated = True
+
+# One runner for the process, and a registry over it. The registry is only the
+# discovery and health layer -- the runner stays the single register of which
+# providers exist, so the two cannot disagree about what is installed.
+_shutter = SimShutter()
+_runner = ThreadedRunner()
+app.state.plugins = ActionRegistry(_runner)
+app.state.plugins.register(ShutterProvider(_shutter))
+
 app.state.controller = Controller(
     arm=SimArm(assets.joint_names(), clock=time.monotonic, self_driven=True),
-    shutter=SimShutter(),
+    shutter=_shutter,
     latch=app.state.latch,
     broadcaster=app.state.broadcaster,
     watchdog=app.state.watchdog,
     expected_period_s=1.0 / SIM_LOOP_HZ,
+    actions=_runner,
 )
 
 app.include_router(estop.router)
@@ -99,6 +110,7 @@ app.include_router(routines.router)
 app.include_router(control.router)
 app.include_router(agent.router)
 app.include_router(logs.router)
+app.include_router(plugins.router)
 
 
 @app.get("/api/health")
@@ -166,6 +178,19 @@ def main() -> None:
     shutter, shutter_simulated = create_shutter(force_sim=args.sim)
     app.state.shutter_simulated = shutter_simulated
     app.state.controller.set_shutter(shutter)
+    app.state.plugins.register(ShutterProvider(shutter))
+
+    # Third-party providers load here rather than at import time: importing the
+    # app is something every test does, and that must not run other people's
+    # code. A plugin that fails to load is logged and listed as unavailable --
+    # a missing accessory is not a missing machine.
+    app.state.plugins.discover()
+
+    # Say at startup which accessories answer, rather than at the first anchor.
+    for status in app.state.plugins.probe_all():
+        log.info(
+            "action %r: %s", status.id, "ok" if status.available else f"DOWN — {status.reason}"
+        )
 
     import uvicorn
 

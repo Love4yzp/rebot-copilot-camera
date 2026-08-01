@@ -7,13 +7,17 @@ from .base import (
     FieldKind,
     FieldSpec,
 )
+from .registry import ENTRY_POINT_GROUP, ActionRegistry, ProviderStatus
 from .runner import ActionRunner, InlineRunner, Job, ThreadedRunner
 from .shutter import ShutterParams, ShutterProvider
+from .validate import validate_action_params, validate_providers
 
 __all__ = [
+    "ENTRY_POINT_GROUP",
     "ActionContext",
     "ActionError",
     "ActionProvider",
+    "ActionRegistry",
     "ActionRunner",
     "ActionTimeout",
     "ActionUnavailable",
@@ -21,7 +25,10 @@ __all__ = [
     "FieldSpec",
     "InlineRunner",
     "Job",
+    "ProviderStatus",
     "ShutterParams",
     "ShutterProvider",
     "ThreadedRunner",
+    "validate_action_params",
+    "validate_providers",
 ]

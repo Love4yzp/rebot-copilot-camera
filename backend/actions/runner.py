@@ -156,6 +156,11 @@ class ActionRunner(Protocol):
 
     def provider(self, provider_id: str) -> ActionProvider | None: ...
 
+    def register(self, provider: ActionProvider) -> None: ...
+
+    @property
+    def provider_ids(self) -> list[str]: ...
+
     def submit(
         self,
         provider_id: str,
@@ -329,6 +334,10 @@ class InlineRunner:
 
     def provider(self, provider_id: str) -> ActionProvider | None:
         return self._providers.get(provider_id)
+
+    @property
+    def provider_ids(self) -> list[str]:
+        return sorted(self._providers)
 
     def submit(
         self,

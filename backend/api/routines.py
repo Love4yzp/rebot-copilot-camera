@@ -15,19 +15,33 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
-from ..routines import Action, Routine, RoutineNotFound, RoutineStore, RoutineSummary, Waypoint
+from ..actions import validate_action_params
+from ..routines import (
+    Action,
+    Routine,
+    RoutineNotFound,
+    RoutineStore,
+    RoutineSummary,
+    Waypoint,
+)
 from ..safety.kinematics import validate_pose
 
 router = APIRouter(prefix="/api/routines", tags=["routines"])
 
 
-def _validated_waypoint(data: dict) -> Waypoint:
+def _validated_waypoint(data: dict, request: Request) -> Waypoint:
     """Build a Waypoint from request data, reporting failures as 422 or 400.
 
-    Two layers, and they mean different things. Shape problems (negative
+    Three layers, and they mean different things. Shape problems (negative
     settle, a NaN angle) are 422 -- the request is malformed. Joint limits and
     self-collision are 400: the request is well-formed but describes a pose
-    this arm must not be asked to reach.
+    this arm must not be asked to reach. A plugin action whose params the
+    provider rejects is also 400: well-formed to pydantic, which cannot know
+    what a provider wants, and wrong in a way only the provider can see.
+
+    That third check is here rather than at playback on purpose. An action
+    stored with bad params fails in the ACTING phase -- the arm at the anchor,
+    the subject waiting, an hour after the typo.
 
     The request models keep their fields optional so a PATCH can omit them,
     which is why the model's own constraints only bite here.
@@ -43,6 +57,12 @@ def _validated_waypoint(data: dict) -> Waypoint:
     unsafe = validate_pose(waypoint.joints)
     if unsafe:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe})
+
+    bad = validate_action_params(waypoint, request.app.state.plugins)
+    if bad:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "bad_action_params", "reasons": bad}
+        )
     return waypoint
 
 
@@ -144,7 +164,7 @@ class ReorderWaypoints(BaseModel):
 def add_waypoint(rid: str, body: AddWaypoint, request: Request) -> Routine:
     routine = _load(request, rid)
 
-    waypoint = _validated_waypoint(body.model_dump(exclude_none=True, exclude={"index"}))
+    waypoint = _validated_waypoint(body.model_dump(exclude_none=True, exclude={"index"}), request)
 
     if body.index is None:
         routine.waypoints.append(waypoint)
@@ -170,7 +190,7 @@ def update_waypoint(rid: str, index: int, body: UpdateWaypoint, request: Request
     # straight to disk, and it would leave raw dicts where typed actions belong.
     merged = waypoint.model_dump()
     merged.update(body.model_dump(exclude_none=True))
-    routine.waypoints[index] = _validated_waypoint(merged)
+    routine.waypoints[index] = _validated_waypoint(merged, request)
 
     routine.touch()
     return _store(request).save(routine)

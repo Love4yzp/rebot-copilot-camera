@@ -80,9 +80,30 @@ class SleepAction(ActionBase):
     duration_s: float = Field(gt=0, le=600)
 
 
+class PluginAction(ActionBase):
+    """An action carried out by an installed provider.
+
+    Deliberately not a replacement for :class:`ShutterAction`. The shutter ships
+    with the service, so its parameters are typed, validated by this model and
+    checked on every load of every stored routine; collapsing it into an opaque
+    ``params`` dict would throw that away to make one thing uniform. This is the
+    escape hatch for everything the host does not know about, and its params are
+    validated against the provider's own model at the API boundary — before the
+    routine is stored, rather than at the anchor with the subject waiting.
+    """
+
+    type: Literal["plugin"] = "plugin"
+    #: Provider id, as advertised by the plugin. Stored in routine JSON, so
+    #: renaming one orphans every anchor that used it.
+    provider: str = Field(min_length=1, max_length=64)
+    params: dict = Field(default_factory=dict)
+
+
 #: Discriminated on ``type``, so a stored routine round-trips back to the right
 #: class. Adding a type means adding it here and adding one executor handler.
-Action = Annotated[Union[ShutterAction, SleepAction], Field(discriminator="type")]
+Action = Annotated[
+    Union[ShutterAction, SleepAction, PluginAction], Field(discriminator="type")
+]
 
 
 def _new_id() -> str:
