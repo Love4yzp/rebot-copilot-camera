@@ -1,0 +1,19 @@
+[Unit]
+Description=Bring up the CAN interface for the reBot arm
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 1 Mbit/s — matches the RobStride motors' default. Getting this wrong does not
+# error: the interface comes up and no motor ever answers.
+ExecStart=/sbin/ip link set can0 type can bitrate 1000000
+ExecStart=/sbin/ip link set can0 up
+ExecStop=/sbin/ip link set can0 down
+# Absent on a machine using the USB2CAN serial bridge instead of socketcan,
+# where there is no can0 to configure. Do not fail the boot over it.
+SuccessExitStatus=0 2
+
+[Install]
+WantedBy=multi-user.target

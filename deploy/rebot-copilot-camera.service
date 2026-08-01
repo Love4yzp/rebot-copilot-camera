@@ -1,0 +1,35 @@
+[Unit]
+Description=rebot-copilot-camera — automated multi-view photography
+Documentation=https://github.com/Love4yzp/rebot-copilot-camera
+# The CAN interface has to exist before the arm layer opens it, otherwise the
+# service starts, fails to find can0, and quietly falls back to the simulator —
+# which looks exactly like working.
+After=network.target rebot-can.service
+Wants=rebot-can.service
+
+[Service]
+Type=simple
+User=recomputer
+Group=recomputer
+WorkingDirectory=/opt/rebot-copilot-camera
+ExecStart=/home/recomputer/.local/bin/uv run -m backend.app
+Restart=on-failure
+RestartSec=3
+
+# journalctl renders Chinese routine names as ? under the default LANG=C.
+Environment=LANG=zh_CN.UTF-8
+Environment=PYTHONUNBUFFERED=1
+
+# Localhost only. Remote access goes through an SSH tunnel; there is no auth
+# layer and this service can move a 48 V arm.
+Environment=REBOT_HOST=127.0.0.1
+Environment=REBOT_PORT=18790
+Environment=REBOT_ROUTINES_DIR=/opt/rebot-copilot-camera/routines
+
+# Deliberately NOT KillSignal=SIGKILL. The shutdown path releases the CAN bus
+# while leaving the motors holding their last pose; a hard kill skips it.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

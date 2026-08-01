@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
 from .api import control, estop, routines
-from .arm import SimArm
+from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
 from .routines import RoutineStore
 from .safety import SafetyLatch, Watchdog
@@ -74,9 +74,10 @@ app.state.latch = SafetyLatch()
 app.state.routine_store = RoutineStore(config.ROUTINES_DIR)
 app.state.broadcaster = Broadcaster()
 
-# Simulated hardware by default. The real ArmSession (plan commit #9) swaps in
-# here once CAN transport is confirmed; everything above the arm is unaware.
+# The arm is chosen at import time so tests get a simulator without touching
+# CAN. main() re-chooses it, so the running service can use real hardware.
 app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
+app.state.simulated = True
 app.state.controller = Controller(
     arm=SimArm(assets.joint_names(), clock=time.monotonic),
     shutter=SimShutter(),
@@ -105,6 +106,7 @@ def health() -> dict:
             "source": latch.source.value if latch.source else None,
         },
         "arm": {
+            "simulated": app.state.simulated,
             "urdf": str(assets.urdf_path()),
             "end_effector_frame": assets.end_effector_frame(),
             "joints": assets.joint_names(),
@@ -143,8 +145,10 @@ def main() -> None:
     # Fail at startup rather than mid-motion if the DM arm's assets leaked in.
     assets.assert_rs_model()
     log.info("URDF: %s (frame=%s)", assets.urdf_path(), assets.end_effector_frame())
-    if args.sim:
-        log.info("sim mode requested")
+
+    arm, simulated = create_arm(force_sim=args.sim)
+    app.state.simulated = simulated
+    app.state.controller.arm = arm
 
     import uvicorn
 

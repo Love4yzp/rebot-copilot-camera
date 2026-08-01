@@ -1,0 +1,13 @@
+# The USB2CAN bridge and the XIAO ESP32-S3 shutter board both enumerate as
+# generic CDC devices, so their /dev/ttyACM* numbering swaps depending on plug
+# order. Stable symlinks mean a reboot cannot silently point the shutter driver
+# at the CAN bridge.
+#
+# Fill in the real idVendor/idProduct with `udevadm info -a -n /dev/ttyACM0`,
+# then: sudo cp 99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+
+# XIAO ESP32-S3 (native USB CDC)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="rebot-shutter", MODE="0660", GROUP="dialout"
+
+# USB2CAN bridge — placeholder ids, confirm on the device before relying on it
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="rebot-can", MODE="0660", GROUP="dialout"
