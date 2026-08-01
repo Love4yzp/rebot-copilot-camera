@@ -32,6 +32,7 @@ from ..routines.models import Routine
 from ..arm.base import ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..shutter.base import ShutterDriver
+from . import events
 from .broadcaster import Broadcaster
 from .executor import Phase, RoutineExecutor
 from .floatlock import FloatLock, FloatLockConfig
@@ -78,6 +79,8 @@ class Controller:
         self._last_state = ArmState(positions={}, velocities={})
         self._hold_target: dict[str, float] | None = None
         self._was_latched = False
+        #: Who asked for the routine that is running (or last ran).
+        self._playback_source = "ui"
         self._floatlock = FloatLock(floatlock)
         self._float_engaged = False
 
@@ -99,7 +102,23 @@ class Controller:
             self.shutter = driver
             self.actions.register(ShutterProvider(driver))
 
+    def emit_event(self, name: str, data: dict) -> None:
+        """Publish a semantic event. Never blocks, never raises.
+
+        Public because the API layer emits a couple of things the control loop
+        cannot see — a pose captured by hand arrives over HTTP, not over CAN.
+        """
+        self.broadcaster.publish(
+            {"type": events.TOPIC, "data": events.envelope(name, data, self._clock())}
+        )
+
     # ── playback ─────────────────────────────────────────────────────────────
+
+    @property
+    def playback_source(self) -> str:
+        """Who asked for the current (or most recent) run."""
+        with self._lock:
+            return self._playback_source
 
     @property
     def executor(self) -> RoutineExecutor | None:
@@ -111,8 +130,15 @@ class Controller:
         with self._lock:
             return self._executor is not None and not self._executor.is_finished
 
-    def play(self, routine: Routine) -> RoutineExecutor:
-        """Start a routine. Refuses while stopped, teaching, or already playing."""
+    def play(self, routine: Routine, source: str = "ui") -> RoutineExecutor:
+        """Start a routine. Refuses while stopped, teaching, or already playing.
+
+        ``source`` is who asked — the card that was tapped, an agent, a foot
+        switch, a shot-list script. It changes nothing about the motion and is
+        recorded only so that "why did the arm just move" has an answer. On a
+        machine several things can trigger, that question gets asked first and
+        is otherwise unanswerable after the fact.
+        """
         with self._lock:
             if self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
@@ -129,7 +155,11 @@ class Controller:
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": _progress_payload(p)}
                 ),
+                on_event=self.emit_event,
             )
+            self._playback_source = source
+            log.info("playing %r (%d waypoints) at the request of %r",
+                     routine.name, len(routine.waypoints), source)
             executor.start()
             self._executor = executor
             return executor
@@ -201,6 +231,18 @@ class Controller:
                     # accumulated before the stop is about the old situation.
                     self.watchdog.reset()
                 self._tick_running()
+            if latched != self._was_latched:
+                # Emitted from here rather than from SafetyLatch: the latch is
+                # pure logic that touches nothing but itself, and giving it a
+                # broadcaster would be the first thread through that wall.
+                snapshot = self.latch.snapshot()
+                self.emit_event(
+                    events.ESTOP_ENGAGED if latched else events.ESTOP_CLEARED,
+                    {
+                        "reason": snapshot.reason,
+                        "source": snapshot.source.value if snapshot.source else None,
+                    },
+                )
             self._was_latched = latched
 
             if self.watchdog is not None:
@@ -305,6 +347,7 @@ class Controller:
                         "source": latch.source.value if latch.source else None,
                     },
                     "playback": _progress_payload(executor.progress()) if executor else None,
+                    "source": self._playback_source if executor else None,
                 },
             }
         )

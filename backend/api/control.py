@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from pydantic import BaseModel, Field
 
 from ..actions import validate_providers
-from ..core import Broadcaster, Controller
+from ..core import Broadcaster, Controller, events
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
 from ..safety.kinematics import validate_pose, validate_sequence
 from ..shutter import ShutterError
@@ -46,6 +46,20 @@ class PlaybackState(BaseModel):
     teaching: bool
     rate_hz: float
     playback: dict | None = None
+    #: Who asked for the running routine. See Controller.play.
+    source: str | None = None
+
+
+class TriggerRequest(BaseModel):
+    source: str = Field(
+        default="ui",
+        max_length=64,
+        description=(
+            "Who is triggering this: the UI, an agent, a foot switch, a shot-list "
+            "script. Recorded and broadcast so that 'why did the arm move' has an "
+            "answer; it grants nothing and changes no motion."
+        ),
+    )
 
 
 def _state(controller: Controller) -> PlaybackState:
@@ -58,6 +72,7 @@ def _state(controller: Controller) -> PlaybackState:
         teaching=controller.is_teaching,
         rate_hz=controller.rate_hz,
         playback=_progress_payload(executor.progress()) if executor else None,
+        source=controller.playback_source if executor else None,
     )
 
 
@@ -74,7 +89,9 @@ def get_control_state(request: Request) -> PlaybackState:
     response_model=PlaybackState,
     dependencies=[Depends(require_arm_available)],
 )
-def play_routine(rid: str, request: Request) -> PlaybackState:
+def play_routine(
+    rid: str, request: Request, body: TriggerRequest | None = None
+) -> PlaybackState:
     routine = _load(request, rid)
     if not routine.waypoints:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "routine has no waypoints")
@@ -100,7 +117,7 @@ def play_routine(rid: str, request: Request) -> PlaybackState:
         )
 
     try:
-        _controller(request).play(routine)
+        _controller(request).play(routine, source=(body or TriggerRequest()).source)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _state(_controller(request))
@@ -118,7 +135,9 @@ def stop_playback(request: Request) -> PlaybackState:
     response_model=PlaybackState,
     dependencies=[Depends(require_arm_available)],
 )
-def goto_waypoint(rid: str, index: int, request: Request) -> PlaybackState:
+def goto_waypoint(
+    rid: str, index: int, request: Request, body: TriggerRequest | None = None
+) -> PlaybackState:
     """Move to one waypoint and stay there, running its actions on arrival.
 
     The use-layer atomic operation: tap an anchor, the arm goes, settles, fires
@@ -157,7 +176,7 @@ def goto_waypoint(rid: str, index: int, request: Request) -> PlaybackState:
     label = waypoint.note or f"#{index + 1}"
     single = Routine(name=f"{routine.name} · {label}", waypoints=[waypoint])
     try:
-        controller.play(single)
+        controller.play(single, source=(body or TriggerRequest()).source)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _state(controller)
@@ -224,7 +243,16 @@ def capture_waypoint(rid: str, request: Request, body: CaptureRequest | None = N
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"insert index {body.index} out of range")
 
     routine.touch()
-    return _store(request).save(routine)
+    saved = _store(request).save(routine)
+    controller.emit_event(
+        events.TEACH_CAPTURED,
+        {
+            "routine_id": routine.id,
+            "waypoint_index": routine.waypoints.index(waypoint),
+            "anchor": waypoint.note,
+        },
+    )
+    return saved
 
 
 # ── websocket ────────────────────────────────────────────────────────────────
@@ -237,13 +265,38 @@ async def state_socket(websocket: WebSocket) -> None:
     Read-only. Commands go over REST so that the motion gate applies to them --
     a websocket message would bypass it.
     """
+    await _stream(websocket, topics={"state", "playback"})
+
+
+@router.websocket("/api/events")
+async def event_socket(websocket: WebSocket) -> None:
+    """Stream semantic events: arrivals, actions, stops.
+
+    Separate from ``/ws`` because the two answer different questions. A screen
+    wants joint angles at 20 Hz; a process that files photographs or drives a
+    light board wants to be told a frame was taken, and should not have to eat
+    a position stream over a studio LAN to find out.
+
+    Read-only and non-negotiable, like ``/ws``: an event is a notification, not
+    a hook. Nothing a subscriber sends back can change what the routine does,
+    because a subscriber that could refuse would be third-party code in the
+    path that decides whether the arm moves.
+    """
+    await _stream(websocket, topics={events.TOPIC}, unwrap=True)
+
+
+async def _stream(websocket: WebSocket, topics: set[str], unwrap: bool = False) -> None:
     broadcaster: Broadcaster = websocket.app.state.broadcaster
     await websocket.accept()
 
-    sub = broadcaster.subscribe(asyncio.get_running_loop())
+    sub = broadcaster.subscribe(asyncio.get_running_loop(), topics=topics)
     try:
         while True:
-            await websocket.send_json(await sub.get())
+            message = await sub.get()
+            # Event subscribers get the payload without the broadcaster's
+            # envelope: they asked for one kind of message, so a "type" field
+            # that is always the same is noise a third-party client must skip.
+            await websocket.send_json(message["data"] if unwrap else message)
     except WebSocketDisconnect:
         pass
     except Exception:

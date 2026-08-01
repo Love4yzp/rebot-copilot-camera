@@ -26,9 +26,16 @@ QUEUE_SIZE = 8
 
 
 class Subscription:
-    def __init__(self, queue: asyncio.Queue) -> None:
+    def __init__(self, queue: asyncio.Queue, topics: set[str] | None = None) -> None:
         self.queue = queue
+        #: Message types this subscriber wants. None means everything.
+        self.topics = topics
         self.dropped = 0
+
+    def wants(self, message: Any) -> bool:
+        if self.topics is None:
+            return True
+        return isinstance(message, dict) and message.get("type") in self.topics
 
     async def get(self) -> Any:
         return await self.queue.get()
@@ -39,8 +46,17 @@ class Broadcaster:
         self._lock = threading.Lock()
         self._subs: list[tuple[Subscription, asyncio.AbstractEventLoop]] = []
 
-    def subscribe(self, loop: asyncio.AbstractEventLoop | None = None) -> Subscription:
-        sub = Subscription(asyncio.Queue(maxsize=QUEUE_SIZE))
+    def subscribe(
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        topics: set[str] | None = None,
+    ) -> Subscription:
+        """Take a feed. ``topics`` filters by message type; None takes them all.
+
+        Filtering here rather than at the socket keeps 20 Hz of joint angles off
+        a link whose subscriber only wanted to know that a frame was taken.
+        """
+        sub = Subscription(asyncio.Queue(maxsize=QUEUE_SIZE), topics)
         with self._lock:
             self._subs.append((sub, loop or asyncio.get_running_loop()))
         return sub
@@ -60,6 +76,8 @@ class Broadcaster:
             targets = list(self._subs)
 
         for sub, loop in targets:
+            if not sub.wants(message):
+                continue
             try:
                 loop.call_soon_threadsafe(self._offer, sub, message)
             except RuntimeError:

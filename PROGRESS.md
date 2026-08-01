@@ -36,8 +36,8 @@
 | **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#76` feat: 插件注册表与 `/api/plugins` |
-| **备注** | **74/76 完成，295 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
+| **上一个完成的** | `#77` feat: 语义事件流与触发来源 |
+| **备注** | **75/77 完成，305 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
 
@@ -220,6 +220,7 @@
 | 74 | L | fix: `--sim` 里的模拟臂从来没动过 | DONE | **pre-existing bug**：`Controller.tick()` 只**读**臂，而 `SimArm.step(dt)` 要调用方驱动 —— 服务里没有任何东西调它。后果：`uv run -m backend.app --sim` 起来后每一次 play/goto 都以 `waypoint 0 not reached within 6.0s` 收场，示教/录点/播放这条主流程在真服务上一步也走不通（PROGRESS 里「全程实测过」那句因此复现不出来）。加 `SimArm(self_driven=True)`：**有人读它时它自己追上时钟**。为什么不用线程 —— 线程版没法用假时钟测，而 read_state 版可以，于是「服务能播完一条 routine」变成一条确定性测试（只 tick controller，不碰 `arm.step()`）。默认仍是 `False`：测试自己拿着时钟，一个会自走的臂会让所有时序断言取决于谁最后读过它。`create_arm` 的两条 sim 路径都走 `_sim_arm()`，服务拿到的一定是自走的。+5 测试 |
 | 75 | L | fix: `Esp32Shutter` 从来没接进服务 + `create_shutter()` 工厂 | DONE | **pre-existing bug**：`app.py` 只构造 `SimShutter()`，没有对应 `create_arm()` 的工厂 —— 真板子插上也用不到，走的还是模拟快门。加 `backend/shutter/factory.py`（`SerialTransport` 包 pyserial，非阻塞打开，deadline 归驱动管）。**与臂工厂刻意不同：快门永不回落。** 臂回落是对的（整个服务需要一条臂）；快门回落等于 SimShutter 把每一帧都报成拍到了，操作员走完整轮才在卡上发现空的 —— 这正是仓库里说的「最贵的失败模式」。所以只有 `--sim` 能拿到模拟快门；否则返回未打开的真驱动，`Esp32Shutter` 懒连接，板子不在时第一条命令抛 `ShutterNotConnected`，表现为动作失败和自检报红，而不是沉默。`Controller.set_shutter()` 把 driver 和 provider **一起换** —— 只换 `self.shutter` 会留下 runner 里包着旧 driver 的 provider：自检打真板子、routine 却还在往模拟器开枪，而且什么都不会抛。health 加 `shutter.simulated`。+3 测试 |
 | 76 | L | feat: 插件注册表 + `PluginAction` + `GET /api/plugins` + 两道预检 | DONE | 三层里的第三层落地（`docs/ARCHITECTURE.md`）。`ActionRegistry` 只管**发现与健康**，「装了哪些 provider」的唯一登记处仍是 runner —— 两份清单会漂移，而漂移之后操作员读的那份不是真正会跑的那份。`entry_points` group `rebot.actions`：`uv pip install` 加重启即可，宿主与前端零改动。**坏插件不挡启动**（少一个配件不等于少一台机器）但**绝不静默消失** —— 加载失败/自检失败都留在 manifest 里带原因，消失了操作员会以为自己配错了。`register()` 不再 probe：probe 会 ping 板子，藏在接线里的副作用没人预测得到；改成启动显式 `probe_all()`、`POST /api/plugins/probe` 刷新、其余按需惰性并缓存（预检每点一次锚点就跑一遍，那里放一个串口往返等于把板子的超时挡在操作员手指前面）。`PluginAction` 进判别式联合，`ShutterAction` **保持具体类型**不被吞掉。**两道预检**，都是为了让错误离开 ACTING 阶段（臂已在锚点、被摄体在等）：写入时按 provider 自己的 `params_model` 校验 → 400；播放/goto 前查 provider 装没装、可用不可用 → 400 且臂一动没动。executor 的 `_Dispatch` 把 repeat/interval 留在外面 —— provider 内部循环会变得不可打断，整个连拍会在急停被注意到之前打完。provider 可声明 `retryable = False`（闪光没回电、料已放出），宿主把 retry 降级为 abort 并出声，而不是默默忽略设置。加 `uv run -m backend.actions.check` —— 插件作者的无硬件开发循环（列 manifest / 跑自检 / 真 runner 真超时跑一次）。+14 测试 |
+| 77 | L | feat: 语义事件流 `/api/events` + 触发来源 `source` | DONE | 三个扩展点的后两个。**事件订阅**：`/ws` 流的是*状态*（20Hz 关节角 + 播放进度），屏幕要的是那个；集成方不要。归档照片、驱灯、记流水的进程想知道「拍了一帧」，不想从位置流里反推，更不该为此在棚里的网线上吃 20Hz 关节角。于是 `Broadcaster` 加 topic 过滤，`/ws` 订 `{state, playback}`，新的 `/api/events` 订 `{event}` 并**脱掉信封**（每条都是 event 时 `type` 字段是第三方客户端要跳过的噪音）。三条硬规则写在 `backend/core/events.py`：单向不可否决（能否决的钩子就是第三方代码进了「臂动不动」的决策路径）、有界丢旧包（因订阅者不读而停摆的循环就是停止撑住臂的循环）、**在知道事实的地方发**（routine/action 从 executor 发，急停从控制循环的闩锁跳变发 —— 不从 `SafetyLatch` 发，它是纯逻辑，给它一个 broadcaster 就是在那堵墙上开第一个洞；`teach.captured` 从 HTTP 端点发，控制循环看不见手动录点）。provider 可用 `ctx.emit` 报自己的事实（`shutter.fired`），宿主不必知道那是什么。**触发来源**：`play`/`goto` 收可选 `source`，进日志、进 `/api/control`、进 WS。它**不授予任何权限**（急停照样 409），只为回答「臂刚才为什么动了」—— 一台能被卡片/agent/脚踏/脚本多路触发的机器上，这是第一个被问到、事后又最答不出来的问题。+10 测试 |
 
 ---
 
@@ -239,5 +240,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 14 | **14** | 14 |
-| **合计** | **76** | **74** | **65** |
+| 后续新增 | 15 | **15** | 15 |
+| **合计** | **77** | **75** | **66** |

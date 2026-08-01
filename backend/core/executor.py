@@ -31,6 +31,7 @@ from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
 from ..actions.shutter import ShutterParams
 from ..arm.base import ArmDriver
+from . import events
 from ..routines.models import (
     FailurePolicy,
     PluginAction,
@@ -136,6 +137,9 @@ class RoutineExecutor:
         self._interval_s = 0.0
         #: The action currently in flight on a worker thread, if any.
         self._job: Job | None = None
+        #: Which provider that job went to, for the event that reports how it
+        #: turned out — by then the dispatch has been consumed.
+        self._last_provider: str | None = None
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -207,6 +211,14 @@ class RoutineExecutor:
             return
 
         self._wp_index = 0
+        self._emit_event(
+            events.ROUTINE_STARTED,
+            {
+                "routine_id": self._routine.id,
+                "routine_name": self._routine.name,
+                "waypoints": len(self._routine.waypoints),
+            },
+        )
         self._begin_move()
 
     def abort(self, reason: str) -> None:
@@ -229,6 +241,10 @@ class RoutineExecutor:
         self._phase = Phase.ABORTED
         self._error = reason
         log.warning("routine %s aborted: %s", self._routine.id, reason)
+        self._emit_event(
+            events.ROUTINE_ABORTED,
+            {"routine_id": self._routine.id, "reason": reason, "waypoint_index": self._wp_index},
+        )
         self._emit()
 
     def tick(self) -> None:
@@ -303,6 +319,17 @@ class RoutineExecutor:
 
     def _begin_settle(self) -> None:
         waypoint = self._routine.waypoints[self._wp_index]
+        # The moment an integration usually wants: the scene is now what the
+        # anchor said it would be, and the arm is holding it.
+        self._emit_event(
+            events.ANCHOR_ARRIVED,
+            {
+                "routine_id": self._routine.id,
+                "waypoint_index": self._wp_index,
+                "anchor": waypoint.note,
+                "actions": len(waypoint.actions),
+            },
+        )
         self._phase = Phase.SETTLING
         self._phase_started_at = self._clock()
         self._sleep_until = self._phase_started_at + waypoint.settle_ms / 1000.0
@@ -372,6 +399,17 @@ class RoutineExecutor:
                 return
             self._repeat = dispatch.repeat
             self._interval_s = dispatch.interval_s
+            self._emit_event(
+                events.ACTION_STARTED,
+                {
+                    "provider": dispatch.provider_id,
+                    "waypoint_index": self._wp_index,
+                    "action_index": self._action_index,
+                    "frame": self._shots_fired + 1,
+                    "frames": dispatch.repeat,
+                },
+            )
+            self._last_provider = dispatch.provider_id
             self._job = self._actions.submit(
                 dispatch.provider_id,
                 dispatch.params,
@@ -384,10 +422,30 @@ class RoutineExecutor:
 
         job, self._job = self._job, None
         if job.error is not None:
+            self._emit_event(
+                events.ACTION_FAILED,
+                {
+                    "provider": self._last_provider,
+                    "waypoint_index": self._wp_index,
+                    "action_index": self._action_index,
+                    "error": str(job.error),
+                    "kind": type(job.error).__name__,
+                },
+            )
             self._handle_action_failure(action, job.error)
             return
 
         self._shots_fired += 1
+        self._emit_event(
+            events.ACTION_DONE,
+            {
+                "provider": self._last_provider,
+                "waypoint_index": self._wp_index,
+                "action_index": self._action_index,
+                "frame": self._shots_fired,
+                "frames": self._repeat,
+            },
+        )
         if self._shots_fired < self._repeat:
             self._sleep_until = self._clock() + self._interval_s
             self._emit()
@@ -463,6 +521,10 @@ class RoutineExecutor:
         if self._wp_index >= len(self._routine.waypoints):
             self._phase = Phase.DONE
             log.info("routine %s complete", self._routine.id)
+            self._emit_event(
+                events.ROUTINE_DONE,
+                {"routine_id": self._routine.id, "waypoints": len(self._routine.waypoints)},
+            )
             self._emit()
             return
         self._begin_move()
