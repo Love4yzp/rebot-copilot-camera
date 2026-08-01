@@ -105,6 +105,116 @@ def test_play_on_unknown_routine_is_404(client: TestClient):
     assert client.post("/api/routines/nope/play").status_code == 404
 
 
+# ── goto ─────────────────────────────────────────────────────────────────────
+
+
+def run_loop(controller, arm, clock, max_steps: int = 5000) -> None:
+    """Drive the control loop by hand until the executor finishes."""
+    for _ in range(max_steps):
+        clock.now += 0.01
+        arm.step(0.01)
+        controller.tick()
+        if not controller.is_playing:
+            break
+
+
+def test_goto_visits_one_waypoint_fires_its_actions_and_stays(rig):
+    """The use-layer atomic operation: tap an anchor — go, settle, act, hold."""
+    client, controller, arm, clock = rig
+    rid = client.post("/api/routines", json={"name": "four angles"}).json()["id"]
+    client.post(f"/api/routines/{rid}/waypoints", json={"joints": {"joint1": 0.4, "joint2": 0.0}})
+    client.post(
+        f"/api/routines/{rid}/waypoints",
+        json={
+            "joints": {"joint1": 0.8, "joint2": 0.0},
+            "note": "side",
+            "actions": [{"type": "shutter", "count": 2, "interval_s": 0.1}],
+        },
+    )
+
+    r = client.post(f"/api/routines/{rid}/waypoints/1/goto")
+    assert r.status_code == 200
+    assert r.json()["mode"] == "playback"
+    assert r.json()["playback"]["waypoint_total"] == 1
+
+    run_loop(controller, arm, clock)
+
+    assert not controller.is_playing
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.8, abs=0.02)
+    assert controller.shutter.shots == 2, "the anchor's burst ran on arrival"
+
+    # The stored routine is untouched — the ephemeral one was never persisted.
+    stored = client.get(f"/api/routines/{rid}").json()
+    assert [w["joints"]["joint1"] for w in stored["waypoints"]] == [0.4, 0.8]
+
+
+def test_goto_is_409_while_the_stop_is_engaged(client: TestClient):
+    rid = make_routine(client, 0.2)
+    client.post("/api/estop", json={"reason": "stop"})
+
+    r = client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "estop_latched"
+
+
+def test_goto_is_409_while_teaching_or_playing(client: TestClient):
+    rid = make_routine(client, 0.2, 0.4)
+
+    client.post("/api/teach", json={"enabled": True})
+    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 409
+    client.post("/api/teach", json={"enabled": False})
+
+    client.post(f"/api/routines/{rid}/play")
+    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 409
+
+
+def test_goto_on_a_bad_index_or_routine_is_404(client: TestClient):
+    rid = make_routine(client, 0.2)
+    assert client.post(f"/api/routines/{rid}/waypoints/5/goto").status_code == 404
+    assert client.post("/api/routines/nope/waypoints/0/goto").status_code == 404
+
+
+def test_goto_preflights_the_path_from_the_current_pose(tmp_path: Path):
+    """Two legal poses, an illegal line between them — refuse before moving.
+
+    Needs a six-joint arm so the "current pose" half of the path is real, so
+    this test builds its own rig rather than using the two-joint fixture.
+    """
+    clock = FakeClock()
+    arm = SimArm(
+        ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"), clock=clock, tau=0.05
+    )
+    arm.connect()
+    app.state.latch = SafetyLatch(clock=clock)
+    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.broadcaster = Broadcaster()
+    app.state.controller = Controller(
+        arm=arm,
+        shutter=SimShutter(),
+        latch=app.state.latch,
+        broadcaster=app.state.broadcaster,
+        clock=clock,
+    )
+    client = TestClient(app)
+
+    here = {
+        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
+        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
+    }
+    there = {
+        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
+        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
+    }
+    rid = client.post("/api/routines", json={"name": "through the base"}).json()["id"]
+    assert client.post(f"/api/routines/{rid}/waypoints", json={"joints": there}).status_code == 201
+    arm.drag(here)  # from rest, a delta is an absolute pose
+
+    r = client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "unsafe_path"
+    assert client.get("/api/control").json()["playing"] is False
+
+
 # ── teaching ─────────────────────────────────────────────────────────────────
 
 

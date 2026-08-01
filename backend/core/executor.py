@@ -94,6 +94,8 @@ class RoutineExecutor:
         self._arrival_deadline = 0.0
         self._sleep_until = 0.0
         self._attempts = 0
+        #: Frames fired so far within the current shutter action (a burst).
+        self._shots_fired = 0
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -248,6 +250,7 @@ class RoutineExecutor:
         self._phase = Phase.ACTING
         self._action_index = 0
         self._attempts = 0
+        self._shots_fired = 0
         self._emit()
         self._tick_acting()
 
@@ -275,11 +278,27 @@ class RoutineExecutor:
             self._next_action()
 
     def _run_fallible_action(self, action) -> None:
+        if isinstance(action, ShutterAction) and self._shots_fired > 0:
+            # Mid-burst: wait out the inter-frame interval, one frame per tick.
+            if self._shots_fired >= action.count:
+                self._next_action()
+                return
+            if self._clock() < self._sleep_until:
+                return
         try:
             if isinstance(action, ShutterAction):
+                # Refocus every frame: between frames of a burst the subject
+                # has usually moved — that is why there is a burst at all.
                 if action.focus_first:
                     self._shutter.focus()
                 self._shutter.shoot()
+                self._shots_fired += 1
+                if self._shots_fired < action.count:
+                    self._sleep_until = self._clock() + action.interval_s
+                    self._emit()
+                    return
+                self._next_action()
+                return
             else:  # pragma: no cover — the union is closed
                 raise ShutterError(f"no handler for action type {action.type!r}")
         except ShutterError as exc:
@@ -307,6 +326,7 @@ class RoutineExecutor:
     def _next_action(self) -> None:
         self._action_index += 1
         self._attempts = 0
+        self._shots_fired = 0
         self._emit()
         if self._action_index >= len(self._routine.waypoints[self._wp_index].actions):
             self._advance_waypoint()

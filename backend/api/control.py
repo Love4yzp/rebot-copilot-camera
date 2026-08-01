@@ -102,6 +102,48 @@ def stop_playback(request: Request) -> PlaybackState:
     return _state(_controller(request))
 
 
+@router.post(
+    "/api/routines/{rid}/waypoints/{index}/goto",
+    response_model=PlaybackState,
+    dependencies=[Depends(require_arm_available)],
+)
+def goto_waypoint(rid: str, index: int, request: Request) -> PlaybackState:
+    """Move to one waypoint and stay there, running its actions on arrival.
+
+    The use-layer atomic operation: tap an anchor, the arm goes, settles, fires
+    the anchor's actions, and holds. Implemented as a one-waypoint ephemeral
+    routine, so arrival checking, settling, the first-approach speed limit (the
+    arm can be anywhere when a single anchor is tapped) and stop-latch abort
+    all come from the executor unchanged. The ephemeral routine is never
+    stored.
+    """
+    routine = _load(request, rid)
+    if not 0 <= index < len(routine.waypoints):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"waypoint index {index} out of range (routine has {len(routine.waypoints)})",
+        )
+    waypoint = routine.waypoints[index]
+    controller = _controller(request)
+
+    # Pre-flight the path from wherever the arm is now. Two legal poses can
+    # have an illegal line between them; nothing has moved yet at this point.
+    current = dict(controller.arm.read_state().positions)
+    unsafe = validate_sequence([current, waypoint.joints])
+    if unsafe:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_path", "reasons": unsafe}
+        )
+
+    label = waypoint.note or f"#{index + 1}"
+    single = Routine(name=f"{routine.name} · {label}", waypoints=[waypoint])
+    try:
+        controller.play(single)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return _state(controller)
+
+
 # ── teaching ─────────────────────────────────────────────────────────────────
 
 

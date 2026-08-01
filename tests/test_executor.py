@@ -95,6 +95,45 @@ def test_focus_is_skipped_when_disabled():
     assert h.shutter.focuses == 0
 
 
+def test_a_burst_fires_count_frames_and_refocuses_each():
+    """Between frames of a burst the subject has usually moved — that is why
+    there is a burst at all — so every frame gets its own half-press."""
+    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=3, interval_s=0.2)])))
+    h.run()
+
+    assert h.shutter.shots == 3
+    assert h.shutter.focuses == 3
+
+
+def test_a_burst_paces_frames_by_the_interval():
+    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=2, interval_s=1.0)])))
+    h.executor.start()
+    for _ in range(3000):
+        if h.shutter.shots >= 1:
+            break
+        h.step()
+    assert h.shutter.shots == 1
+
+    for _ in range(50):  # 0.5s, short of the 1.0s interval
+        h.step()
+    assert h.shutter.shots == 1, "the second frame must wait out the interval"
+
+    for _ in range(3000):
+        if h.executor.is_finished:
+            break
+        h.step()
+    assert h.shutter.shots == 2
+
+
+def test_a_failed_frame_mid_burst_aborts_by_default():
+    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=3)])))
+    h.shutter.script([None, ShutterTimeout("second frame died")])
+    h.run()
+
+    assert h.executor.phase is Phase.ABORTED
+    assert h.shutter.shots == 1, "the first frame landed, the failure stopped the rest"
+
+
 def test_actions_run_in_order_within_a_waypoint():
     h = Harness(routine(wp(0.1, actions=[SleepAction(duration_s=0.5), ShutterAction()])))
     h.executor.start()
