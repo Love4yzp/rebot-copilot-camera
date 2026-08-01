@@ -55,6 +55,12 @@ export function ArmView3D({ positions, preview }: Props) {
     // URDF mesh paths are relative to the package root, not to the .urdf file.
     loader.packages = "/assets/urdf/00-arm-rs_asm-v3";
 
+    // Meshes arrive after the URDF itself parses, so a missing mesh directory
+    // resolves the load "successfully" and leaves an empty scene. Without this
+    // check the panel is a blank black rectangle with nothing to read, which
+    // is the worst way to report a broken checkout.
+    let meshTimer = 0;
+
     loader.load(
       URDF_URL,
       (loaded) => {
@@ -73,6 +79,14 @@ export function ArmView3D({ positions, preview }: Props) {
         scene.add(loaded);
         robot.current = loaded;
         setStatus("");
+
+        meshTimer = window.setTimeout(() => {
+          let meshes = 0;
+          loaded.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) meshes += 1;
+          });
+          if (meshes === 0) setStatus("模型网格缺失 — 检查 submodule 是否 init 过");
+        }, 3000);
       },
       undefined,
       () => setStatus("模型加载失败 — 检查 submodule 是否 init 过"),
@@ -144,6 +158,7 @@ export function ArmView3D({ positions, preview }: Props) {
 
     return () => {
       cancelAnimationFrame(frame);
+      window.clearTimeout(meshTimer);
       observer.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointermove", onMove);
@@ -167,9 +182,11 @@ export function ArmView3D({ positions, preview }: Props) {
     }
   }, [positions, preview]);
 
+  // Which pose is on screen is named by the drawer header, not here — one
+  // label, one job.
   return (
     <div className="viewer" ref={mount}>
-      <div className="overlay">{status || (preview ? "预览选中点位" : "实时姿态")}</div>
+      {status && <div className="overlay">{status}</div>}
     </div>
   );
 }

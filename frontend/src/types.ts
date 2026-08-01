@@ -8,6 +8,10 @@ export interface ShutterAction {
   timeout_s: number;
   on_failure: FailurePolicy;
   retries: number;
+  /** How many times the trigger fires per visit (1–50). */
+  count: number;
+  /** Pause between repeated triggers, in seconds (0–60). */
+  interval_s: number;
 }
 
 export interface SleepAction {
@@ -65,6 +69,15 @@ export interface PlaybackProgress {
   routine_name: string | null;
   error: string | null;
   finished: boolean;
+}
+
+/** What the motion endpoints (play / goto / teach / stop) return. */
+export interface PlaybackState {
+  mode: string;
+  playing: boolean;
+  teaching: boolean;
+  rate_hz: number;
+  playback: PlaybackProgress | null;
 }
 
 /** One control-loop tick, as broadcast over /ws. */

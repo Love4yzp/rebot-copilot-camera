@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { OPEN_LOG_EVENT } from "./Toasts";
 
 interface LogResponse {
   available: boolean;
@@ -13,14 +14,21 @@ const POLL_MS = 3000;
  *
  * The operator is on the far end of an SSH tunnel with a browser, not a
  * terminal. This is the difference between "the arm stopped and I do not know
- * why" and reading the watchdog's reason.
+ * why" and reading the watchdog's reason. Error toasts carry a "看日志" button
+ * that opens this drawer, so the question and the answer are one tap apart.
  *
  * Only polls while open, because it shells out to journalctl on the device.
  */
-export function LogDrawer() {
+export function LogDrawer({ rateHz }: { rateHz: number }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<LogResponse | null>(null);
   const body = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(OPEN_LOG_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_LOG_EVENT, onOpen);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -50,13 +58,18 @@ export function LogDrawer() {
   }, [data]);
 
   return (
-    <div className={`log-drawer ${open ? "open" : ""}`}>
-      <button className="ghost log-toggle" onClick={() => setOpen(!open)}>
-        {open ? "收起日志" : "日志"}
-      </button>
+    <div className="log-drawer">
+      <div className="log-head">
+        <button className="log-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "收起日志" : "日志"}
+        </button>
+        {/* The control-loop rate is a diagnostic, not something the operator
+          * acts on, so it lives here rather than beside the emergency stop. */}
+        <span className="log-rate">{rateHz.toFixed(0)} Hz</span>
+      </div>
 
       {open && (
-        <pre className="log-body num" ref={body}>
+        <pre className="log-body" ref={body}>
           {data === null
             ? "读取中…"
             : data.available

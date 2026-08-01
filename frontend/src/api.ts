@@ -1,4 +1,4 @@
-import type { Action, EstopState, Routine, RoutineSummary } from "./types";
+import type { Action, EstopState, PlaybackState, Routine, RoutineSummary } from "./types";
 
 /** Error carrying the server's structured reason, so the UI can show it. */
 export class ApiError extends Error {
@@ -80,8 +80,26 @@ export const api = {
 
   // ── waypoints ───────────────────────────────────────────────────────────
   waypoints: {
-    capture: (routineId: string) =>
-      post<Routine>(`/api/routines/${routineId}/waypoints/capture`),
+    /**
+     * Add a waypoint from explicit joint angles, optionally at a given index.
+     *
+     * `capture` records wherever the arm is standing; this one records a pose
+     * you already hold. That is what makes undoing a delete possible — the
+     * arm has usually moved on by the time the operator changes their mind.
+     */
+    add: (
+      routineId: string,
+      body: {
+        joints: Record<string, number>;
+        duration_s?: number;
+        settle_ms?: number;
+        actions?: Action[];
+        note?: string;
+        index?: number;
+      },
+    ) => post<Routine>(`/api/routines/${routineId}/waypoints`, body),
+    capture: (routineId: string, note?: string) =>
+      post<Routine>(`/api/routines/${routineId}/waypoints/capture`, note === undefined ? undefined : { note }),
     remove: (routineId: string, index: number) =>
       request<Routine>(`/api/routines/${routineId}/waypoints/${index}`, { method: "DELETE" }),
     update: (
@@ -98,9 +116,12 @@ export const api = {
   },
 
   // ── motion ──────────────────────────────────────────────────────────────
-  play: (routineId: string) => post<unknown>(`/api/routines/${routineId}/play`),
-  stopPlayback: () => post<unknown>("/api/playback/stop"),
-  teach: (enabled: boolean) => post<unknown>("/api/teach", { enabled }),
+  play: (routineId: string) => post<PlaybackState>(`/api/routines/${routineId}/play`),
+  /** Single-shot goto: move to one anchor, settle, fire its actions, hold. */
+  goto: (routineId: string, index: number) =>
+    post<unknown>(`/api/routines/${routineId}/waypoints/${index}/goto`),
+  stopPlayback: () => post<PlaybackState>("/api/playback/stop"),
+  teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
   testShutter: (shoot: boolean) => post<{ ok: boolean; error: string | null }>(
     `/api/shutter/test?shoot=${shoot}`,
   ),
