@@ -100,7 +100,9 @@ backend/
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
     logs.py         journalctl 包装
 
-frontend/src/       Vite + React + TS。围绕点位编辑器
+frontend/src/       Vite + React + TS。围绕锚点卡片板（使用层 / 配置层双模式）
+frontend/mock/      `npm run dev:mock` 的内存后端，形状必须跟着 backend 手工对齐
+frontend/public/    自托管字体（离线设备，不能挂 CDN）
 firmware/esp32-shutter/  PlatformIO 工程
 deploy/             systemd unit ×2 + udev 规则
 config/rebotarm_rs.yaml  从上游 fork 的硬件配置（挂相机后要重调）
@@ -127,6 +129,24 @@ vendor/reBotArm_control_py/  git submodule，锁 d540405
 
 **`0.0` 是假值**
 时间戳、角度、下标做判空一律用 `is None`，不要用真值判断。Agent 租约就栽在 `or now` 上 —— 时间戳恰好为 0 时所有间隔算成零、租约永不过期，而真实时钟极少读到 0，这种 bug 会潜伏很久。
+
+**界面的颜色是状态通道，不是调色板**
+底盘全灰阶。整套界面只有四个彩色，各自独占一个机器状态，**任何一个都不许拿去做强调、选中、品牌或装饰**：
+
+| Token | 含义 |
+|---|---|
+| `--stop` 红 | 已急停 |
+| `--motion` 琥珀 | 臂在动，别伸手 |
+| `--ready` 绿 | 到位、保持 |
+| `--expose` 白 | 快门触发 |
+
+看起来最顺手的那件事 —— 给主按钮一个品牌蓝、给选中态一个 accent —— 正是要避免的：颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。需要强调时用灰阶层级、字重、尺寸。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
+
+**界面不许猜臂在哪**
+锚点卡的「已到位」只能由 `phase === "done"` 点亮。三个已经踩过的坑：`phase` 为空**不等于**到位；controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，所以陈旧的 `done` 不能当作新点击的答复；急停或进入示教后必须立刻作废「已到位」—— 臂被冻在别处或即将被人推走。另外 `_advance_waypoint` 先自增后判断，收尾时 `waypoint_index == waypoint_total`，前端要夹紧。
+
+**急停在栈顶**
+`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式，而它以前恰好被自己的遮罩挡住了。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
 
 ---
 
@@ -161,7 +181,9 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | [`README.md`](./README.md) | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API | 要用这个服务时；用户报故障先翻它的故障排查表 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计文档与决策记录 | 想知道某个设计为什么这样时 |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
+| [`docs/INTERACTION.md`](./docs/INTERACTION.md) | 交互骨架详细设计：布局 / 流程 / 参数隐藏 / goto 接口 | 动前端界面或加运动端点时 |
+| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 历史设计决策记录（不再追加；当前设计模式看 ARCHITECTURE.md） | 想知道某个旧决定为什么这样时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。
 

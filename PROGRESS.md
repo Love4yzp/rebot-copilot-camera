@@ -201,6 +201,20 @@
 |---|---|---|---|---|
 | 62 | L | feat: Agent 控制权与端点（token 独占 / TTL / 看门狗，全部尊重急停闩锁） | DONE | token 独占 + 双重 TTL + UI 强制收回。测试逮到一个 bug：耗时用 `or now` 算，而 `0.0` 是假值，所有间隔都成了零、租约永不过期 —— 真实时钟极少读到 0，会一直潜伏 |
 
+### 后续新增（原计划之外）
+
+| # | 环境 | 描述 | 状态 | 备注 |
+|---|---|---|---|---|
+| 63 | L | feat: 前端无后端预览 `npm run dev:mock`（内存 mock API + WS 状态流 + 本地 URDF 静态） | DONE | **偏离原计划**：为了不启动后端也能看前端界面。vite 插件只在 `--mode mock` 挂载，`npm run dev` 行为不变；3D 臂读 vendor submodule 的 URDF/STL。播放/示教/急停在 mock 里走同一状态机，行为对齐后端（estop 时运动端点 409、空 routine play 400） |
+| 64 | L | docs: `docs/ARCHITECTURE.md` 产品架构锚点（设计模式定稿） | DONE | 重新定位：通用可编程空间定位平台，不是「摄影臂」。内核/交互骨架/插件三层不变量，锚点/动作/集合/编排四个无领域积木，配置与使用分层，模板机制，界面词汇中性化为「锚点」。issue #1 标为历史记录不再追加，新设计写 ARCHITECTURE.md |
+| 65 | L | feat: goto 端点 + ShutterAction 连拍（count/interval_s） | DONE | 使用层原子操作的后端：`POST /api/routines/{rid}/waypoints/{index}/goto` 构造单锚点临时 Routine 喂给现有 executor —— 到位判定/settle/首段限速/急停 abort 全复用，不新增控制逻辑。挂运动闸门，goto 前用 `validate_sequence([当前位, 目标位])` 预检路径。ShutterAction 加 count/interval_s（带默认值，旧 JSON 兼容），executor 内循环连拍、每帧重新对焦（连拍就是因为被摄体在动）。+8 测试 |
+| 66 | L | feat: 前端「锚点卡片板」重构（交互骨架落地，设计见 `docs/INTERACTION.md`） | DONE | 从「脚本编辑器」到「锚点卡片板」：使用/配置双模式，使用模式点卡即 goto；新增 AnchorBoard/AnchorCard/CollectionBar/ControlBar/TeachSheet/AnchorEditSheet，删除 WaypointEditor/RoutineList/PlaybackBar/JointReadout。参数隐藏：速度三档映射 duration_s，settle/on_failure/retries/timeout 不再暴露；杀光 prompt/confirm/双击/右键/HTML5 拖拽，触屏 ≥44px。四方位模板做成示教向导，录完即溶解成普通锚点。mock 同步支持 goto |
+| 67 | L | fix: `.gitignore` 的 `routines/` 改为 `/routines/` | DONE | **pre-existing bug**：未锚定的 `routines/` 模式把 `backend/routines/`（models.py、store.py，核心源码）也吞了 —— 这两个文件从未进过 git，全新 clone 直接起不来。锚定到根后恢复可见；下次 commit 需 `git add backend/routines/` |
+| 68 | L | feat: 急停按钮升为视觉一等公民（大触控目标 + 自适应 + 锁定态脉冲） | DONE | 之前结构上是一等（常驻顶栏、独占红色、Esc）但尺寸只是普通工具栏按钮。改为 64px 高、`clamp()` 随视口放大字号与宽度、`touch-action: manipulation` 免双击缩放延迟；窄屏先藏提示文字和 Hz，按钮不缩。锁定态给「解除急停」加 1.6s 呼吸脉冲 —— 演播室另一头也要能看见臂已停；常态不闪（暗室里常闪是干扰）。`.app` 高度补 `100dvh` 修 iPad Safari 工具栏算进 vh 的问题。硬件物理按钮不需后端改动：`POST /api/estop` 已带 `source` 字段，插件直接打这个端点 |
+| 69 | L | feat: 锚点卡片撑满卡片板（launchpad 式主控件，不再是指甲盖磁贴） | DONE | 用户截图反馈：3 张 96px 小卡片缩在巨大空白左上角。卡片是使用层唯一动词，改成 `auto-fit` + `grid-auto-rows: minmax(160px, 1fr)` + `min-height: 100%` —— 锚点少（常见 4 个）时卡片摊满整板，多了每行至少 160px 溢出滚动；`auto-fit` 让空列坍塌，3 张卡平分整行宽。卡名 `clamp(20px, 1.2vw+12px, 28px)`。纯 CSS 改动 |
+| 70 | L | fix: 界面对臂的位置说谎（卡片状态机 + 急停被遮罩吞点击） | DONE | **安全**：弹层遮罩 z-index 40 盖在急停条上，示教（双手在臂上）恰好是最需要急停的模式，而屏幕急停按钮点不动 —— 急停条提到 60。弹层补 Esc/点背景关闭、焦点陷阱、`aria-modal`；Esc 用**原生**监听在面板上截停（React 合成事件的 `stopPropagation` 拦不住 window 级急停监听）。**状态可信度**：`arrived` 原本由 `phase == null` 推出，点卡瞬间就亮「已到位」；controller 保留 finished executor 会持续重播上一次的 `done`，所以 `pending` 只被*运行中*的 phase 解除、超时则丢弃声明而非升级；急停/示教立即作废 `target`。`_advance_waypoint` 先自增后判断导致收尾时 index 越界一位，前端夹紧。急停/忙时卡片不再静默失效，分别给出不同原因 |
+| 71 | L | feat: 颜色改为状态通道 + tally 条（视觉系统重做） | DONE | 原配色是 GitHub 深色主题套在机械臂上：蓝色 accent 同时是按钮/进度/选中/链接，而「臂正朝人移动」只配到柔和蓝呼吸。改为底盘全灰阶、**删除品牌色**，四个彩色各自独占一个机器状态（红=急停 / 琥珀=在动 / 绿=到位 / 白=快门），借用 tally 灯与机械警示灯约定。签名元素 **tally 条**：顶端 4px 满幅光带报机器状态 —— 操作者站在臂旁读不到 12px 状态字，但两米外余光能读一条横贯屏幕的光带。单锚点进度移进卡片内部（反馈回到手指落下的地方）；配置模式换成工作台底纹而非虚线边框（前注意级别区分「点了臂会不会动」）；示教弹层改底部横条并自带急停；3D 收进抽屉，预览由 hover 改选中语义；数字键 1–9 触发锚点；删除锚点改 8 秒撤销（复用 `POST /waypoints` 的 `index`）。无障碍补 `:focus-visible` / `prefers-reduced-motion` / `--mark-dim` 提到 7:1。自托管 Saira Condensed latin 子集（设备离线，不能挂 CDN）。顺手修：mock 结束时把 playback 置 null，与真 controller 不一致，导致「已到位」在预览里永远出不来 |
+
 ---
 
 ## 统计
@@ -219,4 +233,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| **合计** | **62** | **60** | **51** |
+| 后续新增 | 9 | **9** | 9 |
+| **合计** | **71** | **69** | **60** |
