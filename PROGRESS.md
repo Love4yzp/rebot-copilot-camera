@@ -36,7 +36,7 @@
 | **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#79` docs: `docs/PLUGINS.md` |
+| **上一个完成的** | `#80` fix: 三个部署层 bug（CLI 默认、CAN unit 退出码、rsync 排除规则） |
 | **备注** | **77/79 完成，305 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
@@ -224,6 +224,8 @@
 | 78 | L | feat: 锚点编辑面板改由 manifest 渲染 + 动作可排序 | DONE | 触发那半边不再为快门硬编码，改从 `GET /api/plugins` 画。新增 `ProviderFields.tsx`：三种控件 `switch` / `stepper` / `tiers` —— **正好是这张面板本来就有的三种**，所以不是新造 UI 框架，是把已有控件参数化，每个 provider 因此白拿 ≥44px 触控目标、`:focus-visible`、`prefers-reduced-motion`。**不接受插件提供的 JS/HTML**：插件带样式的第一件事就是给按钮上品牌色，而这里颜色是状态通道（四色各占一个机器状态），不是调色板。`when` 用 `{key, min}` 结构而不是表达式串 —— 让界面 eval 一个装上来的包给的表达式是麻烦的开始。动作从「只有一个快门」变成**有序列表**：顺序即执行顺序，把继电器排在快门前面就是「先做这个」，不需要 pre-hook 机制。缺失/不可用的 provider **虚线灰显带原因，不隐藏** —— 锚点确实带着这个动作，行消失了操作员会以为配置丢了；仍允许添加（现场常常先排好班再插配件），拦在播放前的预检那里，因为臂是在那里才有风险的。`play`/`goto` 带 `source`。mock 同步补 `/api/plugins`（形状必须跟后端对齐，否则预览的是一个不存在的应用）。 |
 | 79 | L | docs: `docs/PLUGINS.md` + 三份指南对齐 | DONE | 插件层落地后把「怎么扩展这台机器」写成一份，写给第三方开发者而不是写给自己：三个扩展点为什么是三个不是一个 hook 链、四十行的转台插件完整例子、`uv run -m backend.actions.check` 无硬件开发循环、契约违约对照表（挂死/乱抛/probe 崩/想拿臂）、为什么 `ActionContext` 里没有 arm、为什么连拍不在 provider 里循环、为什么触发源不能是进程内回调。`AGENTS.md` 加两条约定（动作绝不跑在控制循环上、插件够不到臂）+ 代码地图 + 文档分工表；`ARCHITECTURE.md` 把插件从「后做」改成已落地并指过去；`README.md` 补 goto/plugins/events 三行 API 与扩展入口。每件事仍只写一处 —— PLUGINS.md 只讲扩展点，概念在 ARCHITECTURE，交互在 INTERACTION，铁律在 AGENTS。 |
 
+| 80 | L | fix: 三个部署层 bug（CLI 默认、CAN unit 退出码、rsync 排除规则） | DONE | ① `app.py` 的 `--host/--port` 硬编码默认 127.0.0.1/18790，**把 `REBOT_HOST`/`REBOT_PORT` 环境变量整个遮蔽了** —— README 配置表写了它们，实际不生效；默认改从 `config.HOST/PORT` 取。② `rebot-can.service` 的 `SuccessExitStatus` 只认 0/2，但 `ip link` 找不到设备时退 **1**（USB2CAN 串口桥的机器没有 can0）—— 那种机器上 boot 会因 CAN unit 报 failed。③ `manage.sh` 的 rsync `--exclude 'routines/'` 未锚定，把 `backend/routines/`（Python 包，核心源码）也排掉了 —— push 到设备上的代码缺包；锚定为 `/routines/`（与 #67 的 `.gitignore` 是同一个坑的另一半） |
+
 ---
 
 ## 统计
@@ -242,5 +244,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 17 | **17** | 17 |
-| **合计** | **79** | **77** | **68** |
+| 后续新增 | 18 | **18** | 18 |
+| **合计** | **80** | **78** | **69** |

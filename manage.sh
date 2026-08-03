@@ -59,15 +59,17 @@ cmd_push() {
 
   step "syncing to $HOST:$REMOTE_DIR"
   # --delete keeps the remote clean, but routines/ is operator data that only
-  # exists on the device and must never be deleted by a deploy.
+  # exists on the device and must never be deleted by a deploy. Patterns
+  # without a leading / match at any depth, so '/routines/' is anchored —
+  # otherwise backend/routines/ (a Python package) would be excluded too.
   rsync -az --delete \
     --exclude '.git/' \
     --exclude '.venv/' \
     --exclude 'node_modules/' \
     --exclude '__pycache__/' \
-    --exclude 'routines/' \
+    --exclude '/routines/' \
     --exclude '.pio/' \
-    --filter 'protect routines/' \
+    --filter 'protect /routines/' \
     "$HERE/" "$HOST:$REMOTE_DIR/"
 
   step "syncing the vendored arm layer"

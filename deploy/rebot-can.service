@@ -12,8 +12,9 @@ ExecStart=/sbin/ip link set can0 type can bitrate 1000000
 ExecStart=/sbin/ip link set can0 up
 ExecStop=/sbin/ip link set can0 down
 # Absent on a machine using the USB2CAN serial bridge instead of socketcan,
-# where there is no can0 to configure. Do not fail the boot over it.
-SuccessExitStatus=0 2
+# where there is no can0 to configure. Do not fail the boot over it. `ip`
+# exits 1 (not 2) for "Cannot find device", so 1 is accepted too.
+SuccessExitStatus=0 1 2
 
 [Install]
 WantedBy=multi-user.target

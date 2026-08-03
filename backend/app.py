@@ -158,8 +158,8 @@ else:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rebot-copilot-camera")
     parser.add_argument("--sim", action="store_true", help="force SimArm/SimShutter")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=18790)
+    parser.add_argument("--host", default=config.HOST)
+    parser.add_argument("--port", type=int, default=config.PORT)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
