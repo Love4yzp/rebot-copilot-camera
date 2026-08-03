@@ -36,7 +36,7 @@
 | **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#80` fix: 三个部署层 bug（CLI 默认、CAN unit 退出码、rsync 排除规则） |
+| **上一个完成的** | `#81` docs: 项目定名 Teach & Repeat · 示教回放，README 双语 |
 | **备注** | **77/79 完成，305 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
@@ -225,6 +225,7 @@
 | 79 | L | docs: `docs/PLUGINS.md` + 三份指南对齐 | DONE | 插件层落地后把「怎么扩展这台机器」写成一份，写给第三方开发者而不是写给自己：三个扩展点为什么是三个不是一个 hook 链、四十行的转台插件完整例子、`uv run -m backend.actions.check` 无硬件开发循环、契约违约对照表（挂死/乱抛/probe 崩/想拿臂）、为什么 `ActionContext` 里没有 arm、为什么连拍不在 provider 里循环、为什么触发源不能是进程内回调。`AGENTS.md` 加两条约定（动作绝不跑在控制循环上、插件够不到臂）+ 代码地图 + 文档分工表；`ARCHITECTURE.md` 把插件从「后做」改成已落地并指过去；`README.md` 补 goto/plugins/events 三行 API 与扩展入口。每件事仍只写一处 —— PLUGINS.md 只讲扩展点，概念在 ARCHITECTURE，交互在 INTERACTION，铁律在 AGENTS。 |
 
 | 80 | L | fix: 三个部署层 bug（CLI 默认、CAN unit 退出码、rsync 排除规则） | DONE | ① `app.py` 的 `--host/--port` 硬编码默认 127.0.0.1/18790，**把 `REBOT_HOST`/`REBOT_PORT` 环境变量整个遮蔽了** —— README 配置表写了它们，实际不生效；默认改从 `config.HOST/PORT` 取。② `rebot-can.service` 的 `SuccessExitStatus` 只认 0/2，但 `ip link` 找不到设备时退 **1**（USB2CAN 串口桥的机器没有 can0）—— 那种机器上 boot 会因 CAN unit 报 failed。③ `manage.sh` 的 rsync `--exclude 'routines/'` 未锚定，把 `backend/routines/`（Python 包，核心源码）也排掉了 —— push 到设备上的代码缺包；锚定为 `/routines/`（与 #67 的 `.gitignore` 是同一个坑的另一半） |
+| 81 | L | docs: 项目定名 **Teach & Repeat · 示教回放**，README 双语 | DONE | 旧标题「机械臂自动多视角拍摄」描述的是第一个落地场景而不是产品本身（#64 已重新定位为通用可编程空间定位平台）。定名栈：口号「教它走一遍，它替你走一万遍」对外，Teach & Repeat（示教回放，机器人领域标准术语）作术语名。`README.md` 改英文主版 + 新增 `README.zh-CN.md` 中文全文，顶部互链；`AGENTS.md` 登记双语结构（两份同步改）。**repo 目录名 `rebot-copilot-camera` 暂不改**，service 文件名、frontend 标题等跟随项留到改名时一起处理 |
 
 ---
 
@@ -244,5 +245,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 18 | **18** | 18 |
-| **合计** | **80** | **78** | **69** |
+| 后续新增 | 19 | **19** | 19 |
+| **合计** | **81** | **79** | **70** |
