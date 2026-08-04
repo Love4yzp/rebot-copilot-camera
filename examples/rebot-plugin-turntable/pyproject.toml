@@ -1,0 +1,19 @@
+[project]
+name = "rebot-plugin-turntable"
+version = "0.1.0"
+description = "Example action provider: a serial turntable, as a plugin for Teach & Repeat."
+requires-python = ">=3.10,<3.12"
+# The host is not a dependency. It is the process this gets installed into, and
+# declaring it here would make the example depend on the thing that depends on
+# the example. pyserial is imported lazily, so `--port sim` needs neither.
+dependencies = ["pydantic>=2.9"]
+
+# The one line that makes this a plugin. The group is what the host scans; the
+# value must be importable and callable with no arguments, because the host
+# knows nothing about how a plugin is configured and never will.
+[project.entry-points."rebot.actions"]
+turntable = "rebot_plugin_turntable:TurntableProvider"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -10,6 +10,8 @@ interface Props {
   index: number;
   /** Installed action providers, from `GET /api/plugins`. */
   providers: ProviderInfo[];
+  /** Re-run every provider's self-test, for an accessory just plugged in. */
+  onProbe: () => Promise<void>;
   /** Closed with the latest routine if anything was saved, null if untouched. */
   onClose: (updated: Routine | null) => void;
   /** Deleted: the parent offers an undo, so it needs the pose that just went away. */
@@ -97,9 +99,17 @@ function toAction(providerId: string, params: Record<string, unknown>): Action {
  * — but a confirm dialog only slows down the deletes that were intended, and
  * does nothing for the one that was not.
  */
-export function AnchorEditSheet({ routine, index, providers, onClose, onRemoved }: Props) {
+export function AnchorEditSheet({
+  routine,
+  index,
+  providers,
+  onProbe,
+  onClose,
+  onRemoved,
+}: Props) {
   const { attempt } = useToast();
 
+  const [probing, setProbing] = useState(false);
   const [latest, setLatest] = useState<Routine | null>(null);
   const current = latest ?? routine;
   const waypoint = current.waypoints[index];
@@ -283,21 +293,42 @@ export function AnchorEditSheet({ routine, index, providers, onClose, onRemoved 
         })}
 
         <div className="sheet__add">
-          {providers.map((provider) => (
+          {providers
+            // A provider the host could not load is listed elsewhere with its
+            // reason, but it is not offered here: it has no params model, so
+            // the host would refuse the action on write. Offering something the
+            // API is bound to reject is a worse answer than not offering it.
+            .filter((provider) => provider.installed)
+            .map((provider) => (
+              <button
+                key={provider.id}
+                type="button"
+                className="sheet__add-btn"
+                onClick={() => addAction(provider.id)}
+                // Adding one that is merely down is allowed: an operator often
+                // lays out a shoot before the accessory is plugged in. The
+                // pre-flight refuses to *play* it, which is where the arm is at
+                // stake.
+                title={provider.available ? undefined : (provider.reason ?? "当前不可用")}
+              >
+                + {provider.label}
+                {provider.available ? "" : " ⚠"}
+              </button>
+            ))}
+
+          {providers.some((provider) => !provider.available) && (
             <button
-              key={provider.id}
               type="button"
-              className="sheet__add-btn"
-              onClick={() => addAction(provider.id)}
-              // Adding one that is down is allowed: an operator often lays out
-              // a shoot before the accessory is plugged in. The pre-flight
-              // refuses to *play* it, which is where the arm is at stake.
-              title={provider.available ? undefined : (provider.reason ?? "当前不可用")}
+              className="ghost sheet__probe"
+              disabled={probing}
+              onClick={() => {
+                setProbing(true);
+                void onProbe().finally(() => setProbing(false));
+              }}
             >
-              + {provider.label}
-              {provider.available ? "" : " ⚠"}
+              {probing ? "检测中…" : "重新检测配件"}
             </button>
-          ))}
+          )}
         </div>
       </div>
 

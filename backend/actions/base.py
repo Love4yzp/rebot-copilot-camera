@@ -57,6 +57,15 @@ class ActionTimeout(ActionError):
     """
 
 
+class ProviderBusy(ActionUnavailable):
+    """The provider already has work in flight, so this one was not started.
+
+    Distinct from being unusable, and the distinction matters at exactly one
+    place: a health check on a provider that is mid-action must not record it as
+    down. A provider that accepted work is reachable by definition.
+    """
+
+
 #: Widget kinds a provider may ask the UI for. Deliberately only three: they are
 #: the three the anchor edit sheet already implements, and those have been
 #: through the touch-target, focus-visible and reduced-motion pass. Wanting a

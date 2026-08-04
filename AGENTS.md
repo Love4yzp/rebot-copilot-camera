@@ -78,8 +78,8 @@ backend/
 
   actions/
     base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
-    runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上
-    registry.py     entry_points 发现 + 健康。runner 才是「装了哪些」的唯一登记处
+    runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上，probe 走同一条队列
+    registry.py     entry_points 发现 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
     validate.py     写入时与播放前两道校验，让错误离开 ACTING 阶段
     shutter.py      ShutterProvider —— 第一个 provider
 

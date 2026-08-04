@@ -240,7 +240,7 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 
 **Every endpoint that moves the arm returns 409 with a reason during estop.**
 
-**Extending the machine**: action plugins (in-process, `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points, a forty-line plugin example, and the no-hardware dev loop `uv run -m backend.actions.check` — all in [`docs/PLUGINS.md`](./docs/PLUGINS.md).
+**Extending the machine**: action plugins (in-process, `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
 
 **Agent API** (`/api/agent/*`) for external LLMs / scripts: `acquire` takes an exclusive token, `control/joints` and `control/play/{id}` issue commands, `release` hands it back (`?force=true` lets the Web UI forcibly reclaim). Leases expire after 5 idle minutes or 30 minutes held. **It grants control, not safety exemption** — during estop the agent is refused exactly like a human. Full parameters in `/docs`.
 

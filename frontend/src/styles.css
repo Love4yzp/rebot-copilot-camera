@@ -1200,6 +1200,16 @@ select:focus {
 .sheet__add-btn:hover {
   border-style: solid;
 }
+/* Appears only while something is down, and sits apart from the add buttons:
+ * it is not another thing to put on the anchor, it is how an accessory that
+ * was just plugged in gets a second look. No colour of its own — the four
+ * colours belong to machine states, and "an accessory is missing" is not one. */
+.sheet__probe {
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0 14px;
+  font-size: 13px;
+}
 
 /* ── toasts ──────────────────────────────────────────────────────────────── */
 /* Errors do not expire. The operator is frequently at the arm rather than at

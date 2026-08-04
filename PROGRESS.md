@@ -36,8 +36,8 @@
 | **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
 | **状态** | `BLOCKED` — 等真臂 |
 | **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#81` docs: 项目定名 Teach & Repeat · 示教回放，README 双语 |
-| **备注** | **77/79 完成，305 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
+| **上一个完成的** | `#82` fix+feat: 插件层契约补完（宿主加固 + 可安装的例子插件 + 配件重检） |
+| **备注** | **80/82 完成，314 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。软件侧全部就绪：起服务后示教 → 录点 → 播放 → 急停 → 409 全程实测过（`uv run -m backend.app --sim`）。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
 
 ---
 
@@ -226,6 +226,7 @@
 
 | 80 | L | fix: 三个部署层 bug（CLI 默认、CAN unit 退出码、rsync 排除规则） | DONE | ① `app.py` 的 `--host/--port` 硬编码默认 127.0.0.1/18790，**把 `REBOT_HOST`/`REBOT_PORT` 环境变量整个遮蔽了** —— README 配置表写了它们，实际不生效；默认改从 `config.HOST/PORT` 取。② `rebot-can.service` 的 `SuccessExitStatus` 只认 0/2，但 `ip link` 找不到设备时退 **1**（USB2CAN 串口桥的机器没有 can0）—— 那种机器上 boot 会因 CAN unit 报 failed。③ `manage.sh` 的 rsync `--exclude 'routines/'` 未锚定，把 `backend/routines/`（Python 包，核心源码）也排掉了 —— push 到设备上的代码缺包；锚定为 `/routines/`（与 #67 的 `.gitignore` 是同一个坑的另一半） |
 | 81 | L | docs: 项目定名 **Teach & Repeat · 示教回放**，README 双语 | DONE | 旧标题「机械臂自动多视角拍摄」描述的是第一个落地场景而不是产品本身（#64 已重新定位为通用可编程空间定位平台）。定名栈：口号「教它走一遍，它替你走一万遍」对外，Teach & Repeat（示教回放，机器人领域标准术语）作术语名。`README.md` 改英文主版 + 新增 `README.zh-CN.md` 中文全文，顶部互链；`AGENTS.md` 登记双语结构（两份同步改）。**repo 目录名 `rebot-copilot-camera` 暂不改**，service 文件名、frontend 标题等跟随项留到改名时一起处理 |
+| 82 | L | fix+feat: 插件层契约补完（宿主加固 + 可安装的例子插件 + 配件重检） | DONE | **汇报先于动手**：三个扩展点都通了，但契约声称的隔离只覆盖了 import + 构造 + `run()`。四个洞，都是「宿主假设第三方代码会崩」在实现里不成立的地方：① `discover()` 里 `provider.id` 读在 try **外面** —— 一个属性拼错的插件让 `AttributeError` 冒出 `discover()`，**服务起不来**，而契约表写着「import 时就崩 → 服务照常起来」；② `runner.register` 是裸 dict 赋值，插件声明 `id="shutter"` 就**静默顶掉内置快门**，而 executor 把每个 `ShutterAction` 发给字面量 `shutter` —— 走完整轮、什么都不抛、素材在别处；③ `probe()` 跑在调用线程上，挂死的自检会卡住 `GET /api/plugins`、刷新端点和**臂动之前的预检** —— runner 整个模块就是为了防这种失败，却在自己头顶漏了一层；④ `manifest()` 里 `fields()` 无保护，一个插件抛异常 → 500 → **整张编辑面板空白**。修法：`check_shape()` 在注册前只看属性不调方法（为了决定是否接受第三方代码而先跑第三方代码，正是①的成因），重名一律拒绝并列出原因（`replace=True` 只留给宿主换自己的内置快门），probe 走 provider 自己的 worker 和读侧超时（`PROBE_TIMEOUT_S=5`，`probe_all` 并行提交；忙则 `ProviderBusy`，保留上次结论而不是记成坏），`fields()` 单独兜住。manifest 加 `installed` 区分「宿主根本没拿到」与「拿到了但此刻不可用」—— 前者不给添加（没有 `params_model` 可校验，写入必被拒），后者可以先排班后插配件。**例子插件从散文变成真包**：`examples/rebot-plugin-turntable/` 进开发环境，`tests/test_plugin_packaging.py` 走**真的 `importlib.metadata`** —— 打包元数据（group 名、`module:Class`、必须无参可调）此前一次都没被跑过，第一个踩的人会是照文档在设备上装的人。前端：`POST /api/plugins/probe` 后端做了但**前端零调用点**，配件插回来只能重启服务，补「重新检测配件」。+9 测试（314） |
 
 ---
 

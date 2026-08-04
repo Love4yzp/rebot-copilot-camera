@@ -47,9 +47,11 @@ function Workspace() {
   const [teachFlow, setTeachFlow] = useState<{ names: string[] | null } | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  // Installed action providers. Loaded once: plugins arrive by installing a
-  // package and restarting the service, so the list cannot change under a
-  // running page. The edit sheet draws its trigger controls from this.
+  // Installed action providers. *Which* ones exist cannot change under a
+  // running page — plugins arrive by installing a package and restarting the
+  // service — but whether each one answers can, because accessories get
+  // unplugged and plugged back in. Hence the refresh below rather than a reload
+  // of the list. The edit sheet draws its trigger controls from this.
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
 
   const refreshList = useCallback(async () => {
@@ -69,6 +71,16 @@ function Workspace() {
       .then(setProviders)
       .catch(() => setProviders([]));
   }, []);
+
+  // Re-run every provider's self-test. The operator reaches for this after
+  // plugging an accessory in: without it the only way back from a greyed-out
+  // row is restarting the service, which on a device in a studio means finding
+  // a terminal. Probing moves no joints and burns no frame, so it is not behind
+  // the motion gate.
+  const probeProviders = useCallback(async () => {
+    const list = await attempt(() => api.plugins.probe());
+    if (list) setProviders(list);
+  }, [attempt]);
 
   // Land on something usable. Reopening the app on the collection that was
   // last in use is right far more often than landing on an empty board, and a
@@ -402,6 +414,7 @@ function Workspace() {
           routine={routine}
           index={editingAnchor}
           providers={providers}
+          onProbe={probeProviders}
           onClose={(updated) => {
             if (updated) {
               setRoutine(updated);

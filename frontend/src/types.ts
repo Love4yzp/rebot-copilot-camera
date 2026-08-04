@@ -59,6 +59,13 @@ export interface ProviderField {
 export interface ProviderInfo {
   id: string;
   label: string;
+  /**
+   * Whether the host actually holds this provider. False for a package that
+   * failed to load or claimed an id that was taken: it stays on the list so it
+   * does not read as the operator's own mistake, but nothing can be configured
+   * against it — the host has no params model to check what would be stored.
+   */
+  installed: boolean;
   available: boolean;
   /** Why it is unavailable. Shown verbatim — never hide a broken provider. */
   reason: string | null;

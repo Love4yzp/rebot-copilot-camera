@@ -24,6 +24,14 @@ thread, so a provider that never returns never returns. The job gives up at its
 deadline and reports :class:`~backend.actions.base.ActionTimeout`; the orphaned
 thread runs on, and its provider stays out of service until it comes back
 rather than having the next anchor queue up behind a corpse.
+
+**Self-tests come through here too.** ``probe`` is third-party code with a
+serial port behind it, so it gets the same worker thread and the same
+reader-side deadline that ``run`` does. Called straight from the request thread
+instead — which is what it used to be — a provider that hangs in its self-test
+wedges ``GET /api/plugins`` and the play pre-flight along with it. Same queue as
+actions, so a probe can never overlap a frame on hardware that answers one
+request at a time.
 """
 
 from __future__ import annotations
@@ -32,11 +40,19 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
 
 from pydantic import BaseModel
 
-from .base import ActionContext, ActionError, ActionProvider, ActionTimeout, ActionUnavailable
+from .base import (
+    ActionContext,
+    ActionError,
+    ActionProvider,
+    ActionTimeout,
+    ActionUnavailable,
+    ProviderBusy,
+)
 
 log = logging.getLogger(__name__)
 
@@ -53,8 +69,19 @@ class Job:
     finishing, or the reader hitting the deadline — decides the outcome.
     """
 
-    def __init__(self, provider_id: str, deadline: float, clock: Callable[[], float]) -> None:
+    def __init__(
+        self,
+        provider_id: str,
+        deadline: float,
+        clock: Callable[[], float],
+        kind: str = "action",
+    ) -> None:
         self.provider_id = provider_id
+        #: What the provider was asked to do. Carried only so a timeout says
+        #: which one gave up — an operator reading "did not answer its
+        #: self-test" on the plugin list is being told something different from
+        #: one reading that a frame did not come back.
+        self.kind = kind
         self._deadline = deadline
         self._clock = clock
         self._lock = threading.Lock()
@@ -97,10 +124,11 @@ class Job:
         if self._clock() < self._deadline:
             return False
         self._resolved = True
+        did = "answer its self-test" if self.kind == "probe" else "return"
         self._error = ActionTimeout(
-            f"{self.provider_id} did not return within its timeout; it may still be running"
+            f"{self.provider_id} did not {did} within its timeout; it may still be running"
         )
-        log.warning("action %s timed out; its worker thread is still busy", self.provider_id)
+        log.warning("%s %s timed out; its worker thread is still busy", self.kind, self.provider_id)
         return True
 
     def wait(self, timeout_s: float) -> bool:
@@ -140,6 +168,20 @@ class Job:
             return kept
 
 
+@dataclass(frozen=True)
+class _Task:
+    """One queued call into a provider.
+
+    ``call`` rather than a params/context pair, so an action and a self-test are
+    the same kind of thing to the worker: both are third-party code that may
+    block, and both are timed by the reader.
+    """
+
+    job: Job
+    kind: str
+    call: Callable[[ActionProvider], None]
+
+
 def _failed_job(provider_id: str, error: BaseException) -> Job:
     """A job that is already done and already lost.
 
@@ -169,6 +211,16 @@ class ActionRunner(Protocol):
         timeout_s: float,
     ) -> Job:
         """Start the action. Returns immediately; never raises."""
+        ...
+
+    def submit_probe(self, provider_id: str, timeout_s: float) -> Job:
+        """Start the provider's self-test. Returns immediately; never raises.
+
+        Fails with :class:`~backend.actions.base.ProviderBusy` when the provider
+        has work in flight, rather than queueing behind it — the caller is a
+        health check, and one that waits out an action is a health check that
+        stalls the page asking for it.
+        """
         ...
 
     def close(self) -> None:
@@ -221,6 +273,22 @@ class ThreadedRunner:
         ctx: ActionContext,
         timeout_s: float,
     ) -> Job:
+        return self._enqueue(
+            provider_id, "action", lambda provider: provider.run(params, ctx), timeout_s
+        )
+
+    def submit_probe(self, provider_id: str, timeout_s: float) -> Job:
+        return self._enqueue(
+            provider_id, "probe", lambda provider: provider.probe(), timeout_s
+        )
+
+    def _enqueue(
+        self,
+        provider_id: str,
+        kind: str,
+        call: Callable[[ActionProvider], None],
+        timeout_s: float,
+    ) -> Job:
         with self._lock:
             provider = self._providers.get(provider_id)
             if provider is None:
@@ -230,19 +298,22 @@ class ThreadedRunner:
             if self._closing:
                 return _failed_job(provider_id, ActionUnavailable("the runner is shutting down"))
             if provider_id in self._busy:
-                # Only reachable when a previous job was abandoned or timed out
-                # and its thread has not come back. Refusing beats queueing: the
-                # operator is standing at the arm waiting for an answer, not for
-                # the last anchor's work to finish first.
+                # Reachable when a previous job was abandoned or timed out and
+                # its thread has not come back, and whenever a health check
+                # arrives mid-action. Refusing beats queueing: the operator is
+                # standing at the arm waiting for an answer, not for the last
+                # anchor's work to finish first.
                 return _failed_job(
                     provider_id,
-                    ActionUnavailable(f"{provider_id} is still busy with an earlier action"),
+                    ProviderBusy(f"{provider_id} is still busy with an earlier {kind}"),
                 )
 
-            job = Job(provider_id, deadline=self._clock() + timeout_s, clock=self._clock)
+            job = Job(
+                provider_id, deadline=self._clock() + timeout_s, clock=self._clock, kind=kind
+            )
             self._busy.add(provider_id)
             self._ensure_worker(provider_id)
-            self._queues[provider_id].put((job, params, ctx))
+            self._queues[provider_id].put(_Task(job, kind, call))
             return job
 
     def _ensure_worker(self, provider_id: str) -> None:
@@ -262,38 +333,38 @@ class ThreadedRunner:
     def _work(self, provider_id: str) -> None:
         work = self._queues[provider_id]
         while True:
-            item = work.get()
-            if item is None:  # shutdown sentinel
+            task = work.get()
+            if task is None:  # shutdown sentinel
                 return
-            job, params, ctx = item
             try:
-                self._run_one(provider_id, job, params, ctx)
+                self._run_one(provider_id, task)
             finally:
                 with self._lock:
                     self._busy.discard(provider_id)
 
-    def _run_one(self, provider_id: str, job: Job, params: BaseModel, ctx: ActionContext) -> None:
+    def _run_one(self, provider_id: str, task: _Task) -> None:
         provider = self.provider(provider_id)
         if provider is None:  # pragma: no cover — unregistered mid-flight
-            job._resolve(ActionUnavailable(f"provider {provider_id!r} went away"))
+            task.job._resolve(ActionUnavailable(f"provider {provider_id!r} went away"))
             return
 
         try:
-            provider.run(params, ctx)
+            task.call(provider)
         except Exception as exc:
             # Third-party code: anything can come out. The original exception is
             # kept rather than wrapped, so ActionUnavailable still means "every
             # retry fails the same way" by the time the executor sees it.
-            log.warning("action %s failed: %s", provider_id, exc, exc_info=True)
+            log.warning("%s %s failed: %s", task.kind, provider_id, exc, exc_info=True)
             error: BaseException | None = exc
         else:
             error = None
 
-        if not job._resolve(error):
+        if not task.job._resolve(error):
             log.warning(
-                "action %s finished after it had already been given up on (%s)",
+                "%s %s finished after it had already been given up on (%s)",
+                task.kind,
                 provider_id,
-                "abandoned" if job.abandoned else "timed out",
+                "abandoned" if task.job.abandoned else "timed out",
             )
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -346,13 +417,19 @@ class InlineRunner:
         ctx: ActionContext,
         timeout_s: float,
     ) -> Job:
+        return self._call(provider_id, lambda provider: provider.run(params, ctx))
+
+    def submit_probe(self, provider_id: str, timeout_s: float) -> Job:
+        return self._call(provider_id, lambda provider: provider.probe())
+
+    def _call(self, provider_id: str, call: Callable[[ActionProvider], None]) -> Job:
         provider = self._providers.get(provider_id)
         if provider is None:
             return _failed_job(
                 provider_id, ActionUnavailable(f"no provider {provider_id!r} is installed")
             )
         try:
-            provider.run(params, ctx)
+            call(provider)
         except Exception as exc:
             return _failed_job(provider_id, exc)
         job = Job(provider_id, deadline=0.0, clock=lambda: 0.0)
@@ -370,5 +447,6 @@ __all__ = [
     "ActionUnavailable",
     "InlineRunner",
     "Job",
+    "ProviderBusy",
     "ThreadedRunner",
 ]

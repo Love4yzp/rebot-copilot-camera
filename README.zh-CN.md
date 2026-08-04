@@ -240,7 +240,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 **所有会让臂动的端点在急停期间返 409 并带原因。**
 
-**扩展这台机器**：动作插件（进程内，`uv pip install` 一个声明了 `rebot.actions` entry point 的包）、触发源（打 `goto` 的 HTTP 客户端）、事件订阅（连 `/api/events` 的 WS 客户端）。三个扩展点的完整契约、一个四十行的插件例子、以及无硬件开发循环 `uv run -m backend.actions.check`，全在 [`docs/PLUGINS.md`](./docs/PLUGINS.md)。
+**扩展这台机器**：动作插件（进程内，`uv pip install` 一个声明了 `rebot.actions` entry point 的包）、触发源（打 `goto` 的 HTTP 客户端）、事件订阅（连 `/api/events` 的 WS 客户端）。三个扩展点的完整契约与无硬件开发循环 `uv run -m backend.actions.check` 在 [`docs/PLUGINS.md`](./docs/PLUGINS.md)；完整例子是一个**可安装的包** [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/)，不是文档里的代码块 —— 打包元数据本身有测试覆盖。
 
 **Agent API**（`/api/agent/*`）给外部 LLM / 脚本用：`acquire` 拿独占 token，`control/joints` 和 `control/play/{id}` 下指令，`release` 交还（`?force=true` 让 Web UI 强制收回）。租约空闲 5 分钟或持有满 30 分钟自动过期。**给的是控制权不是安全豁免** —— 急停期间拒绝 agent，和拒绝人一模一样。完整参数看 `/docs`。
 

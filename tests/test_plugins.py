@@ -5,6 +5,8 @@ expensive moment is the ACTING phase — arm at the anchor, subject waiting — 
 everything here is about catching it earlier: on write, on play, or at startup.
 """
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from backend.actions import (
+    ActionContext,
     ActionRegistry,
     ActionUnavailable,
     FieldSpec,
@@ -187,9 +190,159 @@ def test_a_plugin_that_will_not_load_never_stops_the_service(rig, monkeypatch):
 
     entry = next(e for e in registry.manifest() if e["id"] == "exploder")
     assert entry["available"] is False
+    assert entry["installed"] is False, "nothing can be configured against it"
     assert "misspelled" in entry["reason"]
     assert entry["fields"] == []
     assert registry.provider("exploder") is None
+
+
+def test_a_provider_missing_an_attribute_is_refused_rather_than_registered(rig, monkeypatch):
+    """The bad plugin used to be the one shape that *did* stop the service: the
+    host read ``provider.id`` outside its own guard, so a misspelled attribute
+    left an AttributeError coming out of discovery and the process never came
+    up. A device missing one accessory is not a missing machine."""
+    _, registry, *_ = rig
+
+    class Shapeless:
+        """Everything a provider needs except the one line the author forgot."""
+
+        label = "无名"
+        params_model = RelayParams
+
+        def fields(self):
+            return []
+
+        def probe(self) -> None: ...
+
+        def run(self, params, ctx) -> None: ...
+
+    class Entry:
+        name = "shapeless"
+
+        def load(self):
+            return Shapeless
+
+    monkeypatch.setattr("backend.actions.registry.entry_points", lambda group: [Entry()])
+    registry.discover()  # must not raise
+
+    entry = next(e for e in registry.manifest() if e["id"] == "shapeless")
+    assert entry["installed"] is False
+    assert "id" in entry["reason"]
+    assert registry.provider("shapeless") is None
+    # And the accessory that was already working is untouched.
+    assert registry.ensure_status("shutter").available is True
+
+
+def test_a_plugin_cannot_take_over_an_id_that_is_already_registered(rig, monkeypatch):
+    """The most expensive failure this layer can have. Every ShutterAction is
+    dispatched to the literal id ``shutter``, so a plugin claiming that id would
+    quietly become the camera: the arm walks the whole set, nothing raises, and
+    the frames are somewhere else — or nowhere."""
+    client, registry, *_ = rig
+    real_shutter = registry.provider("shutter")
+
+    class Impostor(RelayProvider):
+        id = "shutter"
+        label = "不是快门"
+
+    class Entry:
+        name = "impostor"
+
+        def load(self):
+            return Impostor
+
+    monkeypatch.setattr("backend.actions.registry.entry_points", lambda group: [Entry()])
+    registry.discover()
+
+    assert registry.provider("shutter") is real_shutter, "the built-in still owns its id"
+    impostor = next(e for e in client.get("/api/plugins").json() if e["id"] == "impostor")
+    assert impostor["installed"] is False
+    assert "already registered" in impostor["reason"], "refused loudly, never silently"
+
+
+def test_a_provider_that_cannot_describe_its_form_costs_only_itself(rig):
+    """The manifest carries every provider, so an exception escaping one
+    ``fields()`` answered GET /api/plugins with a 500 and took every other
+    accessory off the edit sheet with it."""
+    client, registry, *_ = rig
+
+    class Formless(RelayProvider):
+        id = "formless"
+
+        def fields(self):
+            raise RuntimeError("cannot build my controls")
+
+    registry.register(Formless())
+
+    entries = client.get("/api/plugins").json()
+
+    assert next(e for e in entries if e["id"] == "shutter")["available"] is True
+    formless = next(e for e in entries if e["id"] == "formless")
+    assert formless["available"] is False
+    assert "cannot build my controls" in formless["reason"]
+    assert formless["fields"] == []
+
+
+def test_a_self_test_that_hangs_is_given_up_on_rather_than_waited_out(monkeypatch):
+    """``probe`` is third-party code with a serial port behind it. Called on the
+    calling thread — which it used to be — one that hangs wedges the plugin
+    list, the refresh endpoint and the pre-flight that runs before the arm
+    moves. Same argument as keeping actions off the control loop, one layer up.
+    """
+    monkeypatch.setattr("backend.actions.registry.PROBE_TIMEOUT_S", 0.05)
+    released = threading.Event()
+
+    class Wedged(RelayProvider):
+        id = "wedged"
+
+        def probe(self) -> None:
+            released.wait(10)
+
+    runner = ThreadedRunner()
+    registry = ActionRegistry(runner)
+    try:
+        registry.register(Wedged())
+        started = time.monotonic()
+        status = registry.probe("wedged")
+        waited = time.monotonic() - started
+
+        assert waited < 2.0, "the caller gave up instead of waiting out the provider"
+        assert status.available is False
+        assert "self-test" in (status.reason or "")
+    finally:
+        released.set()
+        runner.close()
+
+
+def test_a_provider_busy_with_an_action_is_not_recorded_as_down(monkeypatch):
+    """A health check that lands mid-action must not overwrite the verdict: a
+    provider that accepted work is reachable, and marking it down would grey out
+    an accessory that is at that moment doing its job."""
+    monkeypatch.setattr("backend.actions.registry.PROBE_TIMEOUT_S", 0.05)
+    holding = threading.Event()
+
+    class Slow(RelayProvider):
+        id = "slow"
+
+        def run(self, params, ctx) -> None:
+            holding.wait(10)
+
+    runner = ThreadedRunner()
+    registry = ActionRegistry(runner)
+    try:
+        registry.register(Slow())
+        assert registry.probe("slow").available is True
+
+        ctx = ActionContext(routine_id="r", routine_name="r", waypoint_index=0, waypoint_note="")
+        job = runner.submit("slow", RelayParams(), ctx, timeout_s=10)
+
+        status = registry.probe("slow")
+        assert status.available is True, "busy is not the same as broken"
+        assert status.reason is None
+    finally:
+        holding.set()
+        job.wait(1)
+        runner.close()
 
 
 # ── caught on write ──────────────────────────────────────────────────────────

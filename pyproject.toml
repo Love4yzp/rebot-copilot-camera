@@ -28,7 +28,16 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
+    # The worked example from docs/PLUGINS.md, installed for real. Packaging
+    # metadata that is only quoted in a document is metadata nobody has run:
+    # with it in the dev environment, `entry_points(group="rebot.actions")`
+    # genuinely returns it, so tests/test_plugin_packaging.py exercises the same
+    # discovery path the service does rather than a stand-in for it.
+    "rebot-plugin-turntable",
 ]
+
+[tool.uv.sources]
+rebot-plugin-turntable = { path = "examples/rebot-plugin-turntable", editable = true }
 
 [build-system]
 requires = ["hatchling"]

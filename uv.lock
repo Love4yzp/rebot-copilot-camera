@@ -721,6 +721,7 @@ dev = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "rebot-plugin-turntable" },
 ]
 
 [package.metadata]
@@ -740,7 +741,19 @@ dev = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "rebot-plugin-turntable", editable = "examples/rebot-plugin-turntable" },
 ]
+
+[[package]]
+name = "rebot-plugin-turntable"
+version = "0.1.0"
+source = { editable = "examples/rebot-plugin-turntable" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
 
 [[package]]
 name = "starlette"

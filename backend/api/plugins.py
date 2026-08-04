@@ -37,6 +37,11 @@ class ProviderField(BaseModel):
 class ProviderInfo(BaseModel):
     id: str
     label: str
+    #: Whether the host actually holds this provider. False for a package that
+    #: failed to load or was refused: it is listed so it does not read as the
+    #: operator's mistake, but nothing can be configured against it, because the
+    #: host has no params model to check what would be stored.
+    installed: bool = True
     available: bool
     reason: str | None = None
     retryable: bool = True

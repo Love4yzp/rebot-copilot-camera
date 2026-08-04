@@ -32,15 +32,12 @@
 
 ### 完整例子
 
-转台,通过串口。四十行,没有第二个文件。
+**[`examples/rebot-plugin-turntable/`](../examples/rebot-plugin-turntable/) 是一个真的包,不是文档里的代码块** —— 它装在开发环境里(`pyproject.toml` 的 `[tool.uv.sources]`),`tests/test_plugin_packaging.py` 通过**真的 `importlib.metadata` 扫描**拿到它。只被引用在散文里的打包元数据是没人跑过的元数据:group 名拼错、工厂要参数、`module:Class` 解析不出来,三种写法都会让插件干脆不出现,而第一个发现的人会是照着这份文档在设备上装的人。
+
+转台,一个文件,串口。骨架:
 
 ```python
 # src/rebot_plugin_turntable/__init__.py
-import os
-from pydantic import BaseModel, Field
-from backend.actions import ActionContext, ActionError, ActionUnavailable, FieldSpec
-
-
 class TurntableParams(BaseModel):
     degrees: float = Field(default=45.0, ge=-180, le=180)
 
@@ -49,42 +46,31 @@ class TurntableProvider:
     id = "turntable"          # 存进 routine JSON。改名会让所有用到它的锚点变孤儿
     label = "转台"             # 界面上显示,可本地化
     params_model = TurntableParams
-    retryable = True          # 失败后重跑安全吗?见下
-
-    def __init__(self) -> None:
-        self._port = os.environ.get("TURNTABLE_PORT", "/dev/rebot-turntable")
+    retryable = False         # 转角是相对的:重跑一次是另一个姿态,不是同一个重试
 
     def fields(self) -> list[FieldSpec]:
-        return [
-            FieldSpec(key="degrees", kind="tiers", label="转角",
-                      values=[15, 30, 45, 90], unit="°", default=45),
-        ]
+        return [FieldSpec(key="degrees", kind="tiers", label="转角",
+                          values=[15, 30, 45, 90], unit="°", default=45)]
 
     def probe(self) -> None:
-        """自检。启动时与刷新时会调 —— 要便宜、无副作用。"""
-        try:
-            self._open().write(b"PING\n")
-        except OSError as exc:
-            raise ActionUnavailable(f"turntable unreachable on {self._port}: {exc}") from exc
+        """自检。启动时与刷新时会调 —— 要便宜、无副作用,且**不能挂死**(见契约表)。"""
+        if not self._exchange("PING").startswith("OK"):
+            raise ActionUnavailable(f"turntable on {self._port} did not answer")
 
     def run(self, params: TurntableParams, ctx: ActionContext) -> None:
-        link = self._open()
-        link.write(f"ROT {params.degrees}\n".encode())
-        reply = link.readline()          # 阻塞。没关系,这里是 worker 线程
-        if not reply.startswith(b"OK"):
+        reply = self._exchange(f"ROT {params.degrees:g}")   # 阻塞。这里是 worker 线程
+        if not reply.startswith("OK"):
             raise ActionError(f"turntable refused: {reply!r}")
         ctx.emit("turntable.rotated", {"degrees": params.degrees})
 ```
 
 ```toml
-# pyproject.toml
-[project]
-name = "rebot-plugin-turntable"
-dependencies = ["pyserial", "pydantic"]
-
+# pyproject.toml —— 让它成为插件的就是这一段
 [project.entry-points."rebot.actions"]
 turntable = "rebot_plugin_turntable:TurntableProvider"
 ```
+
+entry point 指向的东西必须**无参可调**。`TURNTABLE_PORT=sim` 时例子走一个进程内的模拟转台 —— 跟 `SimArm` / `SimShutter` 同一套哲学,插件作者的第一天不该需要那个配件。
 
 装到设备上:
 
@@ -95,7 +81,7 @@ sudo systemctl restart rebot-copilot-camera
 
 完事。**宿主零改动,前端零改动。** 转台出现在 `GET /api/plugins`、出现在锚点编辑面板、可以和快门排先后。
 
-entry point 指向的东西必须**无参可调**(类或工厂函数)。宿主不管插件配置 —— 一管就要为每个插件定义配置 schema,那是没边的;插件自己读环境变量或自己的文件。
+宿主不管插件配置 —— 一管就要为每个插件定义配置 schema,那是没边的;插件自己读环境变量或自己的文件。
 
 ### 无硬件开发循环
 
@@ -120,9 +106,16 @@ uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 | `run()` 挂死不返回 | 到 `timeout_s` 报 `ActionTimeout`(**读侧**判定,Python 杀不掉线程);orphan 线程随它去;**该 provider 停用到线程返回**,其他 provider 不受影响 |
 | 抛了不是 `ActionError` 的异常 | 原样传给 executor,日志带 traceback,照走 `on_failure` |
 | `probe()` 崩 | 标 `available: false` + 原因。**服务照常起来**,插件在 `/api/plugins` 里列着,界面虚线灰显带原因 |
-| import 时就崩 | 同上。一个坏插件不能让整台机器起不来 |
+| `probe()` 挂死 | 跟 `run()` 一样走 worker 线程和读侧超时(`PROBE_TIMEOUT_S`,5 秒)。**自检不跑在请求线程上** —— 否则一个挂死的自检会连带卡住 `/api/plugins`、刷新端点和臂动之前的预检 |
+| `probe()` 期间正在跑动作 | 跳过这次自检,保留上一次结论。接了活的 provider 按定义就是够得着的,不该因为忙而被标成坏 |
+| import 时就崩 | 标 `installed: false` + 原因。一个坏插件不能让整台机器起不来 |
+| 少写了 `id` / `params_model` / 某个方法 | 同上,**注册前就被拒**,原因写给插件作者看。宿主只看属性不调方法 —— 为了决定要不要接受第三方代码而先去跑第三方代码,正是一个拼错的属性变成起不来的服务的路径 |
+| `id` 跟已有的重名 | **拒绝,并出声**。id 是存储的动作指认 provider 的方式,而 executor 把每个 `ShutterAction` 发给字面量 `shutter` —— 顶掉这个 id 的插件会静默变成那台相机 |
+| `fields()` 崩 | 只赔上自己:该 provider `available: false` 带原因,**其余插件照常出现在编辑面板**。manifest 装着所有人,一个异常漏出去就是整张面板空白 |
 | 想拿 `arm` 去动臂 | `ActionContext` 里没有。**拿不到** |
 | 副作用不可重试 | 声明 `retryable = False`,宿主把 retry 降级为 abort 并出声 |
+
+`installed` 与 `available` 是两件事:`installed: false` 是宿主**根本没拿到**这个 provider(加载失败、形状不对、重名被拒),没有 `params_model` 可校验,所以编辑面板不提供添加,但**仍然列出来带原因** —— 消失了操作员会以为是自己配错了。`available: false` 是拿到了但此刻不可用(自检没过),**可以先排班后插配件**,拦在播放前的预检。
 
 **为什么 `ActionContext` 里没有臂**:让错的事**够不到**,而不只是禁止。这和「闩锁不进 executor」是同一个手法 —— 执行器结构上不可能自己决定从急停恢复,插件结构上不可能绕过运动闸门。
 
@@ -155,6 +148,12 @@ uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 1. **写入时** —— `POST/PATCH .../waypoints` 按 provider 的 `params_model` 校验,不合法 400。pydantic 自己做不到,只有 provider 知道形状
 2. **播放前** —— `play` / `goto` 检查 provider 装没装、可用不可用,不合法 400 且**臂一动没动**
 3. **执行时** —— executor 再校验一次。routine 会比写它的那版插件活得久
+
+### 配件掉了又插回来
+
+`available: false` 的行在编辑面板里灰显带原因,旁边有「重新检测配件」—— 打 `POST /api/plugins/probe`,重跑所有自检。没有它,从灰显恢复的唯一办法是重启服务,而那在棚里意味着去找一台终端。自检不动关节不烧帧,所以**不挂运动闸门**。
+
+装了哪些插件不会在页面运行期间变(装包 + 重启),但配件答不答应会变 —— 所以刷新的是健康,不是清单。
 
 ---
 
@@ -239,13 +238,16 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 ```
 backend/actions/
   base.py       ActionProvider Protocol / ActionContext / FieldSpec / 异常
-  runner.py     ThreadedRunner(每 provider 一条 worker)+ InlineRunner(测试用)
-  registry.py   entry_points 发现 + 健康状态 + manifest
+  runner.py     ThreadedRunner(每 provider 一条 worker,action 与 probe 同一条队列)
+                + InlineRunner(测试用)
+  registry.py   entry_points 发现 + check_shape 形状闸门 + 健康状态 + manifest
   validate.py   写入时与播放前的两道校验
   shutter.py    ShutterProvider —— 第一个 provider,包 ShutterDriver
   check.py      插件作者的命令行
 backend/core/events.py   事件名与信封
 backend/api/plugins.py   GET /api/plugins、POST /api/plugins/probe
+examples/rebot-plugin-turntable/   可安装的完整例子(装在开发环境里,被真实发现测试用到)
+tests/test_plugin_packaging.py     唯一走真 entry point 的测试:证明打包元数据本身是对的
 ```
 
 `backend/shutter/` 是**驱动**,不是插件层:`/api/shutter/test` 直接跟它对话检查链路,那和执行一个动作是两个问题。

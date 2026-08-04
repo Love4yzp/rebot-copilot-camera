@@ -178,7 +178,11 @@ def main() -> None:
     shutter, shutter_simulated = create_shutter(force_sim=args.sim)
     app.state.shutter_simulated = shutter_simulated
     app.state.controller.set_shutter(shutter)
-    app.state.plugins.register(ShutterProvider(shutter))
+    # replace=True because the built-in registered at import time is being swapped
+    # for one over the chosen driver. Discovery cannot ask for this: an installed
+    # plugin claiming an id that is taken is refused and listed with the reason,
+    # rather than quietly becoming the camera.
+    app.state.plugins.register(ShutterProvider(shutter), replace=True)
 
     # Third-party providers load here rather than at import time: importing the
     # app is something every test does, and that must not run other people's

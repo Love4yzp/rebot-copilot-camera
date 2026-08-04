@@ -375,6 +375,7 @@ export function handleApi(
       {
         id: "shutter",
         label: "快门",
+        installed: true,
         available: true,
         reason: null,
         retryable: true,
