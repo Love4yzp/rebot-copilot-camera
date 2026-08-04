@@ -137,7 +137,12 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 未确认。
 
-**已知**：固件（`firmware/esp32-shutter/`）和主机侧客户端（`backend/shutter/esp32.py`）都写完了，行协议在内存管道上有 30 个测试覆盖 —— 半行、粘包、二进制噪声、迟到回包、断开重连都测了。缺的只是烧到板子上跑一遍：`cd firmware/esp32-shutter && pio run -t upload`，然后 `POST /api/shutter/test`。
+**已知**：固件（`firmware/esp32-shutter/`）和主机侧客户端（`backend/shutter/esp32.py`）都写完了，行协议在内存管道上有 30 个测试覆盖 —— 半行、粘包、二进制噪声、迟到回包、断开重连都测了。固件**已实测编译通过**（`espressif32@6.11.0` / Arduino core 2.0.17 / `seeed_xiao_esp32s3`，RAM 13.5%、Flash 27.0%）。缺的只是烧到板子上跑一遍：`cd firmware/esp32-shutter && pio run -t upload`，然后 `POST /api/shutter/pair`、`POST /api/shutter/test`。
+
+**编译时踩到的两件事**（细节在 `firmware/esp32-shutter/README.md`）：
+
+- `platform` 必须钉在 6.x 那条线。不钉的话解析到 55.x（Arduino core 3.x），佳能库里两处 `BLEDevice::setEncryptionLevel` 在 core 3.x 已经搬去 `BLESecurity`，编译错误报在库自己的源码里。
+- **`isConnected()` 不能当 `SHOOT` 的闸门。** `CanonBLERemote::init()` 只从 NVS 读回相机地址，不建立连接；真正的连接由 `trigger()` / `focus()` 惰性发起。用 `isConnected()` 挡，等于把唯一能建立连接的调用挡在门外 —— 开机后永远连不上，每帧都回 `ERR camera not connected`。现在挡的是「有没有配对过」。**待实测**：这条是读上游源码推出来的，要在板子上确认「重启 → 直接 `SHOOT` → 第一帧成功但慢几秒」。
 
 ### 其它待确认
 

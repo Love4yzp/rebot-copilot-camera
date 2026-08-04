@@ -39,6 +39,16 @@ static CanonBLERemote camera(REBOT_BLE_NAME);
 static const unsigned long PAIR_SCAN_SECONDS = REBOT_PAIR_SCAN_SECONDS;
 static const size_t MAX_LINE = 96;
 
+// What `getPairedAddressString()` reads back when nothing was ever stored.
+//
+// CanonBLERemote initialises its address to `BLEAddress("")`, and that
+// constructor returns early on any string that is not 17 characters -- without
+// writing the address bytes. They read as zeros only because `camera` below has
+// static storage duration and is therefore zero-initialised before any
+// constructor runs. Keep it a file-scope object: as a local it would inherit
+// whatever was on the stack, and this check would pass on an unpaired board.
+static const char *UNPAIRED = "00:00:00:00:00:00";
+
 static char line[MAX_LINE];
 static size_t lineLength = 0;
 
@@ -75,6 +85,20 @@ static bool parse(const char *input, long *id, const char **command) {
   return true;
 }
 
+// Has a camera ever been paired? This is the question `isConnected()` looks
+// like it answers and does not.
+//
+// `CanonBLERemote::init()` only reads the stored address out of NVS -- it does
+// not connect, and nothing else does either until the first `trigger()` or
+// `focus()`, which connect lazily. So `isConnected()` is false after every boot
+// even with a camera paired, sitting awake, in range. Refusing to shoot on that
+// basis would mean the board never connects at all: the one call that would
+// have connected is the one being refused. On a paired board the first frame
+// after a reset is simply slower than the rest.
+static bool isPaired() {
+  return camera.getPairedAddressString() != UNPAIRED;
+}
+
 static void handle(long id, const char *command) {
   if (strcmp(command, "PING") == 0) {
     // Deliberately does not check the camera. PING answers "is the host-to-
@@ -85,34 +109,69 @@ static void handle(long id, const char *command) {
   }
 
   if (strcmp(command, "STATUS") == 0) {
-    reply(id, "OK", camera.isConnected() ? "connected" : "disconnected");
+    // Three states, not two. `unpaired` needs a human with the camera's menu;
+    // `disconnected` is the ordinary state of a paired board between shoots and
+    // resolves itself on the next frame. Collapsing them sends the operator to
+    // the wrong place.
+    if (!isPaired()) {
+      reply(id, "OK", "unpaired");
+    } else {
+      reply(id, "OK", camera.isConnected() ? "connected" : "disconnected");
+    }
     return;
   }
 
   if (strcmp(command, "PAIR") == 0) {
-    reply(id, camera.pair(PAIR_SCAN_SECONDS) ? "OK" : "ERR",
-          camera.isConnected() ? nullptr : "no camera found in pairing mode");
+    // Into a local first: C++ leaves the order of function arguments
+    // unspecified, so writing the `pair()` call and a `isConnected()` detail as
+    // two arguments of one `reply()` lets the compiler read the connection
+    // state *before* pairing runs. It compiles, it looks symmetrical with the
+    // rest of this function, and the reason reported is whatever was true a
+    // scan earlier.
+    bool paired = camera.pair(PAIR_SCAN_SECONDS);
+    if (paired) {
+      reply(id, "OK", camera.getPairedAddressString().c_str());
+    } else {
+      reply(id, "ERR", "no camera found in pairing mode");
+    }
     return;
   }
 
   if (strcmp(command, "FOCUS") == 0) {
-    if (!camera.isConnected()) {
-      reply(id, "ERR", "camera not connected");
+    if (!isPaired()) {
+      reply(id, "ERR", "no camera paired");
       return;
     }
-    reply(id, camera.focus() ? "OK" : "ERR", "focus rejected by camera");
+    // `focus()` connects first if it has to, so this can block for as long as
+    // the BLE stack's connect timeout (30 s in the Arduino core). The host's
+    // own timeout is shorter and its request ids exist precisely so the late
+    // reply that follows is counted, not mistaken for the next command's.
+    if (camera.focus()) {
+      reply(id, "OK");
+    } else {
+      reply(id, "ERR", "camera unreachable");
+    }
     return;
   }
 
   if (strcmp(command, "SHOOT") == 0) {
-    if (!camera.isConnected()) {
+    if (!isPaired()) {
       // Reported rather than ignored: the arm is mid-routine and the host has
       // to decide whether to abort. Silently dropping this is how a full run
       // ends with nothing on the card.
-      reply(id, "ERR", "camera not connected");
+      reply(id, "ERR", "no camera paired");
       return;
     }
-    reply(id, camera.trigger() ? "OK" : "ERR", "shutter rejected by camera");
+    // False here means the connect attempt failed -- asleep, switched off, out
+    // of range. It never means the camera declined: once the link is up, the
+    // library writes the characteristic and returns true without waiting for
+    // the body to say anything back. So a frame the camera silently dropped
+    // still reports OK, and only the card can settle it.
+    if (camera.trigger()) {
+      reply(id, "OK");
+    } else {
+      reply(id, "ERR", "camera unreachable");
+    }
     return;
   }
 
