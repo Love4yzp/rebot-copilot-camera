@@ -42,6 +42,11 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/shutter/test"): "fires the shutter, moves no joints",
     (
         "POST",
+        "/api/shutter/pair",
+    ): "attaches the camera over BLE, moves no joints; pairing while the arm is "
+    "stopped is exactly when an operator does it",
+    (
+        "POST",
         "/api/plugins/probe",
     ): "self-tests accessories (ping, not shoot); finding out why one is dark "
     "is a reasonable thing to do while the arm is stopped",

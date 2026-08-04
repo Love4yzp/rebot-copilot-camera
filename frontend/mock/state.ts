@@ -86,6 +86,13 @@ export interface MockState {
    * teach, and full-routine playback.
    */
   gotoWaypoint: MockWaypoint | null;
+  /**
+   * The BLE half of the shutter chain: whether the imaginary board holds the
+   * camera. Separate from the USB link, which the preview always has, because
+   * they fail separately on the real machine and only this one decides whether
+   * a frame is taken.
+   */
+  camera: boolean;
 }
 
 /** Pseudo-random 12-hex id, same length as the backend's uuid4().hex[:12]. */
@@ -194,6 +201,9 @@ export function createState(): MockState {
     positions: zeroPose(),
     velocities: zeroPose(),
     mode: "idle",
+    // Paired, so the ordinary preview flow is one step. Set false to walk the
+    // setup path an operator meets on a machine they have never used.
+    camera: true,
     estop: { latched: false, reason: null, source: null, engaged_at: null, freeze_pose: null },
     playback: null,
     routines: seedRoutines(),

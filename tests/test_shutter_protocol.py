@@ -293,6 +293,49 @@ def test_shoot_gets_a_longer_timeout_than_ping():
     assert clock.now - after_ping > after_ping
 
 
+# ── the BLE half ─────────────────────────────────────────────────────────────
+
+
+def test_the_camera_link_is_a_different_question_from_the_board_link():
+    """PING answers for the USB cable and the firmware does not touch the camera
+    for it, on purpose — otherwise a sleeping camera would be indistinguishable
+    from a missing board. So there is a second question, and it has its own
+    command."""
+
+    def responder(line: str) -> bytes:
+        request_id, command = line.split()[0].lstrip("#"), line.split()[1]
+        if command == "STATUS":
+            return f"#{request_id} OK disconnected\n".encode()
+        return f"#{request_id} OK\n".encode()
+
+    shutter, transport, _ = make(responder)
+
+    shutter.ping()  # the board is perfectly fine
+    assert shutter.camera_connected() is False
+    assert b"#2 STATUS\n" in transport.written
+
+
+def test_a_paired_camera_reports_connected():
+    def responder(line: str) -> bytes:
+        return f"#{line.split()[0].lstrip('#')} OK connected\n".encode()
+
+    shutter, _, _ = make(responder)
+
+    assert shutter.camera_connected() is True
+
+
+def test_pairing_waits_far_longer_than_an_ordinary_command():
+    """Thirty seconds is a person working through a camera menu, not a protocol
+    round trip. Timing it like one would abandon the scan before the camera has
+    been put into pairing mode at all."""
+    shutter, _, clock = make(lambda line: b"", timeout_s=1.0)
+
+    with pytest.raises(ShutterTimeout):
+        shutter.pair(timeout_s=30.0)
+
+    assert clock.now >= 30.0
+
+
 from backend.actions import ActionContext  # noqa: E402
 
 _ANY_CONTEXT = ActionContext(

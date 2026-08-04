@@ -62,7 +62,7 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 backend/
   app.py            FastAPI 入口。静态挂载必须在所有路由之后 —— mount("/") 匹配一切
   assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫
-  config.py         只放真正依赖部署的值。限位不在这（从 URDF 读）
+  config.py         只放真正依赖部署的值（含快门串口/波特率）。限位不在这（从 URDF 读）
   agent.py          外部 agent 的独占控制租约（token + 双重 TTL）
 
   arm/
@@ -95,7 +95,7 @@ backend/
     store.py        一 routine 一 JSON，原子写
 
   shutter/
-    base.py         ShutterDriver Protocol + 异常类型
+    base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
     protocol.py     行协议编解码 + LineReader
     esp32.py        串口客户端。单条在途，id 防迟到回包
     sim.py          SimShutter，可脚本化失败

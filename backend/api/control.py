@@ -17,7 +17,7 @@ from ..actions import validate_providers
 from ..core import Broadcaster, Controller, events
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
 from ..safety.kinematics import validate_pose, validate_sequence
-from ..shutter import ShutterError
+from ..shutter import PAIR_TIMEOUT_S, ShutterError
 from .gate import require_arm_available
 
 log = logging.getLogger(__name__)
@@ -310,7 +310,11 @@ async def _stream(websocket: WebSocket, topics: set[str], unwrap: bool = False) 
 
 class ShutterTestResult(BaseModel):
     ok: bool
+    #: The USB link to the board. Says nothing about the camera.
     connected: bool
+    #: The BLE link from the board to the camera — the one that decides whether
+    #: a frame is actually taken. None when the board could not be asked.
+    camera: bool | None = None
     fired: bool
     firmware_version: str | None = None
     error: str | None = None
@@ -325,13 +329,21 @@ def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> 
     BLE link is silent until the arm has walked a whole set with nothing
     landing on the card.
 
+    **Both links are checked.** ``ping`` deliberately answers only for the USB
+    cable — the firmware does not touch the camera for it, so that a sleeping
+    camera stays distinguishable from a missing board. Checking only that would
+    make this endpoint answer green on a machine with nothing paired, which is
+    the failure it exists to catch.
+
     Not behind the motion gate — it moves no joints, and confirming the shutter
     while the arm is safely stopped is a reasonable thing to want.
     """
     shutter = _controller(request).shutter
+    camera: bool | None = None
 
     try:
         shutter.ping()
+        camera = shutter.camera_connected()
         if focus:
             shutter.focus()
         if shoot:
@@ -340,14 +352,66 @@ def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> 
         return ShutterTestResult(
             ok=False,
             connected=shutter.is_connected,
+            camera=camera,
             fired=False,
             firmware_version=getattr(shutter, "firmware_version", None),
             error=str(exc),
         )
 
     return ShutterTestResult(
-        ok=True,
+        ok=bool(camera),
         connected=shutter.is_connected,
+        camera=camera,
         fired=shoot,
         firmware_version=getattr(shutter, "firmware_version", None),
+        error=None if camera else "board is reachable but no camera is paired",
+    )
+
+
+@router.post("/api/shutter/pair", response_model=ShutterTestResult)
+def pair_shutter(request: Request, timeout_s: float = PAIR_TIMEOUT_S) -> ShutterTestResult:
+    """Put the board into BLE pairing mode and wait for the camera.
+
+    The one operation here that needs a person: the camera has to be put into
+    its own pairing mode by hand (**无线通信设置 > 蓝牙功能 > 遥控**), which is
+    why the wait is thirty seconds rather than a few. Without this endpoint the
+    only way to attach a camera was a serial terminal, so a machine whose board
+    had reset — which drops the pairing — could not be recovered from the
+    screen that was reporting the problem.
+
+    Refused while a routine is playing: the driver takes one command at a time,
+    so a pairing scan would stall the frames behind it, and re-pairing mid-shoot
+    is not a thing anyone means to do.
+
+    Not behind the motion gate for the same reason the self-test is not: no
+    joint moves, and this is exactly what an operator does while the arm is
+    stopped.
+    """
+    controller = _controller(request)
+    if controller.is_playing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "cannot pair the camera while a routine is playing"
+        )
+
+    shutter = controller.shutter
+    try:
+        shutter.pair(timeout_s)
+    except ShutterError as exc:
+        return ShutterTestResult(
+            ok=False,
+            connected=shutter.is_connected,
+            camera=False,
+            fired=False,
+            firmware_version=getattr(shutter, "firmware_version", None),
+            error=str(exc),
+        )
+
+    camera = shutter.camera_connected()
+    return ShutterTestResult(
+        ok=camera,
+        connected=shutter.is_connected,
+        camera=camera,
+        fired=False,
+        firmware_version=getattr(shutter, "firmware_version", None),
+        error=None if camera else "pairing finished but the camera is not connected",
     )

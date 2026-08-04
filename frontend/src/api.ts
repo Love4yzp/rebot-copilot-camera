@@ -5,6 +5,7 @@ import type {
   ProviderInfo,
   Routine,
   RoutineSummary,
+  ShutterResult,
 } from "./types";
 
 /** Error carrying the server's structured reason, so the UI can show it. */
@@ -138,7 +139,11 @@ export const api = {
     post<unknown>(`/api/routines/${routineId}/waypoints/${index}/goto`, { source }),
   stopPlayback: () => post<PlaybackState>("/api/playback/stop"),
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
-  testShutter: (shoot: boolean) => post<{ ok: boolean; error: string | null }>(
-    `/api/shutter/test?shoot=${shoot}`,
-  ),
+  testShutter: (shoot: boolean) => post<ShutterResult>(`/api/shutter/test?shoot=${shoot}`),
+  /**
+   * Attach the camera over BLE. Slow — the board scans for thirty seconds
+   * while somebody puts the camera into its own pairing mode — and refused
+   * with a 409 while a routine is playing.
+   */
+  pairShutter: () => post<ShutterResult>("/api/shutter/pair"),
 };

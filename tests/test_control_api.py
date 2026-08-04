@@ -370,12 +370,74 @@ def test_shutter_test_pings_without_burning_a_frame(rig):
     assert r.json() == {
         "ok": True,
         "connected": True,
+        "camera": True,
         "fired": False,
         "firmware_version": None,
         "error": None,
     }
     assert controller.shutter.pings == 1
     assert controller.shutter.shots == 0
+
+
+def test_a_reachable_board_with_no_camera_paired_is_not_a_pass(rig):
+    """The gap this endpoint used to have. `ping` answers for the USB cable and
+    the firmware deliberately does not touch the camera for it, so a board that
+    answers perfectly says nothing about whether a frame will be taken. Reported
+    green, the first anyone would hear of an unpaired camera is a routine
+    failing at the first anchor with the subject already in place."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False)
+
+    body = client.post("/api/shutter/test").json()
+
+    assert body["connected"] is True, "the board itself is fine"
+    assert body["camera"] is False
+    assert body["ok"] is False
+    assert "no camera is paired" in body["error"]
+
+
+def test_pairing_attaches_the_camera_and_says_so(rig):
+    """Without this endpoint the only way to attach a camera was a serial
+    terminal — so a board that reset, which drops its pairing, could not be
+    recovered from the screen that was reporting the problem."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False)
+
+    body = client.post("/api/shutter/pair").json()
+
+    assert body["ok"] is True
+    assert body["camera"] is True
+    assert controller.shutter.pairs == 1
+    assert client.post("/api/shutter/test").json()["ok"] is True
+
+
+def test_pairing_reports_a_camera_that_never_showed_up(rig):
+    """The ordinary way this fails: the camera was never put into its own
+    pairing mode. A 200 with a reason, like the self-test — someone is standing
+    at the machine working a camera menu and needs a sentence, not a stack."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False, pair_fails=True)
+
+    body = client.post("/api/shutter/pair").json()
+
+    assert body["ok"] is False
+    assert body["camera"] is False
+    assert "no camera found" in body["error"]
+
+
+def test_pairing_is_refused_while_a_routine_is_playing(rig):
+    """The driver takes one command at a time, so a thirty-second pairing scan
+    would stall the frames queued behind it."""
+    client, controller, _, _ = rig
+    rid = make_routine(client, 0.2, 0.4)
+    assert client.post(f"/api/routines/{rid}/play").status_code == 200
+    assert controller.is_playing
+
+    r = client.post("/api/shutter/pair")
+
+    assert r.status_code == 409
+    assert "playing" in r.json()["detail"]
+    assert controller.shutter.pairs == 0
 
 
 def test_shutter_test_can_fire_on_request(rig):

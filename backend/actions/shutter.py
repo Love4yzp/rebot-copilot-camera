@@ -18,6 +18,13 @@ from ..shutter.base import ShutterDriver
 from .base import ActionContext, FieldSpec
 
 
+#: The id the built-in shutter is registered under. Stored actions name their
+#: provider by id, and ``ShutterAction`` — which keeps its own concrete type —
+#: is dispatched to this one. Spelled once: a literal in the executor is a
+#: literal that silently stops matching if this ever changes.
+SHUTTER_PROVIDER_ID = "shutter"
+
+
 class ShutterParams(BaseModel):
     """What the anchor edit sheet lets an operator change about a trigger.
 
@@ -30,11 +37,25 @@ class ShutterParams(BaseModel):
     count: int = Field(default=1, ge=1, le=50)
     interval_s: float = Field(default=0.0, ge=0, le=60)
 
+    @classmethod
+    def from_action(cls, action) -> "ShutterParams":
+        """Read the operator-facing half of a stored ``ShutterAction``.
+
+        Lives here rather than in the executor so that the field names of this
+        provider are known in one file. The executor's job is to submit an
+        action, not to know what a shutter's settings are called.
+        """
+        return cls(
+            focus_first=action.focus_first,
+            count=action.count,
+            interval_s=action.interval_s,
+        )
+
 
 class ShutterProvider:
     """Fires one frame per call."""
 
-    id = "shutter"
+    id = SHUTTER_PROVIDER_ID
     label = "快门"
     params_model = ShutterParams
     #: A frame that failed can be taken again — that is what a retry means here.

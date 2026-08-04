@@ -80,7 +80,7 @@ curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
 
 1. Camera menu `Wireless communication settings > Bluetooth` → set to **Remote control** (not "Smartphone"). Pairing fails without this.
 2. Select "Pairing" on the camera; it waits.
-3. In `pio device monitor`, type `#1 PAIR` by hand (see the [firmware README](./firmware/esp32-shutter/README.md)).
+3. Press **配对相机** in the UI (config mode), or `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./firmware/esp32-shutter/README.md)).
 4. The pairing is stored on the board and reconnects automatically on power-up.
 
 Verify the whole chain — **this takes a real photo**:
@@ -89,7 +89,7 @@ Verify the whole chain — **this takes a real photo**:
 curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 ```
 
-Without `?shoot=true` it only sends PING — that proves host↔board, **not that the camera can shoot**.
+Without `?shoot=true` no frame is burned, but both links are still checked: `connected` in the reply is the USB half, `camera` is the BLE half. **Only the second one answers "will a frame actually be taken"** — a board answering perfectly while nothing is paired is this machine's most expensive kind of silent failure.
 
 ### 3 · Teach the anchors
 
@@ -160,6 +160,8 @@ Besides the human button, a watchdog triggers automatically: the control loop pe
 | `REBOT_HOST` | `127.0.0.1` | Listen address. **Setting `0.0.0.0` opens arm control to the whole network — this project has no auth layer** |
 | `REBOT_PORT` | `18790` | Port |
 | `REBOT_ROUTINES_DIR` | `./routines` | Routines directory, one JSON per routine |
+| `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
+| `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
 
 CLI: `--sim` / `--host` / `--port`.
 `manage.sh` additionally reads `REBOT_HOST_SSH` (default `recomputer@r2x`) and `REBOT_REMOTE_DIR`.
@@ -211,7 +213,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
 | Play returns **409** | estop latched, or already playing / teaching | `detail` says which |
 | Arm won't drag | teach not on, or estop latched | with teach on the arm **starts holding** — push it once to release. Design, not stuck |
-| Shutter self-test passes, nothing shot during play | you tested without `?shoot=true` — host↔board only | test the whole chain with `?shoot=true`. Chain problems are usually: camera asleep, Bluetooth not set to "remote control", or the board rebooted and lost pairing |
+| Shutter self-test passes, nothing shot during play | the camera declined or went to sleep — `camera: true` says it was paired when asked, not that it will answer | test the whole chain with `?shoot=true`. Usual causes: camera asleep, Bluetooth not set to "remote control", or the board rebooted and lost its pairing (re-pair with `POST /api/shutter/pair`) |
 | Host receives nothing from the ESP32 at all | `platformio.ini` missing `-D ARDUINO_USB_CDC_ON_BOOT=1` | add it and reflash. Without it `Serial` goes to the UART0 pins: the board enumerates, the port opens, writes succeed — **no error anywhere in the chain** |
 | `/api/logs` is empty | service account not in the `systemd-journal` group | `./manage.sh setup` adds it; log in again after |
 | Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `manage.sh run` both set `LANG=zh_CN.UTF-8` |
@@ -233,7 +235,8 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 | `POST /api/routines/{id}/play` · `POST /api/playback/stop` | Playback. Full pre-flight before play (path + plugin availability) |
 | `POST /api/routines/{id}/waypoints/{i}/goto` | Single anchor: go, settle, run its actions, hold. Accepts `{"source": "..."}` to record who triggered it |
 | `POST /api/teach` | Zero-force teaching toggle |
-| `POST /api/shutter/test` | Shutter self-test. PING by default; `?shoot=true` takes a real shot |
+| `POST /api/shutter/test` | Shutter self-test. Checks both links, USB and BLE; `?shoot=true` takes a real shot |
+| `POST /api/shutter/pair` | Put the board into BLE pairing mode and wait for the camera (30s). 409 while playing |
 | `GET /api/plugins` · `POST /api/plugins/probe` | Which action plugins are installed and usable. The frontend renders trigger forms from this |
 | `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | State and logs |
 | `WS /api/events` | Semantic event stream: arrived / action / estop. For integrators; no 20 Hz joint angles |

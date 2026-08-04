@@ -399,12 +399,33 @@ export function handleApi(
     return handleApi(state, "GET", "/api/plugins", query, body);
   }
 
+  // Two links, reported separately, exactly as the backend does: `connected` is
+  // the USB cable to the board, `camera` is the BLE link on to the camera. The
+  // preview starts paired so the ordinary flow is one step, and pairing is
+  // still a real transition here so the setup path can be walked without a
+  // board — the same reason SimShutter has a camera at all.
   if (pathname === "/api/shutter/test" && method === "POST") {
     const shoot = query.get("shoot") === "true";
     return json(200, {
+      ok: state.camera,
+      connected: true,
+      camera: state.camera,
+      fired: shoot && state.camera,
+      firmware_version: "esp32-mock-1.0.0",
+      error: state.camera ? null : "board is reachable but no camera is paired",
+    });
+  }
+
+  if (pathname === "/api/shutter/pair" && method === "POST") {
+    if (state.mode === "playback") {
+      return json(409, { detail: "cannot pair the camera while a routine is playing" });
+    }
+    state.camera = true;
+    return json(200, {
       ok: true,
       connected: true,
-      fired: shoot,
+      camera: true,
+      fired: false,
       firmware_version: "esp32-mock-1.0.0",
       error: null,
     });

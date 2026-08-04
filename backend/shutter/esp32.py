@@ -16,12 +16,23 @@ import threading
 import time
 from typing import Callable, Protocol
 
-from .base import ShutterError, ShutterNotConnected, ShutterTimeout
-from .protocol import FOCUS, PAIR, PING, SHOOT, STATUS, LineReader, Ready, Response, decode, encode
+from .base import PAIR_TIMEOUT_S, ShutterError, ShutterNotConnected, ShutterTimeout
+from .protocol import (
+    CAMERA_CONNECTED,
+    FOCUS,
+    PAIR,
+    PING,
+    SHOOT,
+    STATUS,
+    LineReader,
+    Ready,
+    Response,
+    decode,
+    encode,
+)
 
 log = logging.getLogger(__name__)
 
-DEFAULT_BAUD = 115_200
 DEFAULT_TIMEOUT_S = 3.0
 #: Shooting can wait on the camera waking up over BLE, so it gets longer.
 SHOOT_TIMEOUT_S = 6.0
@@ -111,15 +122,22 @@ class Esp32Shutter:
     def shoot(self) -> None:
         self._command(SHOOT, timeout_s=SHOOT_TIMEOUT_S)
 
-    # ── extras ───────────────────────────────────────────────────────────────
+    # ── the BLE half ─────────────────────────────────────────────────────────
 
-    def pair(self, timeout_s: float = 30.0) -> None:
+    def pair(self, timeout_s: float = PAIR_TIMEOUT_S) -> None:
         """Put the board into BLE pairing mode. Slow by nature — a human is
         holding a camera and pressing buttons on it."""
         self._command(PAIR, timeout_s=timeout_s)
 
-    def status(self) -> str:
-        return self._command(STATUS).detail
+    def camera_connected(self) -> bool:
+        """Ask the board whether it has the camera.
+
+        A question about the *far* link, and the only one whose answer predicts
+        whether a frame will be taken: ``ping`` deliberately answers about the
+        USB cable, so a board that is perfectly healthy still says nothing about
+        a camera that was never paired.
+        """
+        return self._command(STATUS).detail.strip().lower() == CAMERA_CONNECTED
 
     # ── the exchange ─────────────────────────────────────────────────────────
 

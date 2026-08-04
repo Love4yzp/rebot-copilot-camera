@@ -19,21 +19,15 @@ which surfaces as a failed action and a red self-test rather than as silence.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Callable
 
+from .. import config
 from .base import ShutterDriver
-from .esp32 import DEFAULT_BAUD, Esp32Shutter, Transport
+from .esp32 import Esp32Shutter, Transport
 from .sim import SimShutter
 
 log = logging.getLogger(__name__)
-
-#: udev gives the XIAO board this stable name (deploy/99-rebot-usb.rules).
-#: Both it and the USB2CAN bridge enumerate as generic CDC devices, so raw
-#: /dev/ttyACM* numbering swaps with plug order — pointing the shutter driver
-#: at the CAN bridge is a failure that looks like a dead camera.
-DEFAULT_PORT = "/dev/rebot-shutter"
 
 
 class SerialTransport:
@@ -43,7 +37,8 @@ class SerialTransport:
     that waited here would move the timeout somewhere the driver cannot see.
     """
 
-    def __init__(self, port: str, baud: int = DEFAULT_BAUD) -> None:
+    def __init__(self, port: str, baud: int | None = None) -> None:
+        baud = config.SHUTTER_BAUD if baud is None else baud
         import serial  # imported here so --sim needs no serial stack at all
 
         self._serial = serial.Serial(port=port, baudrate=baud, timeout=0, write_timeout=2)
@@ -77,7 +72,7 @@ def create_shutter(
         log.info("sim mode requested: using SimShutter")
         return SimShutter(), True
 
-    port = port or os.environ.get("REBOT_SHUTTER_PORT", DEFAULT_PORT)
+    port = port or config.SHUTTER_PORT
     log.info("shutter: %s (opened on first command)", port)
     return (
         Esp32Shutter(
@@ -88,4 +83,4 @@ def create_shutter(
     )
 
 
-__all__ = ["DEFAULT_PORT", "SerialTransport", "Transport", "create_shutter"]
+__all__ = ["SerialTransport", "Transport", "create_shutter"]

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { api } from "../api";
 import type { Mode, PlaybackProgress, Routine } from "../types";
 import { useToast } from "./Toasts";
@@ -42,6 +43,7 @@ export function ControlBar({
   onToggleViewer,
 }: Props) {
   const { attempt } = useToast();
+  const [pairing, setPairing] = useState(false);
   const playing = mode === "playback";
   const anchors = routine?.waypoints.length ?? 0;
 
@@ -78,10 +80,32 @@ export function ControlBar({
               const result = await api.testShutter(false);
               if (!result.ok) throw new Error(result.error ?? "快门链路不通");
               return result;
-            }, "快门链路正常")
+            }, "快门链路正常，相机已连接")
           }
         >
           测快门
+        </button>
+      )}
+
+      {config && (
+        // Pairing, not testing: the board keeps its camera across a routine but
+        // loses it whenever it resets, and until this button existed the only
+        // way back was a serial terminal. Disabled during playback because the
+        // board answers one command at a time — the backend refuses it too, but
+        // a button that reports 409 is a button that should not have been lit.
+        <button
+          className="ghost touch-target"
+          disabled={pairing || playing}
+          onClick={() => {
+            setPairing(true);
+            void attempt(async () => {
+              const result = await api.pairShutter();
+              if (!result.ok) throw new Error(result.error ?? "没有找到相机");
+              return result;
+            }, "相机已配对").finally(() => setPairing(false));
+          }}
+        >
+          {pairing ? "配对中…" : "配对相机"}
         </button>
       )}
 

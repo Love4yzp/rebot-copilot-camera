@@ -1,9 +1,16 @@
-from .base import ShutterDriver, ShutterError, ShutterNotConnected, ShutterTimeout
+from .base import (
+    PAIR_TIMEOUT_S,
+    ShutterDriver,
+    ShutterError,
+    ShutterNotConnected,
+    ShutterTimeout,
+)
 from .esp32 import Esp32Shutter, Transport
-from .factory import DEFAULT_PORT, SerialTransport, create_shutter
+from .factory import SerialTransport, create_shutter
 from .sim import SimShutter
 
 __all__ = [
+    "PAIR_TIMEOUT_S",
     "ShutterDriver",
     "ShutterError",
     "ShutterNotConnected",
@@ -12,6 +19,5 @@ __all__ = [
     "Esp32Shutter",
     "SerialTransport",
     "Transport",
-    "DEFAULT_PORT",
     "create_shutter",
 ]

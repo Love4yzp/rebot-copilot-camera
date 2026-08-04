@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
-from ..actions.shutter import ShutterParams
+from ..actions.shutter import SHUTTER_PROVIDER_ID, ShutterParams
 from ..arm.base import ArmDriver
 from . import events
 from ..routines.models import (
@@ -475,12 +475,8 @@ class RoutineExecutor:
         """Turn a stored action into a provider call. Raises on bad params."""
         if isinstance(action, ShutterAction):
             return _Dispatch(
-                provider_id="shutter",
-                params=ShutterParams(
-                    focus_first=action.focus_first,
-                    count=action.count,
-                    interval_s=action.interval_s,
-                ),
+                provider_id=SHUTTER_PROVIDER_ID,
+                params=ShutterParams.from_action(action),
                 repeat=action.count,
                 interval_s=action.interval_s,
             )
@@ -501,7 +497,7 @@ class RoutineExecutor:
         host downgrades the policy to abort rather than guessing, and says so,
         because a silently ignored retry setting is worse than either.
         """
-        provider_id = action.provider if isinstance(action, PluginAction) else "shutter"
+        provider_id = action.provider if isinstance(action, PluginAction) else SHUTTER_PROVIDER_ID
         provider: ActionProvider | None = self._actions.provider(provider_id)
         if provider is None or getattr(provider, "retryable", True):
             return True

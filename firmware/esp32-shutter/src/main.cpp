@@ -19,10 +19,24 @@
 #include <Arduino.h>
 #include <CanonBLERemote.h>
 
-// Shows up in the camera's pairing list.
-static CanonBLERemote camera("rebot-copilot");
+// Deployment-dependent, so they come from platformio.ini rather than from here
+// -- a second machine in the same room needs its own BLE name, and two boards
+// answering to one name means a camera pairs with whichever it noticed first.
+// The defaults keep this file buildable on its own.
+#ifndef REBOT_BLE_NAME
+#define REBOT_BLE_NAME "rebot-copilot"
+#endif
+#ifndef REBOT_PAIR_SCAN_SECONDS
+#define REBOT_PAIR_SCAN_SECONDS 30
+#endif
+#ifndef REBOT_SERIAL_BAUD
+#define REBOT_SERIAL_BAUD 115200
+#endif
 
-static const unsigned long PAIR_SCAN_SECONDS = 30;
+// Shows up in the camera's pairing list.
+static CanonBLERemote camera(REBOT_BLE_NAME);
+
+static const unsigned long PAIR_SCAN_SECONDS = REBOT_PAIR_SCAN_SECONDS;
 static const size_t MAX_LINE = 96;
 
 static char line[MAX_LINE];
@@ -106,7 +120,7 @@ static void handle(long id, const char *command) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(REBOT_SERIAL_BAUD);
 
   // Wait briefly for the host to open the port, but do not block forever --
   // the board must still work when it is powered from a plain USB charger.

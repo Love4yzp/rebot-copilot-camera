@@ -31,6 +31,12 @@ SHOOT = "SHOOT"
 PAIR = "PAIR"
 STATUS = "STATUS"
 
+#: What ``STATUS`` answers when the board holds the camera on BLE. The firmware
+#: prints this word (firmware/esp32-shutter/src/main.cpp); it is spelled once
+#: here rather than compared inline, because the two sides have to agree and a
+#: literal in the driver is a literal nobody diffs against the firmware.
+CAMERA_CONNECTED = "connected"
+
 _RESPONSE = re.compile(r"^#(?P<id>\d+)\s+(?P<status>OK|ERR)(?:\s+(?P<detail>.*))?$")
 _READY = re.compile(r"^READY\s+(?P<version>\S+)\s*$")
 

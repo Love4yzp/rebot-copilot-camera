@@ -80,7 +80,7 @@ curl -s http://127.0.0.1:18790/api/health | grep simulated    # 必须是 false
 
 1. 机身菜单 `无线通信设置 > 蓝牙功能` 设成 **「遥控」**（不是「智能手机」）。不设这个配不上。
 2. 机身选「配对」，进入等待。
-3. `pio device monitor` 里手打 `#1 PAIR`（详见 [固件说明](./firmware/esp32-shutter/README.md)）。
+3. 界面（配置模式）按「配对相机」，或 `curl -X POST http://127.0.0.1:18790/api/shutter/pair`（详见 [固件说明](./firmware/esp32-shutter/README.md)）。
 4. 配对存在板子上，之后上电自动重连。
 
 验证整条链路 —— **会真拍一张**：
@@ -89,7 +89,7 @@ curl -s http://127.0.0.1:18790/api/health | grep simulated    # 必须是 false
 curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 ```
 
-不带 `?shoot=true` 只发 PING，那只证明主机和板子通，**不证明相机能拍**。
+不带 `?shoot=true` 不烧帧，但仍然两段链路一起查：返回里 `connected` 是 USB 那一段，`camera` 是 BLE 那一段。**只有后者能回答「按下去会不会真的拍」** —— 板子好好的而相机根本没配对，是这台机器最贵的那种沉默故障。
 
 ### 3 · 教机位
 
@@ -160,6 +160,8 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `REBOT_HOST` | `127.0.0.1` | 监听地址。**改成 `0.0.0.0` 等于把机械臂控制权开放给整个网络，本项目没有认证层** |
 | `REBOT_PORT` | `18790` | 端口 |
 | `REBOT_ROUTINES_DIR` | `./routines` | 序列目录，一条一个 JSON |
+| `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到 CAN 桥上看起来就是相机坏了）|
+| `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 
 命令行：`--sim` / `--host` / `--port`。
 `manage.sh` 另认 `REBOT_HOST_SSH`（默认 `recomputer@r2x`）、`REBOT_REMOTE_DIR`。
@@ -211,7 +213,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | 按播放返 **400** | 有点位越限 / 自碰撞，或相邻两点之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录点时不拒绝只警告**（臂物理上就在那），检查发生在播放前 |
 | 按播放返 **409** | 急停闩着，或已在播 / 在示教 | `detail` 里写了是哪种 |
 | 臂拖不动 | 没开示教，或急停闩着 | 示教开着时臂**起手是握持的**，推一下才放开 —— 这是设计不是卡住 |
-| 快门自检通过，播放时拍不到 | 不带 `?shoot=true` 只测了主机↔板子 | 用 `?shoot=true` 测整条链路。链路问题一般是相机睡了、蓝牙没设成「遥控」、或板子重启丢了配对 |
+| 快门自检通过，播放时拍不到 | 相机睡了或拒绝了 —— `camera: true` 只说明问的那一刻它连着 | 用 `?shoot=true` 测整条链路。一般是相机睡了、蓝牙没设成「遥控」、或板子重启丢了配对（用 `POST /api/shutter/pair` 重配）|
 | 主机完全收不到 ESP32 任何数据 | `platformio.ini` 少了 `-D ARDUINO_USB_CDC_ON_BOOT=1` | 加上重烧。少了它 `Serial` 走 UART0 引脚，板子照常枚举、端口能开、写入都成功，**全链路无一处报错** |
 | `/api/logs` 是空的 | 服务账号不在 `systemd-journal` 组 | `./manage.sh setup` 会加，加完要重新登录 |
 | journalctl 里中文变 `?` | systemd 默认 `LANG=C` | unit 和 `manage.sh run` 都已设 `LANG=zh_CN.UTF-8` |
@@ -233,7 +235,8 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `POST /api/routines/{id}/play` · `POST /api/playback/stop` | 播放。play 前做整条预检（路径 + 插件可用性）|
 | `POST /api/routines/{id}/waypoints/{i}/goto` | 单锚点：过去、稳定、执行它的动作、保持。可带 `{"source": "..."}` 记录是谁触发的 |
 | `POST /api/teach` | 零力示教开关 |
-| `POST /api/shutter/test` | 快门自检。默认只 ping，`?shoot=true` 才真拍 |
+| `POST /api/shutter/test` | 快门自检。查 USB 与 BLE 两段链路，`?shoot=true` 才真拍 |
+| `POST /api/shutter/pair` | 让板子进入 BLE 配对模式并等相机（30 秒）。播放中返 409 |
 | `GET /api/plugins` · `POST /api/plugins/probe` | 装了哪些动作插件、可不可用。前端据此渲染触发表单 |
 | `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | 状态与日志 |
 | `WS /api/events` | 语义事件流：到位 / 动作 / 急停。给集成方用，不含 20Hz 关节角 |

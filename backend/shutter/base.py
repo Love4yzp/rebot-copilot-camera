@@ -9,11 +9,25 @@ Failures raise rather than returning a status. The executor has to distinguish
 that gets dropped on the floor at a call site. The distinction between a dead
 link and a camera that declined also matters: the first means every remaining
 frame will fail too.
+
+**There are two links, and they fail separately.** The host reaches the board
+over USB; the board reaches the camera over BLE. ``is_connected`` and ``ping``
+answer only for the first — deliberately, because the host has to be able to
+tell a missing board from a sleeping camera. So the BLE half has its own two
+operations: :meth:`ShutterDriver.pair`, which is how a camera gets attached at
+all, and :meth:`ShutterDriver.camera_connected`, which is the only thing that
+answers "will a frame actually be taken". Without them a self-test can report
+a healthy chain while nothing is paired, and the first anyone hears of it is a
+routine failing at the first anchor.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
+
+#: How long the board scans for a camera in pairing mode. Long because a person
+#: is standing there holding the camera and working through its menu.
+PAIR_TIMEOUT_S = 30.0
 
 
 class ShutterError(Exception):
@@ -43,4 +57,22 @@ class ShutterDriver(Protocol):
 
     def shoot(self) -> None:
         """Full-press. Raises rather than silently missing a frame."""
+        ...
+
+    def pair(self, timeout_s: float = PAIR_TIMEOUT_S) -> None:
+        """Put the board into BLE pairing mode and wait for a camera.
+
+        Slow by nature — the camera has to be put into its own pairing mode by
+        hand — and the one operation on this interface that needs a person in
+        front of the machine.
+        """
+        ...
+
+    def camera_connected(self) -> bool:
+        """Whether the board currently has the camera on BLE.
+
+        Separate from :attr:`is_connected`, which is the USB link. Reported
+        rather than raised: "no camera is paired" is a normal state on a machine
+        being set up, not a fault to abort on.
+        """
         ...

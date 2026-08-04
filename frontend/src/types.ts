@@ -145,3 +145,20 @@ export interface ControlState {
 export type SocketMessage =
   | { type: "state"; data: ControlState }
   | { type: "playback"; data: PlaybackProgress };
+
+/**
+ * What the shutter self-test and the pairing endpoint report.
+ *
+ * `connected` is the USB link to the board; `camera` is the BLE link from the
+ * board to the camera. They fail separately, and only the second one predicts
+ * whether a frame will actually be taken — a board answering perfectly while
+ * nothing is paired is the case this pair of fields exists to make visible.
+ */
+export interface ShutterResult {
+  ok: boolean;
+  connected: boolean;
+  camera: boolean | null;
+  fired: boolean;
+  firmware_version: string | null;
+  error: string | null;
+}

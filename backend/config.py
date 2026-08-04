@@ -19,3 +19,10 @@ ROUTINES_DIR = Path(os.environ.get("REBOT_ROUTINES_DIR", REPO_ROOT / "routines")
 #: Localhost only. Remote access goes through an SSH tunnel, as before.
 HOST = os.environ.get("REBOT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("REBOT_PORT", "18790"))
+
+#: The shutter board. udev gives the XIAO this stable name
+#: (deploy/99-rebot-usb.rules): it and the USB2CAN bridge are both generic CDC
+#: devices, so raw /dev/ttyACM* numbering swaps with plug order, and a shutter
+#: driver pointed at the CAN bridge looks exactly like a dead camera.
+SHUTTER_PORT = os.environ.get("REBOT_SHUTTER_PORT", "/dev/rebot-shutter")
+SHUTTER_BAUD = int(os.environ.get("REBOT_SHUTTER_BAUD", "115200"))
