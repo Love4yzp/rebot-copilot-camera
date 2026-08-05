@@ -384,9 +384,14 @@ def test_a_reachable_board_with_no_camera_paired_is_not_a_pass(rig):
     the firmware deliberately does not touch the camera for it, so a board that
     answers perfectly says nothing about whether a frame will be taken. Reported
     green, the first anyone would hear of an unpaired camera is a routine
-    failing at the first anchor with the subject already in place."""
+    failing at the first anchor with the subject already in place.
+
+    With the three-state fix, the endpoint now distinguishes "never paired"
+    (needs a human with the menu) from "paired but sleeping" (resolves on the
+    next frame). This test covers the former.
+    """
     client, controller, _, _ = rig
-    controller.shutter.set_camera_connected(False)
+    controller.shutter.set_paired(False)
 
     body = client.post("/api/shutter/test").json()
 
@@ -394,6 +399,38 @@ def test_a_reachable_board_with_no_camera_paired_is_not_a_pass(rig):
     assert body["camera"] is False
     assert body["ok"] is False
     assert "no camera is paired" in body["error"]
+
+
+def test_self_test_reconnects_a_sleeping_camera(rig):
+    """A camera that is paired but not connected (sleeping, just booted) should
+    resolve itself when the self-test sends a `FOCUS` -- no frame burned, just
+    a lazy BLE connect. The endpoint should report green without the operator
+    having to know about the distinction."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False)  # paired, but BLE down
+
+    body = client.post("/api/shutter/test").json()
+
+    assert body["connected"] is True
+    assert body["camera"] is True
+    assert body["ok"] is True
+    assert body["error"] is None
+    assert controller.shutter.focuses == 1, "FOCUS was sent to force the BLE connect"
+
+
+def test_self_test_reports_camera_unreachable(rig):
+    """A camera that is paired but unreachable (powered off, out of range) is
+    distinct from one that was never paired. The FOCUS itself fails, and the
+    endpoint reports red with the right explanation."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False, unreachable=True)
+
+    body = client.post("/api/shutter/test").json()
+
+    assert body["connected"] is True
+    assert body["camera"] is None  # could not be determined
+    assert body["ok"] is False
+    assert "camera unreachable" in body["error"]
 
 
 def test_pairing_attaches_the_camera_and_says_so(rig):

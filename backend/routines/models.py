@@ -164,7 +164,7 @@ class RoutineSummary(BaseModel):
     created_at: float
     updated_at: float
     waypoint_count: int
-    shutter_count: int
+    action_count: int
 
     @classmethod
     def of(cls, routine: Routine) -> "RoutineSummary":
@@ -174,7 +174,7 @@ class RoutineSummary(BaseModel):
             created_at=routine.created_at,
             updated_at=routine.updated_at,
             waypoint_count=len(routine.waypoints),
-            shutter_count=sum(
-                1 for w in routine.waypoints for a in w.actions if isinstance(a, ShutterAction)
+            action_count=sum(
+                len(w.actions) for w in routine.waypoints
             ),
         )

@@ -132,7 +132,7 @@ export function toSummary(routine: MockRoutine): {
   created_at: number;
   updated_at: number;
   waypoint_count: number;
-  shutter_count: number;
+  action_count: number;
 } {
   return {
     id: routine.id,
@@ -140,8 +140,8 @@ export function toSummary(routine: MockRoutine): {
     created_at: routine.created_at,
     updated_at: routine.updated_at,
     waypoint_count: routine.waypoints.length,
-    shutter_count: routine.waypoints.reduce(
-      (n, w) => n + w.actions.filter((a) => a.type === "shutter").length,
+    action_count: routine.waypoints.reduce(
+      (n, w) => n + w.actions.length,
       0,
     ),
   };

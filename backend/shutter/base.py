@@ -29,6 +29,13 @@ from typing import Protocol, runtime_checkable
 #: is standing there holding the camera and working through its menu.
 PAIR_TIMEOUT_S = 30.0
 
+#: Camera status strings, matching the firmware's ``STATUS`` response.
+#: Keeping them literals here rather than on the driver so the constants are
+#: importable by the self-test endpoint without depending on the protocol layer.
+CAMERA_STATUS_UNPAIRED = "unpaired"
+CAMERA_STATUS_DISCONNECTED = "disconnected"
+CAMERA_STATUS_CONNECTED = "connected"
+
 
 class ShutterError(Exception):
     """The shutter did not do what was asked."""
@@ -74,5 +81,15 @@ class ShutterDriver(Protocol):
         Separate from :attr:`is_connected`, which is the USB link. Reported
         rather than raised: "no camera is paired" is a normal state on a machine
         being set up, not a fault to abort on.
+        """
+        ...
+
+    def camera_status(self) -> str:
+        """Three-state answer: connected / disconnected / unpaired.
+
+        The self-test needs this to distinguish a camera that was never paired
+        (needs a human with the menu) from one that is just sleeping (resolves
+        itself on the next frame). Returns one of the ``CAMERA_STATUS_*``
+        constants.
         """
         ...

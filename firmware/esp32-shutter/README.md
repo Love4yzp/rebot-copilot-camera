@@ -69,7 +69,7 @@ mv esp32-2.0.17 ~/.platformio/packages/framework-arduinoespressif32@3.20017.0
 
 - **`-D ARDUINO_USB_CDC_ON_BOOT=1` 不能少。** 没有它，`Serial` 走 UART0 的物理引脚而不是原生 USB 口。板子会枚举、主机能打开端口、每次写入都成功 —— 然后什么都收不到，整条链路上**没有任何一处报错**。这是最贵的调试。
 - **`PING` 通不代表能拍。** 它只证明主机和板子之间通，相机可能睡着或没配对。`/api/shutter/test` 因此在 `PING` 之后还发一条 `STATUS`，两段链路分开报 —— 只查 `PING` 的自检会在什么都没配对的机器上报绿，而那正是它要抓的故障。
-- **刚重启的板子做自检会报红，但那不是故障。** 板子惰性建链，所以配好的相机在第一帧之前 `STATUS` 就是 `disconnected`，`/api/shutter/test` 现在把它和「没配对」一样算作 `ok: false`，文案还写着「没配对相机」—— 事实上只要拍一帧就好了。主机侧要修的话，办法是自检在读到 `disconnected` 时补发一条 `FOCUS`（半按不烧帧，但会强制建链）再复读 `STATUS`；`unpaired` 则直接判红。这需要 `SimShutter` 也分清「配对过」和「连着」，所以没有顺手改。
+- **刚重启的板子做自检在 `disconnected` 分支不再报红。** 板子惰性建链，所以配好的相机在第一帧之前 `STATUS` 就是 `disconnected`。主机侧 `/api/shutter/test` 现在读到 `disconnected` 会补发一条 `FOCUS`（半按不烧帧，强制建链）再复读 `STATUS`；`unpaired` 才直接判红。这需要 `SimShutter` 也分清「配对过」和「连着」，所以没有顺手改 —— 现在改了。
 - **同一个房间放两台机器，BLE 名字要改。** `platformio.ini` 的 `-D REBOT_BLE_NAME`（还有 `-D REBOT_PAIR_SCAN_SECONDS`、`-D REBOT_SERIAL_BAUD`）—— 两块板子叫同一个名字，相机会跟先看见的那块配上。波特率跟后端的 `REBOT_SHUTTER_BAUD` 必须一致，这一侧读不到环境变量，所以写在编译期。
 - **佳能机身睡眠后重连要几秒。** 所以 `SHOOT` 的超时比 `PING` 长（6s vs 3s）。
 - **超长的行整条丢弃**，不做截断处理 —— 截断后的命令可能正好解析成另一条合法命令。

@@ -17,7 +17,12 @@ from ..actions import validate_providers
 from ..core import Broadcaster, Controller, events
 from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
 from ..safety.kinematics import validate_pose, validate_sequence
-from ..shutter import PAIR_TIMEOUT_S, ShutterError
+from ..shutter import (
+    CAMERA_STATUS_DISCONNECTED,
+    CAMERA_STATUS_UNPAIRED,
+    PAIR_TIMEOUT_S,
+    ShutterError,
+)
 from .gate import require_arm_available
 
 log = logging.getLogger(__name__)
@@ -335,6 +340,13 @@ def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> 
     make this endpoint answer green on a machine with nothing paired, which is
     the failure it exists to catch.
 
+    **Three states, not two.** A camera that was never paired needs a human
+    with the camera's Bluetooth menu; one that is paired but disconnected
+    (sleeping, just booted) resolves itself when the next frame tries to fire.
+    The endpoint sends a ``FOCUS`` (half-press, no frame burned) to force a
+    lazy BLE connect when it sees ``disconnected``, so the only case that
+    reports red is genuinely unreachable.
+
     Not behind the motion gate — it moves no joints, and confirming the shutter
     while the arm is safely stopped is a reasonable thing to want.
     """
@@ -343,7 +355,19 @@ def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> 
 
     try:
         shutter.ping()
-        camera = shutter.camera_connected()
+        status = shutter.camera_status()
+
+        if status == CAMERA_STATUS_UNPAIRED:
+            camera = False
+        elif status == CAMERA_STATUS_DISCONNECTED:
+            # Force a lazy BLE connect. No frame is burned — the camera only
+            # fires on SHOOT, and FOCUS is a half-press the firmware handles
+            # without telling the camera to take a picture.
+            shutter.focus()
+            camera = shutter.camera_connected()
+        else:
+            camera = True
+
         if focus:
             shutter.focus()
         if shoot:
@@ -364,7 +388,7 @@ def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> 
         camera=camera,
         fired=shoot,
         firmware_version=getattr(shutter, "firmware_version", None),
-        error=None if camera else "board is reachable but no camera is paired",
+        error=None if camera else "no camera is paired — pair from the settings",
     )
 
 

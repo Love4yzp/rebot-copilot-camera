@@ -16,9 +16,14 @@ import threading
 import time
 from typing import Callable, Protocol
 
-from .base import PAIR_TIMEOUT_S, ShutterError, ShutterNotConnected, ShutterTimeout
+from .base import (
+    CAMERA_STATUS_CONNECTED,
+    PAIR_TIMEOUT_S,
+    ShutterError,
+    ShutterNotConnected,
+    ShutterTimeout,
+)
 from .protocol import (
-    CAMERA_CONNECTED,
     FOCUS,
     PAIR,
     PING,
@@ -137,7 +142,12 @@ class Esp32Shutter:
         USB cable, so a board that is perfectly healthy still says nothing about
         a camera that was never paired.
         """
-        return self._command(STATUS).detail.strip().lower() == CAMERA_CONNECTED
+        return self.camera_status() == CAMERA_STATUS_CONNECTED
+
+    def camera_status(self) -> str:
+        """Three-state answer from the firmware: ``connected``, ``disconnected``
+        or ``unpaired``."""
+        return self._command(STATUS).detail.strip().lower()
 
     # ── the exchange ─────────────────────────────────────────────────────────
 

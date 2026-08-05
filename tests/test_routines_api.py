@@ -175,13 +175,13 @@ def test_editing_is_allowed_while_the_stop_is_engaged(client: TestClient, rid: s
         client.post("/api/estop/clear")
 
 
-def test_summary_reports_waypoint_and_shutter_counts(client: TestClient, rid: str):
+def test_summary_reports_waypoint_and_action_counts(client: TestClient, rid: str):
     add(client, rid, 0.1, actions=[{"type": "shutter"}])
     add(client, rid, 0.2)
 
     summary = client.get("/api/routines").json()[0]
     assert summary["waypoint_count"] == 2
-    assert summary["shutter_count"] == 1
+    assert summary["action_count"] == 1
 
 
 # ── safety validation ────────────────────────────────────────────────────────

@@ -97,7 +97,7 @@ export interface RoutineSummary {
   created_at: number;
   updated_at: number;
   waypoint_count: number;
-  shutter_count: number;
+  action_count: number;
 }
 
 export interface EstopState {

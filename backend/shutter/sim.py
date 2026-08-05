@@ -15,23 +15,41 @@ import threading
 from collections import deque
 from typing import Iterable
 
-from .base import PAIR_TIMEOUT_S, ShutterError, ShutterNotConnected, ShutterTimeout
+from .base import (
+    CAMERA_STATUS_CONNECTED,
+    CAMERA_STATUS_DISCONNECTED,
+    CAMERA_STATUS_UNPAIRED,
+    PAIR_TIMEOUT_S,
+    ShutterError,
+    ShutterNotConnected,
+    ShutterTimeout,
+)
 
 log = logging.getLogger(__name__)
 
 
 class SimShutter:
-    """In-memory shutter implementing :class:`~backend.shutter.base.ShutterDriver`."""
+    """In-memory shutter implementing :class:`~backend.shutter.base.ShutterDriver`.
 
-    def __init__(self, connected: bool = True, camera: bool = True) -> None:
+    Three knobs separate ``paired`` (has a camera ever been stored) from
+    ``connected`` (the BLE link is up right now) from ``connected`` (the USB
+    link is up). The firmware's STATUS returns three states, and the self-test
+    needs to distinguish them: "unpaired" means a human with the camera's menu,
+    "disconnected" resolves itself on the next frame.
+    """
+
+    def __init__(self, connected: bool = True, paired: bool = True, camera: bool = True) -> None:
         self._lock = threading.RLock()
         self._connected = connected
-        #: The BLE half. Starts attached so the ordinary development loop is
-        #: one step, and can be turned off to walk the setup flow: an operator
-        #: meeting this machine for the first time has no camera paired, and
-        #: that path needs to be reachable without a board and a Canon body.
+        #: Has a camera ever been paired? Persists across reboots on the real
+        #: board (NVS); on the sim it is set by :meth:`pair`.
+        self._paired = paired
+        #: The BLE link is currently up. Stays False on a freshly booted board
+        #: even with a camera paired, because nothing connects until the first
+        #: ``FOCUS`` or ``SHOOT`` does it lazily.
         self._camera = camera
         self._pair_fails = False
+        self._unreachable = False
         #: Scripted outcomes, consumed one per shoot(). None means success.
         self._scripted: deque[ShutterError | None] = deque()
         self.shots = 0
@@ -53,13 +71,23 @@ class SimShutter:
 
     def focus(self) -> None:
         with self._lock:
-            self._require_camera()
+            self._require_link()
+            self._require_paired()
+            if self._unreachable:
+                raise ShutterError("camera unreachable")
+            if not self._camera:
+                self._camera = True  # lazy BLE connect
             self.focuses += 1
             log.debug("sim shutter: focus (%d)", self.focuses)
 
     def shoot(self) -> None:
         with self._lock:
-            self._require_camera()
+            self._require_link()
+            self._require_paired()
+            if self._unreachable:
+                raise ShutterError("camera unreachable")
+            if not self._camera:
+                self._camera = True  # lazy BLE connect
             outcome = self._scripted.popleft() if self._scripted else None
             if outcome is not None:
                 log.debug("sim shutter: scripted failure %r", outcome)
@@ -76,12 +104,22 @@ class SimShutter:
             self._require_link()
             if self._pair_fails:
                 raise ShutterTimeout("no camera found in pairing mode")
+            self._paired = True
             self._camera = True
+            self._unreachable = False
             log.debug("sim shutter: paired (%d)", self.pairs)
 
     def camera_connected(self) -> bool:
         with self._lock:
-            return self._connected and self._camera
+            return self._connected and self._paired and self._camera
+
+    def camera_status(self) -> str:
+        with self._lock:
+            if not self._paired:
+                return CAMERA_STATUS_UNPAIRED
+            if not self._camera:
+                return CAMERA_STATUS_DISCONNECTED
+            return CAMERA_STATUS_CONNECTED
 
     # ── simulation control ───────────────────────────────────────────────────
 
@@ -89,16 +127,28 @@ class SimShutter:
         with self._lock:
             self._connected = connected
 
-    def set_camera_connected(self, camera: bool, pair_fails: bool = False) -> None:
-        """Detach or attach the camera, and optionally make pairing fail.
+    def set_camera_connected(self, camera: bool, pair_fails: bool = False, unreachable: bool = False) -> None:
+        """Detach or attach the camera BLE link, and set failure modes.
 
-        Two knobs rather than one because they are two situations: a camera that
-        went to sleep still pairs again, while a camera that is not in pairing
-        mode does not.
+        Three knobs rather than one because they model three situations: a camera
+        that went to sleep still pairs again (``camera=False``), a camera not in
+        pairing mode does not (``pair_fails=True``), and a camera that is paired
+        but cannot be reached (e.g. powered off) is a third (``unreachable=True``).
         """
         with self._lock:
             self._camera = camera
             self._pair_fails = pair_fails
+            self._unreachable = unreachable
+
+    def set_paired(self, paired: bool) -> None:
+        """Set whether a camera has ever been paired.
+
+        ``False`` means the board has no stored address, and a human must go
+        through the camera's Bluetooth menu. On the real board this is what the
+        ``READY`` banner conveys: the board reset and its NVS pairing is gone.
+        """
+        with self._lock:
+            self._paired = paired
 
     def script(self, outcomes: Iterable[ShutterError | None]) -> None:
         """Queue outcomes for the next ``shoot()`` calls, oldest first.
@@ -114,14 +164,6 @@ class SimShutter:
         if not self._connected:
             raise ShutterNotConnected("no link to the ESP32 shutter")
 
-    def _require_camera(self) -> None:
-        """Both links, in the order the real chain fails in.
-
-        The firmware answers ``ERR camera not connected`` rather than dropping
-        the frame, so the simulator raises here for the same reason: an unpaired
-        camera has to be a loud failure, never a silent no-op that leaves a
-        routine reporting frames it never took.
-        """
-        self._require_link()
-        if not self._camera:
-            raise ShutterError("camera not connected")
+    def _require_paired(self) -> None:
+        if not self._paired:
+            raise ShutterError("no camera paired")

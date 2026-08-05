@@ -72,7 +72,7 @@ def test_unknown_action_type_is_rejected():
         Routine.model_validate(payload)
 
 
-def test_summary_counts_shutters_across_waypoints():
+def test_summary_counts_actions_across_waypoints():
     from backend.routines import RoutineSummary
 
     routine = Routine(
@@ -85,7 +85,7 @@ def test_summary_counts_shutters_across_waypoints():
     )
     summary = RoutineSummary.of(routine)
     assert summary.waypoint_count == 3
-    assert summary.shutter_count == 2
+    assert summary.action_count == 3
 
 
 # ── store ────────────────────────────────────────────────────────────────────

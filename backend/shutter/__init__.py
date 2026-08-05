@@ -1,4 +1,7 @@
 from .base import (
+    CAMERA_STATUS_CONNECTED,
+    CAMERA_STATUS_DISCONNECTED,
+    CAMERA_STATUS_UNPAIRED,
     PAIR_TIMEOUT_S,
     ShutterDriver,
     ShutterError,
@@ -10,6 +13,9 @@ from .factory import SerialTransport, create_shutter
 from .sim import SimShutter
 
 __all__ = [
+    "CAMERA_STATUS_CONNECTED",
+    "CAMERA_STATUS_DISCONNECTED",
+    "CAMERA_STATUS_UNPAIRED",
     "PAIR_TIMEOUT_S",
     "ShutterDriver",
     "ShutterError",
