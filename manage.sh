@@ -66,18 +66,25 @@ cmd_push() {
 	"$HERE/start.sh" build
 
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
-	# --delete keeps the remote clean, but routines/ is operator data that only
-	# exists on the device and must never be deleted by a deploy. Patterns
-	# without a leading / match at any depth, so '/routines/' is anchored —
-	# otherwise backend/routines/ (a Python package) would be excluded too.
+	# --delete keeps the remote clean, but the data directories are operator
+	# work that only exists on the device and must never be deleted by a deploy.
+	# routines/ is the v1 migration source — kept as the backup. Patterns
+	# without a leading / match at any depth, so each is anchored — otherwise
+	# backend/routines/ (a Python package) would be excluded too.
 	rsync -az --delete \
 		--exclude '.git/' \
 		--exclude '.venv/' \
 		--exclude 'node_modules/' \
 		--exclude '__pycache__/' \
 		--exclude '/routines/' \
+		--exclude '/poses/' \
+		--exclude '/sequences/' \
+		--exclude '/templates/' \
 		--exclude '.pio/' \
 		--filter 'protect /routines/' \
+		--filter 'protect /poses/' \
+		--filter 'protect /sequences/' \
+		--filter 'protect /templates/' \
 		"$HERE/" "$HOST:$REMOTE_DIR/"
 
 	step "[r2x] 同步 vendored 臂层"

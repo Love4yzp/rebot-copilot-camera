@@ -24,10 +24,10 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, assets, config
 from .agent import AgentLease
 from .actions import ActionRegistry, ShutterProvider, ThreadedRunner
-from .api import agent, control, estop, logs, plugins, routines
+from .api import agent, control, estop, logs, plugins, poses, sequences, templates
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
-from .routines import RoutineStore
+from .sequences import PoseStore, SequenceStore, TemplateStore, maybe_migrate
 from .safety import SafetyLatch, Watchdog
 from .safety.kinematics import arm_model
 from .shutter import SimShutter, create_shutter
@@ -77,7 +77,9 @@ app = FastAPI(
 #: One latch for the whole process. The control loop reads it every tick and
 #: the API gates on it, so it must be a single shared instance.
 app.state.latch = SafetyLatch()
-app.state.routine_store = RoutineStore(config.ROUTINES_DIR)
+app.state.pose_store = PoseStore(config.POSES_DIR)
+app.state.sequence_store = SequenceStore(config.SEQUENCES_DIR)
+app.state.template_store = TemplateStore(config.TEMPLATES_DIR)
 app.state.broadcaster = Broadcaster()
 app.state.agent_lease = AgentLease()
 
@@ -106,7 +108,9 @@ app.state.controller = Controller(
 )
 
 app.include_router(estop.router)
-app.include_router(routines.router)
+app.include_router(poses.router)
+app.include_router(sequences.router)
+app.include_router(templates.router)
 app.include_router(control.router)
 app.include_router(agent.router)
 app.include_router(logs.router)
@@ -195,6 +199,15 @@ def main() -> None:
         log.info(
             "action %r: %s", status.id, "ok" if status.available else f"DOWN — {status.reason}"
         )
+
+    # Migrate v1 routines before serving: only when the v2 library is empty
+    # and v1 data exists. Originals are left in routines/ as the backup.
+    maybe_migrate(
+        config.ROUTINES_DIR,
+        config.SEQUENCES_DIR,
+        app.state.pose_store,
+        app.state.sequence_store,
+    )
 
     import uvicorn
 

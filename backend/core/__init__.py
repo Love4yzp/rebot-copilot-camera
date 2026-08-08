@@ -1,7 +1,7 @@
 from . import events
 from .broadcaster import Broadcaster, Subscription
 from .controller import Controller
-from .executor import Phase, Progress, RoutineExecutor
+from .executor import Phase, Progress, SequenceExecutor
 
 __all__ = [
     "Broadcaster",
@@ -9,6 +9,6 @@ __all__ = [
     "Controller",
     "Phase",
     "Progress",
-    "RoutineExecutor",
+    "SequenceExecutor",
     "events",
 ]

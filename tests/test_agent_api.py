@@ -10,7 +10,7 @@ from backend.agent import AgentLease
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
-from backend.routines import RoutineStore
+from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import SafetyLatch
 from backend.shutter import SimShutter
 
@@ -35,7 +35,9 @@ def rig(tmp_path: Path):
     arm.connect()
 
     app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.pose_store = PoseStore(tmp_path / "poses")
+    app.state.sequence_store = SequenceStore(tmp_path / "sequences")
+    app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
     app.state.agent_lease = AgentLease(clock=clock)
     shutter = SimShutter()
@@ -216,18 +218,22 @@ def test_an_agent_is_refused_while_the_stop_is_engaged(client: TestClient):
     assert r.json()["detail"]["error"] == "estop_latched"
 
 
-def test_an_agent_can_play_a_stored_routine(client: TestClient):
-    rid = client.post("/api/routines", json={"name": "agent shoot"}).json()["id"]
-    client.post(f"/api/routines/{rid}/waypoints", json={"joints": {"joint1": 0.2}})
+def test_an_agent_can_execute_a_stored_sequence(client: TestClient):
+    pid = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "agent shoot"}).json()["id"]
+    client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pid, "duration_s": 1.0, "markers": []}]})
 
     token = take(client)
-    r = client.post(f"/api/agent/control/play/{rid}", headers=head(token))
+    r = client.post(f"/api/agent/control/play/{sid}", headers=head(token))
 
     assert r.status_code == 200
+    assert r.json() == {"ok": True, "blocks": 1}
     assert client.get("/api/control").json()["mode"] == "playback"
 
 
-def test_playing_an_unknown_routine_is_404(client: TestClient):
+def test_executing_an_unknown_sequence_is_404(client: TestClient):
     token = take(client)
     assert client.post("/api/agent/control/play/nope", headers=head(token)).status_code == 404
 

@@ -15,7 +15,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..agent import AgentLease, LeaseInfo
-from ..routines import RoutineNotFound, RoutineStore
+from ..actions import validate_providers
+from ..sequences import (
+    HoldBlock,
+    Pose,
+    PoseNotFound,
+    SequenceNotFound,
+    SequenceStore,
+)
 from ..safety.kinematics import validate_pose, validate_sequence
 from .gate import require_arm_available
 
@@ -33,8 +40,8 @@ def _lease(request: Request) -> AgentLease:
     return request.app.state.agent_lease
 
 
-def _store(request: Request) -> RoutineStore:
-    return request.app.state.routine_store
+def _store(request: Request) -> SequenceStore:
+    return request.app.state.sequence_store
 
 
 def require_lease(
@@ -168,29 +175,63 @@ def command_joints(body: JointCommand, request: Request) -> dict:
     "/control/play/{rid}",
     dependencies=[Depends(require_arm_available), Depends(require_lease)],
 )
-def play_routine(rid: str, request: Request) -> dict:
-    """Play a stored routine, shutter actions included."""
+def play_sequence(rid: str, request: Request) -> dict:
+    """Execute a stored sequence by id.
+
+    The sequence is the block/marker model: holds at library poses, transitions
+    between them, and event markers (camera shutter, waits, plugin actions)
+    pinned inside the blocks. Execution walks the blocks in order; a failed
+    marker aborts the run.
+
+    Rejected with 404 if the sequence does not exist, 400 if it has no blocks,
+    references poses that are gone, fails the joint-limit/self-collision
+    pre-flight, or names a provider that is not installed and healthy — nothing
+    moves in any of those cases. 409 while another run is in flight.
+    """
     controller = request.app.state.controller
 
     try:
-        routine = _store(request).get(rid)
-    except RoutineNotFound:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no routine {rid!r}") from None
+        sequence = _store(request).get(rid)
+    except SequenceNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no sequence {rid!r}") from None
 
-    if not routine.waypoints:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "routine has no waypoints")
+    if not sequence.blocks:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "sequence has no blocks")
 
-    unsafe = validate_sequence([w.joints for w in routine.waypoints])
-    if unsafe:
+    pose_store = request.app.state.pose_store
+    poses: dict[str, Pose] = {}
+    missing: list[str] = []
+    for index, block in enumerate(sequence.blocks):
+        if not isinstance(block, HoldBlock):
+            continue
+        try:
+            poses[block.pose_id] = pose_store.get(block.pose_id)
+        except PoseNotFound:
+            missing.append(f"block {index}: no pose {block.pose_id!r}")
+    if missing:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_routine", "reasons": unsafe}
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_poses", "reasons": missing}
         )
 
+    joints_in_order = [poses[b.pose_id].joints for b in sequence.blocks if isinstance(b, HoldBlock)]
+    unsafe = validate_sequence(joints_in_order)
+    if unsafe:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": unsafe}
+        )
+
+    unavailable = validate_providers(sequence.blocks, request.app.state.plugins)
+    if unavailable:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": unavailable}
+        )
+
+    owner = _lease(request).info().owner or "agent"
     try:
-        controller.play(routine)
+        controller.play(sequence, poses, source=owner)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return {"ok": True, "waypoints": len(routine.waypoints)}
+    return {"ok": True, "blocks": len(sequence.blocks)}
 
 
 @router.post("/control/stop", dependencies=[Depends(require_lease)])

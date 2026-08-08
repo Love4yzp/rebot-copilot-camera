@@ -19,7 +19,7 @@ existing back-pressure-free queues. A slow subscriber loses messages rather
 than stalling the control thread — a loop that stops because something stopped
 reading is a loop that stops holding the arm up.
 
-**Emitted where the fact is known.** Routine and action events come from the
+**Emitted where the fact is known.** Sequence and action events come from the
 executor, which knows what it decided; stop events come from the control loop,
 which sees the latch. Drivers report success or failure and nothing else.
 """
@@ -30,14 +30,14 @@ from __future__ import annotations
 #: docstring — so adding an event costs the browser nothing.
 TOPIC = "event"
 
-# A routine, start to finish.
-ROUTINE_STARTED = "routine.started"
-ROUTINE_DONE = "routine.done"
-ROUTINE_ABORTED = "routine.aborted"
+# A sequence, start to finish.
+SEQUENCE_STARTED = "sequence.started"
+SEQUENCE_DONE = "sequence.done"
+SEQUENCE_ABORTED = "sequence.aborted"
 
-#: The arm has reached a taught pose and is holding it. The one an integration
-#: usually wants: it is the moment the scene is what the anchor said it would be.
-ANCHOR_ARRIVED = "anchor.arrived"
+#: The arm has reached a library pose and is holding it. The one an integration
+#: usually wants: it is the moment the scene is what the pose said it would be.
+POSE_ARRIVED = "pose.arrived"
 
 ACTION_STARTED = "action.started"
 ACTION_DONE = "action.done"

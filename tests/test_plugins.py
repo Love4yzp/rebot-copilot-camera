@@ -25,7 +25,7 @@ from backend.actions import (
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
-from backend.routines import PluginAction, RoutineStore
+from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import SafetyLatch
 from backend.shutter import SimShutter
 
@@ -91,7 +91,9 @@ def rig(tmp_path: Path):
     runner = InlineRunner()
 
     app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.pose_store = PoseStore(tmp_path / "poses")
+    app.state.sequence_store = SequenceStore(tmp_path / "sequences")
+    app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
     app.state.plugins = ActionRegistry(runner)
     app.state.plugins.register(ShutterProvider(shutter))
@@ -111,14 +113,15 @@ def client(rig) -> TestClient:
     return rig[0]
 
 
-def make_anchor(client: TestClient, actions: list[dict]) -> tuple[str, int]:
-    rid = client.post("/api/routines", json={"name": "plugins"}).json()["id"]
-    r = client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={"joints": {"joint1": 0.2, "joint2": 0.0}, "settle_ms": 0, "actions": actions},
-    )
-    assert r.status_code == 201, r.text
-    return rid, 0
+def make_station(client: TestClient, markers: list[dict]) -> str:
+    """A pose plus a one-station sequence with the given markers. Returns sid."""
+    pose_id = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "plugins"}).json()["id"]
+    r = client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pose_id, "duration_s": 1.0, "markers": markers}]})
+    assert r.status_code == 200, r.text
+    return sid
 
 
 # ── the manifest ─────────────────────────────────────────────────────────────
@@ -349,35 +352,26 @@ def test_a_provider_busy_with_an_action_is_not_recorded_as_down(monkeypatch):
 
 
 def test_params_the_provider_rejects_are_refused_on_write(rig):
-    """Stored bad params fail in the ACTING phase — arm at the anchor, subject
-    waiting, an hour after the typo. So they are refused as the anchor is saved.
-    """
+    """Stored bad params fail mid-run — arm at the pose, subject waiting, an
+    hour after the typo. So they are refused as the blocks are saved."""
     client, registry, *_ = rig
     registry.register(RelayProvider())
 
-    rid = client.post("/api/routines", json={"name": "plugins"}).json()["id"]
-    r = client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={
-            "joints": {"joint1": 0.2, "joint2": 0.0},
-            "actions": [{"type": "plugin", "provider": "relay", "params": {"channel": 99}}],
-        },
-    )
+    sid = client.post("/api/sequences", json={"name": "plugins"}).json()["id"]
+    r = client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": "whatever", "duration_s": 1.0, "markers": [
+            {"kind": "relay", "params": {"channel": 99}, "at": 0.5, "estimate_s": 0.3}]}]})
 
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "bad_action_params"
+    assert r.json()["detail"]["error"] == "bad_marker_params"
     assert "channel" in r.json()["detail"]["reasons"][0]
 
 
-def test_an_action_for_a_provider_nobody_installed_is_refused_on_write(client: TestClient):
-    rid = client.post("/api/routines", json={"name": "plugins"}).json()["id"]
-    r = client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={
-            "joints": {"joint1": 0.2, "joint2": 0.0},
-            "actions": [{"type": "plugin", "provider": "nobody", "params": {}}],
-        },
-    )
+def test_a_marker_for_a_provider_nobody_installed_is_refused_on_write(client: TestClient):
+    sid = client.post("/api/sequences", json={"name": "plugins"}).json()["id"]
+    r = client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": "whatever", "duration_s": 1.0, "markers": [
+            {"kind": "nobody", "params": {}, "at": 0.5, "estimate_s": 0.3}]}]})
 
     assert r.status_code == 400
     assert "nobody" in r.json()["detail"]["reasons"][0]
@@ -386,68 +380,67 @@ def test_an_action_for_a_provider_nobody_installed_is_refused_on_write(client: T
 def test_good_params_round_trip_through_storage(rig):
     client, registry, *_ = rig
     registry.register(RelayProvider())
-    rid, _ = make_anchor(client, [{"type": "plugin", "provider": "relay", "params": {"channel": 3}}])
+    sid = make_station(client, [
+        {"kind": "relay", "params": {"channel": 3}, "at": 0.5, "estimate_s": 0.3}])
 
-    stored = client.get(f"/api/routines/{rid}").json()["waypoints"][0]["actions"][0]
-    assert stored == {
-        "type": "plugin",
-        "provider": "relay",
-        "params": {"channel": 3},
-        "timeout_s": 5.0,
-        "on_failure": "abort",
-        "retries": 0,
-    }
+    stored = client.get(f"/api/sequences/{sid}").json()["blocks"][0]["markers"][0]
+    assert stored["kind"] == "relay"
+    assert stored["params"] == {"channel": 3}
+    assert stored["at"] == 0.5
 
 
 # ── caught before anything moves ─────────────────────────────────────────────
 
 
-def test_playing_a_routine_whose_plugin_is_gone_is_refused_before_moving(rig):
-    """A routine outlives the plugin it was written against."""
+def test_executing_a_sequence_whose_plugin_is_gone_is_refused_before_moving(rig):
+    """A sequence outlives the plugin it was written against."""
     client, registry, _, arm, _ = rig
     registry.register(RelayProvider())
-    rid, _ = make_anchor(client, [{"type": "plugin", "provider": "relay", "params": {}}])
+    sid = make_station(client, [
+        {"kind": "relay", "params": {}, "at": 0.5, "estimate_s": 0.3}])
 
     # Stand in for the JSON on disk outliving the install that wrote it: edit
-    # the stored routine directly, the way an older version of the plugin, or a
-    # hand-edited file, would leave it.
-    store = app.state.routine_store
-    stored = store.get(rid)
-    stored.waypoints[0].actions = [PluginAction(provider="uninstalled")]
+    # the stored sequence directly, the way an older version of the plugin, or
+    # a hand-edited file, would leave it.
+    store = app.state.sequence_store
+    stored = store.get(sid)
+    stored.blocks[0].markers[0].kind = "uninstalled"
     store.save(stored)
     before = dict(arm.read_state().positions)
 
-    r = client.post(f"/api/routines/{rid}/play")
+    r = client.post(f"/api/sequences/{sid}/execute")
 
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "missing_providers"
     assert arm.read_state().positions == before, "the arm moved before refusing"
 
 
-def test_goto_refuses_an_anchor_whose_provider_is_down(rig):
+def test_execute_refuses_a_sequence_whose_provider_is_down(rig):
     client, registry, _, arm, _ = rig
     relay = RelayProvider()
     registry.register(relay)
-    rid, index = make_anchor(client, [{"type": "plugin", "provider": "relay", "params": {}}])
+    sid = make_station(client, [
+        {"kind": "relay", "params": {}, "at": 0.5, "estimate_s": 0.3}])
 
     relay.healthy = False
     registry.probe_all()
     before = dict(arm.read_state().positions)
 
-    r = client.post(f"/api/routines/{rid}/waypoints/{index}/goto")
+    r = client.post(f"/api/sequences/{sid}/execute")
 
     assert r.status_code == 400
     assert "not answering" in str(r.json()["detail"]["reasons"])
     assert arm.read_state().positions == before
 
 
-def test_a_healthy_plugin_action_runs_on_arrival(rig):
+def test_a_healthy_plugin_marker_runs_on_arrival(rig):
     client, registry, controller, arm, clock = rig
     relay = RelayProvider()
     registry.register(relay)
-    rid, index = make_anchor(client, [{"type": "plugin", "provider": "relay", "params": {"channel": 2}}])
+    sid = make_station(client, [
+        {"kind": "relay", "params": {"channel": 2}, "at": 0.2, "estimate_s": 0.3}])
 
-    assert client.post(f"/api/routines/{rid}/waypoints/{index}/goto").status_code == 200
+    assert client.post(f"/api/sequences/{sid}/execute").status_code == 200
     for _ in range(5000):
         clock.now += 0.01
         arm.step(0.01)
@@ -459,14 +452,18 @@ def test_a_healthy_plugin_action_runs_on_arrival(rig):
     assert [p.channel for p in relay.calls] == [2]
 
 
-# ── retry policy ─────────────────────────────────────────────────────────────
+# ── failure policy ───────────────────────────────────────────────────────────
+#
+# v2 fixes the marker failure policy at abort: a silently missed frame is not
+# discovered until the whole set is reviewed. There is no retry setting left to
+# downgrade, so a provider declaring itself unrepeatable lands exactly where
+# v1's downgrade already put it: it is never re-run.
 
 
 def test_a_provider_that_declares_itself_unrepeatable_is_never_retried():
-    """A silently ignored retry setting is worse than either honouring it or
-    refusing it, so the host downgrades to abort and says so."""
-    from backend.core import Phase, RoutineExecutor
-    from backend.routines import PluginAction, Routine, Waypoint
+    """Fixed abort honours the declaration by construction: one call, done."""
+    from backend.core import Phase, SequenceExecutor
+    from backend.sequences import EventMarker, HoldBlock, Pose, Sequence
 
     clock = FakeClock()
     arm = SimArm(JOINTS, clock=clock, tau=0.05)
@@ -474,17 +471,14 @@ def test_a_provider_that_declares_itself_unrepeatable_is_never_retried():
     strobe = UnrepeatableProvider()
     runner = InlineRunner([strobe])
 
-    routine = Routine(
+    target = Pose(name="p", joints={"joint1": 0.1, "joint2": 0.0})
+    sequence = Sequence(
         name="x",
-        waypoints=[
-            Waypoint(
-                joints={"joint1": 0.1, "joint2": 0.0},
-                settle_ms=0,
-                actions=[PluginAction(provider="strobe", on_failure="retry", retries=3)],
-            )
-        ],
+        blocks=[HoldBlock(pose_id=target.id, duration_s=1.0, markers=[
+            EventMarker(kind="strobe", params={}, at=0.2)])],
     )
-    executor = RoutineExecutor(routine, arm=arm, actions=runner, clock=clock)
+    executor = SequenceExecutor(
+        sequence, {target.id: target}, arm=arm, actions=runner, clock=clock)
     executor.start()
     for _ in range(5000):
         clock.now += 0.01
@@ -497,9 +491,10 @@ def test_a_provider_that_declares_itself_unrepeatable_is_never_retried():
     assert len(strobe.calls) == 1, "retried something that said it could not be"
 
 
-def test_a_retryable_provider_still_gets_its_retries():
-    from backend.core import Phase, RoutineExecutor
-    from backend.routines import PluginAction, Routine, Waypoint
+def test_a_flaky_provider_is_not_retried_either():
+    """The retry knob is gone with the waypoint actions; a failure aborts."""
+    from backend.core import Phase, SequenceExecutor
+    from backend.sequences import EventMarker, HoldBlock, Pose, Sequence
 
     clock = FakeClock()
     arm = SimArm(JOINTS, clock=clock, tau=0.05)
@@ -514,17 +509,14 @@ def test_a_retryable_provider_still_gets_its_retries():
                 raise ActionUnavailable("first try")
 
     flaky = Flaky()
-    routine = Routine(
+    target = Pose(name="p", joints={"joint1": 0.1, "joint2": 0.0})
+    sequence = Sequence(
         name="x",
-        waypoints=[
-            Waypoint(
-                joints={"joint1": 0.1, "joint2": 0.0},
-                settle_ms=0,
-                actions=[PluginAction(provider="flaky", on_failure="retry", retries=2)],
-            )
-        ],
+        blocks=[HoldBlock(pose_id=target.id, duration_s=1.0, markers=[
+            EventMarker(kind="flaky", params={}, at=0.2)])],
     )
-    executor = RoutineExecutor(routine, arm=arm, actions=InlineRunner([flaky]), clock=clock)
+    executor = SequenceExecutor(
+        sequence, {target.id: target}, arm=arm, actions=InlineRunner([flaky]), clock=clock)
     executor.start()
     for _ in range(5000):
         clock.now += 0.01
@@ -533,8 +525,8 @@ def test_a_retryable_provider_still_gets_its_retries():
         if executor.is_finished:
             break
 
-    assert executor.phase is Phase.DONE
-    assert len(flaky.calls) == 2
+    assert executor.phase is Phase.ABORTED
+    assert len(flaky.calls) == 1
 
 
 # ── the registry and the runner cannot disagree ──────────────────────────────

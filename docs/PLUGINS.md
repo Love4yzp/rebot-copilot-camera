@@ -22,7 +22,7 @@
 
 ### 「前插一个、后插一个」大多已经有了
 
-`waypoint.actions` 是**有序列表**,executor 按序执行。把继电器排在快门前面就是 pre,后面就是 post。零新机制,编辑面板里两个上下箭头就是全部界面。
+块内的 `markers` 是**有序列表**,executor 按序触发。把继电器标记排在快门标记前面就是 pre,后面就是 post。零新机制,编辑面板里拖动标记就是全部界面。
 
 真正没有的只有「臂动**之前**」那一种,而那一种正是不能做的。
 
@@ -43,7 +43,7 @@ class TurntableParams(BaseModel):
 
 
 class TurntableProvider:
-    id = "turntable"          # 存进 routine JSON。改名会让所有用到它的锚点变孤儿
+    id = "turntable"          # 存进序列 JSON(标记的 kind)。改名会让所有用到它的标记变孤儿
     label = "转台"             # 界面上显示,可本地化
     params_model = TurntableParams
     retryable = False         # 转角是相对的:重跑一次是另一个姿态,不是同一个重试
@@ -79,7 +79,7 @@ uv pip install ./rebot-plugin-turntable
 sudo systemctl restart rebot-copilot-camera
 ```
 
-完事。**宿主零改动,前端零改动。** 转台出现在 `GET /api/plugins`、出现在锚点编辑面板、可以和快门排先后。
+完事。**宿主零改动,前端零改动。** 转台出现在 `GET /api/plugins`、出现在标记检查器、可以和快门排先后。
 
 宿主不管插件配置 —— 一管就要为每个插件定义配置 schema,那是没边的;插件自己读环境变量或自己的文件。
 
@@ -92,7 +92,7 @@ uv run -m backend.actions.check turntable --probe        # 跑自检
 uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 ```
 
-最后一条最有用:按 provider 自己的模型校验参数、造一个真的 `ActionContext`、走**真的 `ThreadedRunner`** 带**真的超时**跑一次。挂死、乱抛异常、无视参数,都在这里暴露,而不是在锚点前面、被摄体等着的时候。
+最后一条最有用:按 provider 自己的模型校验参数、造一个真的 `ActionContext`、走**真的 `ThreadedRunner`** 带**真的超时**跑一次。挂死、乱抛异常、无视参数,都在这里暴露,而不是在机位上、被摄体等着的时候。
 
 跟 `SimArm` / `SimShutter` 是同一套哲学 —— 无硬件循环是基础设施不是便利品。插件作者的第一天不该需要一条 48V 的臂。
 
@@ -143,11 +143,11 @@ uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 
 ### 参数在哪校验
 
-三道,都为了让错误离开 ACTING 阶段(臂已在锚点、被摄体在等):
+三道,都为了让错误离开执行阶段(臂已到位、被摄体在等):
 
-1. **写入时** —— `POST/PATCH .../waypoints` 按 provider 的 `params_model` 校验,不合法 400。pydantic 自己做不到,只有 provider 知道形状
-2. **播放前** —— `play` / `goto` 检查 provider 装没装、可用不可用,不合法 400 且**臂一动没动**
-3. **执行时** —— executor 再校验一次。routine 会比写它的那版插件活得久
+1. **写入时** —— `PATCH /api/sequences/{id}` 按 provider 的 `params_model` 校验每个标记,不合法 400。pydantic 自己做不到,只有 provider 知道形状
+2. **播放前** —— `execute` / `goto` 检查 provider 装没装、可用不可用,不合法 400 且**臂一动没动**
+3. **执行时** —— executor 再校验一次。序列会比写它的那版插件活得久
 
 ### 配件掉了又插回来
 
@@ -159,11 +159,11 @@ uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 
 ## 二、触发源(不是插件)
 
-`POST /api/routines/{rid}/waypoints/{index}/goto` 就是触发端点。点卡片 = 前端打这个。别的触发源做同一件事:
+`POST /api/poses/{id}/goto` 与 `POST /api/sequences/{id}/execute` 就是触发端点。点位姿卡 = 前端打 goto;点执行 = 前端打 execute。别的触发源做同一件事:
 
 ```python
 r = requests.post(
-    f"{BASE}/api/routines/{rid}/waypoints/2/goto",
+    f"{BASE}/api/poses/{pose_id}/goto",
     json={"source": "footswitch"},
 )
 # 409 = 急停中,或臂正忙
@@ -205,18 +205,18 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 
 | 事件 | 什么时候 |
 |---|---|
-| `routine.started` / `.done` / `.aborted` | 一轮的起止 |
-| `anchor.arrived` | 臂到位并保持 —— **集成方通常要的就是这个**,场景此刻就是锚点说的样子 |
+| `sequence.started` / `.done` / `.aborted` | 一轮的起止 |
+| `pose.arrived` | 臂到位并保持 —— **集成方通常要的就是这个**,场景此刻就是位姿说的样子 |
 | `action.started` / `.done` / `.failed` | 每个动作(连拍时每帧一次) |
 | `estop.engaged` / `.cleared` | 闩锁跳变,不是每 tick |
-| `teach.captured` | 手动录了一个点 |
+| `teach.captured` | 手动录了一个位姿 |
 | provider 自定义 | `ctx.emit(...)`,如 `shutter.fired` |
 
 三条硬规则:
 
 1. **单向,永不否决。** 没有返回值能改变流程。能否决的钩子就是第三方代码进了安全路径
 2. **有界队列,丢旧包。** 慢订阅者丢消息,不反压控制线程 —— 因订阅者不读而停摆的循环,就是停止撑住臂的循环
-3. **在知道事实的地方发。** routine / anchor / action 从 executor 发;急停从控制循环看闩锁跳变发(**不从 `SafetyLatch` 发** —— 它是纯逻辑,给它一个 broadcaster 就是在那堵墙上开第一个洞);`teach.captured` 从 HTTP 端点发,控制循环看不见手动录点
+3. **在知道事实的地方发。** sequence / pose / action 从 executor 发;急停从控制循环看闩锁跳变发(**不从 `SafetyLatch` 发** —— 它是纯逻辑,给它一个 broadcaster 就是在那堵墙上开第一个洞);`teach.captured` 从 HTTP 端点发,控制循环看不见手动录点
 
 `/ws` 与 `/api/events` 是两条流,因为回答的是两个问题:屏幕要 20Hz 关节角,集成方不要,更不该为此在棚里的网线上吃一条位置流。
 
@@ -227,7 +227,7 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 ## 刻意不做
 
 - **pre-hook**(能否决运动的钩子 = 第三方代码进安全路径)
-- **条件 / 分支规则引擎** —— 工作流是线性的:到位、稳定、触发、下一个。论证在 `backend/routines/models.py` 开头
+- **条件 / 分支规则引擎** —— 工作流是线性的:到位、稳定、触发、下一个。论证在 `backend/sequences/models.py` 开头
 - **插件间通信** —— 两个插件要说话,说明它们该是一个插件
 - **热重载** —— 现场设备重启服务,比调试半加载状态便宜
 

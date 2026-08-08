@@ -232,10 +232,12 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | | |
 |---|---|
 | `GET/POST /api/estop` · `POST /api/estop/clear` | 急停。engage 永远 200，重复 engage 保留首因 |
-| `GET/POST /api/routines` · `GET/PATCH/DELETE /api/routines/{id}` | 序列 CRUD |
-| `POST /api/routines/{id}/waypoints` · `…/capture` · `…/reorder` · `PATCH/DELETE …/{index}` | 点位编辑与录点 |
-| `POST /api/routines/{id}/play` · `POST /api/playback/stop` | 播放。play 前做整条预检（路径 + 插件可用性）|
-| `POST /api/routines/{id}/waypoints/{i}/goto` | 单锚点：过去、稳定、执行它的动作、保持。可带 `{"source": "..."}` 记录是谁触发的 |
+| `GET/POST /api/poses` · `PATCH/DELETE /api/poses/{id}` | 位姿库。`POST /api/poses/capture` 录下臂当前姿态 |
+| `GET /api/poses/{id}/links` | 哪些序列引用了这个位姿 —— 删除/覆盖前先问 |
+| `POST /api/poses/{id}/goto` | 单位姿：过去、保持。可带 `{"source": "..."}` 记录是谁触发的 |
+| `GET/POST /api/sequences` · `GET/PATCH/DELETE /api/sequences/{id}` | 序列 CRUD。块写入即归一化（过渡块自动生成）；运行中的序列锁定不可改 |
+| `POST /api/sequences/{id}/execute` · `POST /api/execute/stop` · `POST /api/execute/resume` | 执行。execute 前做整条预检（路径 + 位姿引用 + 插件可用性）；resume 从等待标记继续 |
+| `GET/POST /api/templates` · `DELETE /api/templates/{id}` · `POST /api/templates/{id}/instantiate` | 结构配方（位姿槽位）；实例化 = 把每个槽位绑到库位姿上复印一份 |
 | `POST /api/teach` | 零力示教开关 |
 | `POST /api/shutter/test` | 快门自检。查 USB 与 BLE 两段链路，`?shoot=true` 才真拍 |
 | `POST /api/shutter/pair` | 让板子进入 BLE 配对模式并等相机（30 秒）。播放中返 409 |

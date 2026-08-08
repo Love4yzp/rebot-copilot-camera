@@ -11,7 +11,7 @@
 ```bash
 git submodule update --init                  # 臂层是 submodule，漏了 import 就失败
 uv sync
-uv run pytest                                # 252 个测试
+uv run pytest                                # 366 个测试
 uv run -m backend.app --sim                  # 无硬件启动，127.0.0.1:18790
 uvx ruff check backend tests
 
@@ -69,7 +69,7 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 backend/
   app.py            FastAPI 入口。静态挂载必须在所有路由之后 —— mount("/") 匹配一切
   assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫
-  config.py         只放真正依赖部署的值（含快门串口/波特率）。限位不在这（从 URDF 读）
+  config.py         只放真正依赖部署的值（数据目录、快门串口/波特率）。限位不在这（从 URDF 读）
   agent.py          外部 agent 的独占控制租约（token + 双重 TTL）
 
   arm/
@@ -93,13 +93,15 @@ backend/
   core/
     controller.py   控制循环。闩锁在任何东西能命令臂之前检查
     events.py       语义事件名与信封。单向，不可否决
-    executor.py     Routine 执行器。纯逻辑，注入时钟/arm/shutter
+    executor.py     Sequence 执行器（块遍历）。纯逻辑，注入时钟/arm/shutter/已解析位姿
     floatlock.py    浮动/锁定判据。带迟滞与最短静止时间
     broadcaster.py  控制线程 → asyncio 的扇出。有界队列，丢旧包
 
-  routines/
-    models.py       Action（判别式联合）/ Waypoint / Routine
-    store.py        一 routine 一 JSON，原子写
+  sequences/
+    models.py       Pose / EventMarker / Hold+Transition 块（判别式联合）/ Sequence / SeqTemplate
+    normalize.py    normalize 的 Python 移植（蓝本 frontend/src/timeline/model.ts），写入前必跑
+    store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
+    migrate.py      v1 routines/ → v2 迁移；不删原文件（留作备份）
 
   shutter/
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
@@ -111,8 +113,10 @@ backend/
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
     estop.py        急停端点
-    routines.py     序列与点位 CRUD
-    control.py      播放 / 示教 / 录点 / 快门自检 / WebSocket
+    poses.py        位姿库 CRUD / capture / links / goto
+    sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
+    templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）
+    control.py      execute/stop+resume / 示教 / 快门自检 / WebSocket
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
     logs.py         journalctl 包装
 
@@ -165,7 +169,7 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 看起来最顺手的那件事 —— 给主按钮一个品牌蓝、给选中态一个 accent —— 正是要避免的：颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。需要强调时用灰阶层级、字重、尺寸。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
 
 **界面不许猜臂在哪**
-锚点卡的「已到位」只能由 `phase === "done"` 点亮。三个已经踩过的坑：`phase` 为空**不等于**到位；controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，所以陈旧的 `done` 不能当作新点击的答复；急停或进入示教后必须立刻作废「已到位」—— 臂被冻在别处或即将被人推走。另外 `_advance_waypoint` 先自增后判断，收尾时 `waypoint_index == waypoint_total`，前端要夹紧。
+锚点卡的「已到位」只能由 `phase === "done"` 点亮。三个已经踩过的坑：`phase` 为空**不等于**到位；controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，所以陈旧的 `done` 不能当作新点击的答复；急停或进入示教后必须立刻作废「已到位」—— 臂被冻在别处或即将被人推走。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
 
 **急停在栈顶**
 `.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式，而它以前恰好被自己的遮罩挡住了。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。

@@ -1,4 +1,4 @@
-"""RoutineExecutor timing and failure handling.
+"""SequenceExecutor block-walking, markers, waits and failure handling.
 
 Driven entirely by a fake clock. No test here sleeps, and none needs hardware.
 
@@ -10,10 +10,16 @@ work off the control loop is a different claim, tested in test_action_runner.py.
 
 import pytest
 
-from backend.actions import InlineRunner, ShutterProvider
+from backend.actions import InlineRunner, Job, ShutterProvider
 from backend.arm import SimArm
-from backend.core import Phase, RoutineExecutor
-from backend.routines import Routine, ShutterAction, SleepAction, Waypoint
+from backend.core import Phase, SequenceExecutor
+from backend.sequences import (
+    EventMarker,
+    HoldBlock,
+    Pose,
+    Sequence,
+    TransitionBlock,
+)
 from backend.shutter import ShutterNotConnected, ShutterTimeout, SimShutter
 
 JOINTS = ("joint1", "joint2")
@@ -31,25 +37,32 @@ class FakeClock:
 class Harness:
     """Fake clock plus a simulated arm and shutter, stepped together."""
 
-    def __init__(self, routine: Routine, connected: bool = True) -> None:
+    def __init__(self, sequence: Sequence, poses: dict[str, Pose], connected: bool = True,
+                 goto: Pose | None = None) -> None:
         self.clock = FakeClock()
         self.arm = SimArm(JOINTS, clock=self.clock, tau=0.05)
         self.arm.connect()
         self.shutter = SimShutter(connected=connected)
         self.actions = InlineRunner([ShutterProvider(self.shutter)])
         self.events: list = []
-        self.executor = RoutineExecutor(
-            routine,
+        self.executor = SequenceExecutor(
+            sequence,
+            poses,
+            goto=goto,
             arm=self.arm,
             actions=self.actions,
             clock=self.clock,
             on_progress=self.events.append,
         )
 
-    def run(self, max_seconds: float = 30.0) -> None:
-        """Tick until the routine finishes, or give up rather than loop forever."""
-        deadline = self.clock.now + max_seconds
+    def run(self, max_seconds: float = 60.0) -> None:
+        """Start, then tick until the sequence finishes."""
         self.executor.start()
+        self.finish(max_seconds)
+
+    def finish(self, max_seconds: float = 60.0) -> None:
+        """Tick until the sequence finishes, or give up rather than loop forever."""
+        deadline = self.clock.now + max_seconds
         while not self.executor.is_finished and self.clock.now < deadline:
             self.step()
         assert self.executor.is_finished, "executor never finished"
@@ -61,33 +74,77 @@ class Harness:
             self.executor.tick()
 
 
-def wp(j1: float, **kwargs) -> Waypoint:
-    return Waypoint(joints={"joint1": j1, "joint2": 0.0}, **kwargs)
+def pose(j1: float, name: str = "pose") -> Pose:
+    return Pose(name=name, joints={"joint1": j1, "joint2": 0.0})
 
 
-def routine(*waypoints: Waypoint, name: str = "shoot") -> Routine:
-    return Routine(name=name, waypoints=list(waypoints))
+def shutter_marker(at: float, **params) -> EventMarker:
+    defaults = {"count": 1, "interval_s": 0.0, "focus_first": True}
+    return EventMarker(kind="shutter", params=defaults | params, at=at)
+
+
+def wait_marker(at: float) -> EventMarker:
+    return EventMarker(kind="wait", params={}, at=at, estimate_s=0.0)
+
+
+def hold(p: Pose, duration_s: float = 0.5, markers=()) -> HoldBlock:
+    return HoldBlock(pose_id=p.id, duration_s=duration_s, markers=list(markers))
+
+
+def transition(duration_s: float = 1.0, markers=()) -> TransitionBlock:
+    return TransitionBlock(duration_s=duration_s, markers=list(markers))
+
+
+def make(*blocks, name: str = "shoot") -> tuple[Sequence, dict[str, Pose]]:
+    """A sequence plus the pose map the API layer would have resolved."""
+    poses = {
+        block.pose_id: Pose(id=block.pose_id, name=f"p{block.pose_id[:4]}",
+                            joints={"joint1": 0.0, "joint2": 0.0})
+        for block in blocks
+        if isinstance(block, HoldBlock)
+    }
+    return Sequence(name=name, blocks=list(blocks)), poses
+
+
+def rig(*blocks, name: str = "shoot", connected: bool = True) -> Harness:
+    sequence, poses = make(*blocks, name=name)
+    return Harness(sequence, poses, connected=connected)
 
 
 # ── happy path ───────────────────────────────────────────────────────────────
 
 
-def test_empty_routine_finishes_immediately_rather_than_hanging():
-    h = Harness(routine())
+def test_empty_sequence_finishes_immediately_rather_than_hanging():
+    h = Harness(Sequence(name="empty"), {})
     h.executor.start()
     assert h.executor.phase is Phase.DONE
 
 
-def test_waypoints_are_visited_in_order():
-    h = Harness(routine(wp(0.2), wp(0.5), wp(-0.3)))
+def test_holds_are_visited_in_order():
+    a, b, c = pose(0.2, "a"), pose(0.5, "b"), pose(-0.3, "c")
+    sequence, poses = make(
+        hold(a), transition(), hold(b), transition(), hold(c), name="round")
+    # make() zeroes the joints; give them the real targets.
+    poses[a.id] = a
+    poses[b.id] = b
+    poses[c.id] = c
+    h = Harness(sequence, poses)
     h.run()
 
     assert h.executor.phase is Phase.DONE
     assert h.arm.read_state().positions["joint1"] == pytest.approx(-0.3, abs=0.02)
 
 
-def test_every_shutter_action_fires():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction()]), wp(0.2, actions=[ShutterAction()])))
+def test_every_shutter_marker_fires():
+    a, b = pose(0.1), pose(0.2)
+    sequence, poses = make(
+        hold(a, markers=[shutter_marker(0.2)]),
+        transition(),
+        hold(b, markers=[shutter_marker(0.2)]),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.run()
 
     assert h.shutter.shots == 2
@@ -95,7 +152,10 @@ def test_every_shutter_action_fires():
 
 
 def test_focus_is_skipped_when_disabled():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(focus_first=False)])))
+    a = pose(0.1)
+    sequence, poses = make(hold(a, markers=[shutter_marker(0.2, focus_first=False)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.run()
 
     assert h.shutter.shots == 1
@@ -105,7 +165,10 @@ def test_focus_is_skipped_when_disabled():
 def test_a_burst_fires_count_frames_and_refocuses_each():
     """Between frames of a burst the subject has usually moved — that is why
     there is a burst at all — so every frame gets its own half-press."""
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=3, interval_s=0.2)])))
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 1.0, [shutter_marker(0.2, count=3, interval_s=0.2)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.run()
 
     assert h.shutter.shots == 3
@@ -113,7 +176,10 @@ def test_a_burst_fires_count_frames_and_refocuses_each():
 
 
 def test_a_burst_paces_frames_by_the_interval():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=2, interval_s=1.0)])))
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 5.0, [shutter_marker(0.2, count=2, interval_s=1.0)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
     for _ in range(3000):
         if h.shutter.shots >= 1:
@@ -126,14 +192,17 @@ def test_a_burst_paces_frames_by_the_interval():
     assert h.shutter.shots == 1, "the second frame must wait out the interval"
 
     for _ in range(3000):
-        if h.executor.is_finished:
+        if h.shutter.shots >= 2:
             break
         h.step()
     assert h.shutter.shots == 2
 
 
-def test_a_failed_frame_mid_burst_aborts_by_default():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(count=3)])))
+def test_a_failed_frame_mid_burst_aborts():
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 5.0, [shutter_marker(0.2, count=3)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.shutter.script([None, ShutterTimeout("second frame died")])
     h.run()
 
@@ -141,63 +210,127 @@ def test_a_failed_frame_mid_burst_aborts_by_default():
     assert h.shutter.shots == 1, "the first frame landed, the failure stopped the rest"
 
 
-def test_actions_run_in_order_within_a_waypoint():
-    h = Harness(routine(wp(0.1, actions=[SleepAction(duration_s=0.5), ShutterAction()])))
+def test_markers_fire_in_block_order():
+    a = pose(0.1)
+    sequence, poses = make(
+        hold(a, 2.0, [shutter_marker(0.5), shutter_marker(1.0)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
 
-    while h.executor.phase is not Phase.ACTING:
+    while h.shutter.shots < 1 and not h.executor.is_finished:
         h.step()
-    assert h.shutter.shots == 0, "sleep must complete before the shutter fires"
-
+    first_at = h.clock.now
     while not h.executor.is_finished:
         h.step()
+
+    assert h.shutter.shots == 2
+    assert first_at >= 0.5
+
+
+# ── holds and transitions ────────────────────────────────────────────────────
+
+
+def test_a_holds_clock_starts_at_arrival_not_at_block_entry():
+    """A marker must never fire mid-approach — that photographs a moving scene."""
+    a = pose(0.6)
+    sequence, poses = make(hold(a, 0.5, [shutter_marker(0.0)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.executor.start()
+
+    while h.shutter.shots == 0 and not h.executor.is_finished:
+        h.step()
+    assert h.shutter.shots == 1
+    # The frame was taken only once the arm was holding the pose.
+    assert h.arm.read_state().positions["joint1"] == pytest.approx(0.6, abs=0.02)
+    h.finish()
     assert h.shutter.shots == 1
 
 
-# ── timing ───────────────────────────────────────────────────────────────────
+def test_a_zero_duration_hold_costs_no_extra_time():
+    a, b = pose(0.0), pose(0.3)
+    sequence, poses = make(hold(a, 0.0), transition(), hold(b, 0.2))
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
+    h.run()
+    assert h.executor.phase is Phase.DONE
 
 
-def test_settle_actually_waits_before_acting():
-    """The arm reaching its target and being steady enough for a sharp frame
-    are a few hundred milliseconds apart."""
-    h = Harness(routine(wp(0.1, settle_ms=500, actions=[ShutterAction()])))
+def test_a_transition_moves_between_the_flanking_poses():
+    a, b = pose(0.1), pose(0.6)
+    sequence, poses = make(hold(a, 0.2), transition(1.0), hold(b, 0.2))
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
+    h.run()
+
+    assert h.arm.read_state().positions["joint1"] == pytest.approx(0.6, abs=0.02)
+
+
+def test_a_marker_pinned_to_a_transition_fires_mid_move():
+    """The fill-light-at-40% case: markers on a transition are proportions."""
+    a, b = pose(0.0), pose(0.5)
+    sequence, poses = make(
+        hold(a, 0.2),
+        transition(2.0, [shutter_marker(0.5)]),
+        hold(b, 0.2),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.executor.start()
 
-    while h.executor.phase is Phase.MOVING:
+    while not h.executor.is_finished and h.executor.progress().block_index < 1:
         h.step()
-    settle_started = h.clock.now
-
-    while h.executor.phase is Phase.SETTLING:
-        assert h.shutter.shots == 0, "fired mid-settle — the frame would be blurred"
+    assert h.executor.progress().phase is Phase.TRANSITION
+    entered_at = h.clock.now
+    while h.executor.progress().block_index == 1 and h.shutter.shots == 0:
         h.step()
 
-    assert h.clock.now - settle_started >= 0.5
+    assert h.shutter.shots == 1
+    assert h.clock.now - entered_at == pytest.approx(1.0, abs=0.1), "50% of a 2s move"
 
 
-def test_zero_settle_does_not_cost_a_tick():
-    h = Harness(routine(wp(0.1, settle_ms=0, actions=[ShutterAction()])))
+def test_a_block_stretches_when_its_marker_is_still_running():
+    """The plan ruler is commanded time; a slow marker holds the block open."""
+    a = pose(0.1)
+
+    class HangingRunner(InlineRunner):
+        def __init__(self, providers, clock):
+            super().__init__(providers)
+            self._clock = clock
+            self.jobs: list[Job] = []
+
+        def submit(self, provider_id, params, ctx, timeout_s):
+            job = Job(provider_id, deadline=self._clock() + timeout_s, clock=self._clock)
+            self.jobs.append(job)
+            return job
+
+    sequence, poses = make(hold(a, 0.3, [shutter_marker(0.2)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.actions = HangingRunner([ShutterProvider(h.shutter)], h.clock)
+    h.executor = SequenceExecutor(
+        sequence, poses, arm=h.arm, actions=h.actions, clock=h.clock)
     h.executor.start()
-    while h.executor.phase is Phase.MOVING:
+
+    for _ in range(200):  # 2s — well past the 0.3s hold
         h.step()
+    assert not h.executor.is_finished, "the block ended while its marker was still running"
+    assert h.executor.progress().block_index == 0
 
-    assert h.executor.phase is not Phase.SETTLING
-
-
-def test_sleep_action_waits_its_full_duration():
-    h = Harness(routine(wp(0.1, settle_ms=0, actions=[SleepAction(duration_s=1.0)])))
-    h.executor.start()
-    while h.executor.phase is not Phase.ACTING:
-        h.step()
-    started = h.clock.now
-
-    while not h.executor.is_finished:
-        h.step()
-
-    assert h.clock.now - started >= 1.0
+    h.actions.jobs[0]._resolve(None)
+    h.step(5)
+    assert h.executor.is_finished, "the run completed once the marker did"
 
 
 def test_a_stuck_arm_faults_instead_of_waiting_forever():
-    h = Harness(routine(wp(1.0, duration_s=1.0)))
+    a = pose(1.0)
+    sequence, poses = make(hold(a, 0.5))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
 
     # Arm never moves: step the clock and the executor but not the simulation.
@@ -211,63 +344,124 @@ def test_a_stuck_arm_faults_instead_of_waiting_forever():
     assert "not reached" in h.executor.error
 
 
-# ── action failure policies ──────────────────────────────────────────────────
+# ── wait markers ─────────────────────────────────────────────────────────────
 
 
-def test_shutter_failure_aborts_the_routine_by_default():
+def test_a_wait_marker_suspends_the_run_until_resume():
+    a, b = pose(0.1), pose(0.4)
+    sequence, poses = make(
+        hold(a, 2.0, [shutter_marker(0.2), wait_marker(1.0), shutter_marker(1.5)]),
+        transition(0.5),
+        hold(b, 0.2),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
+    h.executor.start()
+
+    while h.executor.phase is not Phase.WAIT and not h.executor.is_finished:
+        h.step()
+
+    assert h.executor.phase is Phase.WAIT
+    assert h.executor.progress().t_in_block == pytest.approx(1.0, abs=0.02), "t clamps to the marker"
+    assert h.shutter.shots == 1, "the marker after the wait has not fired"
+
+    for _ in range(500):  # 5s of ticking: a suspended run does not drift on
+        h.step()
+    assert h.executor.phase is Phase.WAIT
+    assert h.shutter.shots == 1
+
+    assert h.executor.resume() is True
+    h.finish()
+    assert h.executor.phase is Phase.DONE
+    assert h.shutter.shots == 2, "the run continued past the marker, once"
+
+
+def test_resume_outside_a_wait_is_refused():
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 0.5))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.executor.start()
+    h.step(5)
+
+    assert h.executor.resume() is False
+
+
+def test_suspension_time_is_not_charged_to_the_block():
+    """The mock clamps t at the marker and counts on from there — resume does
+    not jump the remaining markers' times."""
+    a = pose(0.1)
+    sequence, poses = make(
+        hold(a, 3.0, [wait_marker(1.0), shutter_marker(2.0)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.executor.start()
+    while h.executor.phase is not Phase.WAIT:
+        h.step()
+
+    for _ in range(1000):  # 10s suspended — far past the block's own duration
+        h.step()
+    h.executor.resume()
+    h.step(50)  # 0.5s past resume: t ≈ 1.5s, the 2.0s marker must not fire early
+    assert h.shutter.shots == 0
+    h.finish()
+    assert h.shutter.shots == 1
+
+
+# ── marker failure ───────────────────────────────────────────────────────────
+
+
+def test_a_failed_marker_aborts_the_sequence():
     """A missed frame is not noticed until the whole set is reviewed."""
-    h = Harness(routine(wp(0.1, actions=[ShutterAction()]), wp(0.5, actions=[ShutterAction()])))
+    a, b = pose(0.1), pose(0.5)
+    sequence, poses = make(
+        hold(a, 1.0, [shutter_marker(0.2)]),
+        transition(),
+        hold(b, 1.0, [shutter_marker(0.2)]),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.shutter.script([ShutterTimeout("camera asleep")])
     h.run()
 
     assert h.executor.phase is Phase.ABORTED
     assert "camera asleep" in h.executor.error
     assert h.shutter.shots == 0
-    assert h.executor.progress().waypoint_index == 0, "did not move on"
-
-
-def test_skip_policy_carries_on_to_the_next_waypoint():
-    h = Harness(
-        routine(
-            wp(0.1, actions=[ShutterAction(on_failure="skip")]),
-            wp(0.5, actions=[ShutterAction()]),
-        )
-    )
-    h.shutter.script([ShutterTimeout("one bad frame")])
-    h.run()
-
-    assert h.executor.phase is Phase.DONE
-    assert h.shutter.shots == 1, "second waypoint still fired"
-
-
-def test_retry_policy_succeeds_on_the_second_attempt():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(on_failure="retry", retries=2)])))
-    h.shutter.script([ShutterTimeout("flaky"), None])
-    h.run()
-
-    assert h.executor.phase is Phase.DONE
-    assert h.shutter.shots == 1
-
-
-def test_retry_policy_gives_up_after_the_configured_attempts():
-    h = Harness(routine(wp(0.1, actions=[ShutterAction(on_failure="retry", retries=2)])))
-    h.shutter.script([ShutterTimeout("1"), ShutterTimeout("2"), ShutterTimeout("3")])
-    h.run()
-
-    assert h.executor.phase is Phase.ABORTED
-    assert h.shutter.shots == 0
+    assert h.executor.progress().block_index == 0, "did not move on"
 
 
 def test_a_dead_link_aborts_rather_than_shooting_blanks():
     """BLE down while the arm walks the whole set is the most expensive failure
     in this workflow: a full run with nothing on the card."""
-    h = Harness(routine(wp(0.1, actions=[ShutterAction()]), wp(0.5, actions=[ShutterAction()])))
+    a, b = pose(0.1), pose(0.5)
+    sequence, poses = make(
+        hold(a, 1.0, [shutter_marker(0.2)]),
+        transition(),
+        hold(b, 1.0, [shutter_marker(0.2)]),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.shutter.set_connected(False)
     h.run()
 
     assert h.executor.phase is Phase.ABORTED
     assert isinstance(ShutterNotConnected(), Exception)
     assert h.shutter.shots == 0
+
+
+def test_a_marker_for_a_provider_nobody_installed_aborts():
+    a = pose(0.1)
+    sequence, poses = make(
+        hold(a, 1.0, [EventMarker(kind="gone", params={}, at=0.2)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.run()
+
+    assert h.executor.phase is Phase.ABORTED
+    assert "gone" in h.executor.error
 
 
 # ── abort / emergency stop ───────────────────────────────────────────────────
@@ -277,10 +471,18 @@ def test_abort_mid_playback_stops_and_never_resumes():
     """The most important test in the project.
 
     This is what the control loop does when the emergency stop engages. The
-    routine must stop where it is and stay stopped: by the time an operator
+    sequence must stop where it is and stay stopped: by the time an operator
     clears a stop, someone has usually moved the arm or taken the subject away.
     """
-    h = Harness(routine(wp(0.3, actions=[ShutterAction()]), wp(0.9, actions=[ShutterAction()])))
+    a, b = pose(0.3), pose(0.9)
+    sequence, poses = make(
+        hold(a, 1.0, [shutter_marker(0.2)]),
+        transition(2.0),
+        hold(b, 1.0, [shutter_marker(0.2)]),
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.executor.start()
     h.step(5)
 
@@ -289,18 +491,21 @@ def test_abort_mid_playback_stops_and_never_resumes():
     assert h.executor.error == "emergency stop engaged"
 
     shots_at_abort = h.shutter.shots
-    index_at_abort = h.executor.progress().waypoint_index
+    index_at_abort = h.executor.progress().block_index
 
     # Keep ticking as the control loop would. Nothing may happen.
     h.step(2000)
 
     assert h.executor.phase is Phase.ABORTED
     assert h.shutter.shots == shots_at_abort
-    assert h.executor.progress().waypoint_index == index_at_abort
+    assert h.executor.progress().block_index == index_at_abort
 
 
 def test_abort_is_idempotent_and_keeps_the_first_reason():
-    h = Harness(routine(wp(0.3)))
+    a = pose(0.3)
+    sequence, poses = make(hold(a, 1.0))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
     h.executor.abort("emergency stop engaged")
     h.executor.abort("something later")
@@ -309,7 +514,10 @@ def test_abort_is_idempotent_and_keeps_the_first_reason():
 
 
 def test_abort_after_completion_does_not_rewrite_the_outcome():
-    h = Harness(routine(wp(0.1)))
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 0.2))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.run()
     h.executor.abort("too late")
 
@@ -318,7 +526,10 @@ def test_abort_after_completion_does_not_rewrite_the_outcome():
 
 
 def test_starting_twice_is_refused():
-    h = Harness(routine(wp(0.1)))
+    a = pose(0.1)
+    sequence, poses = make(hold(a, 0.2))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
     with pytest.raises(RuntimeError):
         h.executor.start()
@@ -327,57 +538,105 @@ def test_starting_twice_is_refused():
 # ── progress reporting ───────────────────────────────────────────────────────
 
 
-def test_progress_reports_phases_in_order():
-    h = Harness(routine(wp(0.1, settle_ms=100, actions=[ShutterAction()])))
-    h.run()
-
-    seen = [e.phase for e in h.events]
-    assert seen[0] is Phase.MOVING
-    assert Phase.SETTLING in seen
-    assert Phase.ACTING in seen
-    assert seen[-1] is Phase.DONE
-
-
-def test_progress_carries_routine_identity_and_totals():
-    h = Harness(routine(wp(0.1), wp(0.2), wp(0.3), name="round the subject"))
+def test_progress_reports_the_wire_shape():
+    a, b = pose(0.1), pose(0.2)
+    sequence, poses = make(
+        hold(a, 0.5, [shutter_marker(0.2)]), transition(0.5), hold(b, 0.2),
+        name="round the subject",
+    )
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.executor.start()
 
     p = h.executor.progress()
-    assert p.routine_name == "round the subject"
-    assert p.waypoint_total == 3
-    assert p.waypoint_index == 0
+    assert p.sequence_name == "round the subject"
+    assert p.block_total == 3
+    assert p.block_index == 0
+    assert p.phase is Phase.HOLD
+
+    h.finish()
+    done = h.events[-1]
+    assert done.phase is Phase.DONE
+    assert done.block_index == done.block_total, "one past the last block"
+    assert done.t_in_block == 0.0
+    assert done.is_finished
 
 
-# ── first-waypoint approach ──────────────────────────────────────────────────
+def test_phases_pass_through_hold_and_transition():
+    a, b = pose(0.1), pose(0.4)
+    sequence, poses = make(hold(a, 0.3), transition(0.5), hold(b, 0.3))
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
+    h.run()
+
+    seen = [e.phase for e in h.events]
+    assert seen[0] is Phase.HOLD
+    assert Phase.TRANSITION in seen
+    assert seen[-1] is Phase.DONE
 
 
-def test_the_approach_to_the_first_waypoint_is_speed_limited():
-    """Later waypoints start from the previous one, so their stored duration
-    was chosen against a known pose. The first starts from wherever teaching
-    left the arm, and honouring a short duration there would fling it."""
+# ── first-pose approach ──────────────────────────────────────────────────────
+
+
+def test_the_approach_to_the_first_pose_is_speed_limited():
+    """Later poses start from the previous one, so their stored duration was
+    chosen against a known pose. The first starts from wherever teaching left
+    the arm, and honouring a short duration there would fling it."""
     from backend.core.executor import FIRST_APPROACH_MAX_SPEED
 
-    far = 2.0
-    h = Harness(routine(wp(far, duration_s=0.1)))
+    far = pose(2.0)
+    sequence, poses = make(hold(far, 0.5))
+    poses[far.id] = far
+    h = Harness(sequence, poses)
     h.executor.start()
 
     commanded = h.executor._arrival_deadline - h.clock.now
-    assert commanded > 0.1 * 3, "the stored duration was used unchanged"
-    assert commanded >= (far / FIRST_APPROACH_MAX_SPEED) * 3 * 0.99
+    assert commanded >= (2.0 / FIRST_APPROACH_MAX_SPEED) * 3 * 0.99
 
 
-def test_a_short_first_hop_keeps_its_own_duration():
-    h = Harness(routine(wp(0.05, duration_s=2.0)))
+def test_a_short_first_hop_keeps_the_base_approach_duration():
+    a = pose(0.05)
+    sequence, poses = make(hold(a, 0.5))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
     h.executor.start()
 
     assert h.executor._arrival_deadline - h.clock.now == pytest.approx(2.0 * 3)
 
 
-def test_later_waypoints_are_not_stretched():
-    h = Harness(routine(wp(0.0, duration_s=1.0), wp(2.0, duration_s=1.0)))
+def test_later_moves_are_not_stretched():
+    a, b = pose(0.0), pose(2.0)
+    sequence, poses = make(hold(a, 0.2), transition(1.0), hold(b, 0.2))
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
     h.executor.start()
-    while h.executor.progress().waypoint_index == 0 and not h.executor.is_finished:
+    while h.executor.progress().block_index == 0 and not h.executor.is_finished:
         h.step()
 
-    assert h.executor.progress().waypoint_index == 1
+    assert h.executor.progress().block_index == 1
     assert h.executor._arrival_deadline - h.clock.now == pytest.approx(1.0 * 3, abs=0.05)
+
+
+# ── goto ─────────────────────────────────────────────────────────────────────
+
+
+def test_a_goto_is_a_single_transition_to_the_pose():
+    target = pose(0.4, "侧面")
+    ephemeral = Sequence(
+        id=target.id, name=f"位姿 · {target.name}",
+        blocks=[TransitionBlock(duration_s=2.0)],
+    )
+    h = Harness(ephemeral, {target.id: target}, goto=target)
+    h.executor.start()
+
+    assert h.executor.progress().phase is Phase.TRANSITION
+    assert h.executor.progress().block_total == 1
+
+    deadline = h.clock.now + 60.0
+    while not h.executor.is_finished and h.clock.now < deadline:
+        h.step()
+    assert h.executor.phase is Phase.DONE
+    assert h.arm.read_state().positions["joint1"] == pytest.approx(0.4, abs=0.02)

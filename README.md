@@ -232,10 +232,12 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 | | |
 |---|---|
 | `GET/POST /api/estop` · `POST /api/estop/clear` | Emergency stop. Engage always 200s; repeat engages keep the first reason |
-| `GET/POST /api/routines` · `GET/PATCH/DELETE /api/routines/{id}` | Routine CRUD |
-| `POST /api/routines/{id}/waypoints` · `…/capture` · `…/reorder` · `PATCH/DELETE …/{index}` | Waypoint editing and capture |
-| `POST /api/routines/{id}/play` · `POST /api/playback/stop` | Playback. Full pre-flight before play (path + plugin availability) |
-| `POST /api/routines/{id}/waypoints/{i}/goto` | Single anchor: go, settle, run its actions, hold. Accepts `{"source": "..."}` to record who triggered it |
+| `GET/POST /api/poses` · `PATCH/DELETE /api/poses/{id}` | Pose library. `POST /api/poses/capture` records the arm's current pose |
+| `GET /api/poses/{id}/links` | Which sequences reference this pose — asked before delete/overwrite |
+| `POST /api/poses/{id}/goto` | Single pose: go, hold. Accepts `{"source": "..."}` to record who triggered it |
+| `GET/POST /api/sequences` · `GET/PATCH/DELETE /api/sequences/{id}` | Sequence CRUD. Block writes are normalized on the way in (transitions are automatic); a running sequence is locked against edits |
+| `POST /api/sequences/{id}/execute` · `POST /api/execute/stop` · `POST /api/execute/resume` | Execution. Full pre-flight before execute (path + pose references + plugin availability); resume continues past a wait marker |
+| `GET/POST /api/templates` · `DELETE /api/templates/{id}` · `POST /api/templates/{id}/instantiate` | Structural recipes with pose slots; instantiate copies with each slot bound to a library pose |
 | `POST /api/teach` | Zero-force teaching toggle |
 | `POST /api/shutter/test` | Shutter self-test. Checks both links, USB and BLE; `?shoot=true` takes a real shot |
 | `POST /api/shutter/pair` | Put the board into BLE pairing mode and wait for the camera (30s). 409 while playing |

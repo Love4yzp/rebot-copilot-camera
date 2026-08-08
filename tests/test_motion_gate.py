@@ -25,20 +25,25 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/estop"): "engaging the stop must never be blocked by the stop",
     ("POST", "/api/estop/clear"): "the escape hatch cannot be gated on what it escapes",
-    # Routine editing is pure data. Editing while stopped is often exactly what
+    # Library editing is pure data. Editing while stopped is often exactly what
     # the operator is doing *because* the arm is stopped.
-    ("POST", "/api/routines"): "creates a record, moves nothing",
-    ("PATCH", "/api/routines/{rid}"): "renames a record, moves nothing",
-    ("DELETE", "/api/routines/{rid}"): "deletes a record, moves nothing",
-    ("POST", "/api/routines/{rid}/waypoints"): "edits stored poses, moves nothing",
-    ("PATCH", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
-    ("DELETE", "/api/routines/{rid}/waypoints/{index}"): "edits stored poses, moves nothing",
-    ("POST", "/api/routines/{rid}/waypoints/reorder"): "edits stored poses, moves nothing",
-    ("POST", "/api/playback/stop"): "stopping must work while stopped",
+    ("POST", "/api/poses"): "creates a record, moves nothing",
+    ("PATCH", "/api/poses/{pose_id}"): "edits a record, moves nothing",
+    ("DELETE", "/api/poses/{pose_id}"): "deletes a record, moves nothing",
     (
         "POST",
-        "/api/routines/{rid}/waypoints/capture",
+        "/api/poses/capture",
     ): "reads the current pose and writes a record; useful precisely while stopped",
+    ("POST", "/api/sequences"): "creates a record, moves nothing",
+    ("PATCH", "/api/sequences/{sid}"): "edits a record, moves nothing",
+    ("DELETE", "/api/sequences/{sid}"): "deletes a record, moves nothing",
+    ("POST", "/api/templates"): "snapshots a structure, moves nothing",
+    ("DELETE", "/api/templates/{tid}"): "deletes a record, moves nothing",
+    (
+        "POST",
+        "/api/templates/{tid}/instantiate",
+    ): "copies a recipe into a new record, moves nothing",
+    ("POST", "/api/execute/stop"): "stopping must work while stopped",
     ("POST", "/api/shutter/test"): "fires the shutter, moves no joints",
     (
         "POST",

@@ -1,4 +1,4 @@
-"""Motion endpoints and the state websocket, over HTTP."""
+"""Control state, execution control, teaching, the websocket, shutter endpoints."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
-from backend.routines import RoutineStore
+from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import SafetyLatch
 from backend.shutter import SimShutter
 
@@ -24,14 +24,15 @@ class FakeClock:
         return self.now
 
 
-@pytest.fixture
-def rig(tmp_path: Path):
+def wire(tmp_path: Path, joints=JOINTS, self_driven: bool = False):
     clock = FakeClock()
-    arm = SimArm(JOINTS, clock=clock, tau=0.05)
+    arm = SimArm(joints, clock=clock, tau=0.05, self_driven=self_driven)
     arm.connect()
 
     app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.pose_store = PoseStore(tmp_path / "poses")
+    app.state.sequence_store = SequenceStore(tmp_path / "sequences")
+    app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
     shutter = SimShutter()
     # Registered through the registry, not into the runner directly, so the
@@ -54,69 +55,13 @@ def rig(tmp_path: Path):
 
 
 @pytest.fixture
+def rig(tmp_path: Path):
+    return wire(tmp_path)
+
+
+@pytest.fixture
 def client(rig) -> TestClient:
     return rig[0]
-
-
-def make_routine(client: TestClient, *angles: float) -> str:
-    rid = client.post("/api/routines", json={"name": "shoot"}).json()["id"]
-    for q in angles:
-        client.post(
-            f"/api/routines/{rid}/waypoints",
-            json={"joints": {"joint1": q, "joint2": 0.0}},
-        )
-    return rid
-
-
-# ── playback ─────────────────────────────────────────────────────────────────
-
-
-def test_play_starts_a_routine(client: TestClient):
-    rid = make_routine(client, 0.2, 0.4)
-
-    r = client.post(f"/api/routines/{rid}/play")
-    assert r.status_code == 200
-    assert r.json()["mode"] == "playback"
-    assert r.json()["playback"]["waypoint_total"] == 2
-
-
-def test_play_refuses_an_empty_routine(client: TestClient):
-    rid = client.post("/api/routines", json={"name": "empty"}).json()["id"]
-    r = client.post(f"/api/routines/{rid}/play")
-    assert r.status_code == 400
-
-
-def test_play_is_409_while_the_stop_is_engaged(client: TestClient):
-    rid = make_routine(client, 0.2)
-    client.post("/api/estop", json={"reason": "stop"})
-
-    r = client.post(f"/api/routines/{rid}/play")
-    assert r.status_code == 409
-    assert r.json()["detail"]["error"] == "estop_latched"
-    assert r.json()["detail"]["reason"] == "stop"
-
-
-def test_play_is_409_when_already_playing(client: TestClient):
-    rid = make_routine(client, 0.9)
-    client.post(f"/api/routines/{rid}/play")
-
-    assert client.post(f"/api/routines/{rid}/play").status_code == 409
-
-
-def test_stop_works_while_the_estop_is_engaged(client: TestClient):
-    """Stopping must never be blocked by the thing that stopped you."""
-    rid = make_routine(client, 0.9)
-    client.post(f"/api/routines/{rid}/play")
-    client.post("/api/estop", json={"reason": "stop"})
-
-    assert client.post("/api/playback/stop").status_code == 200
-
-
-def test_play_on_unknown_routine_is_404(client: TestClient):
-    assert client.post("/api/routines/nope/play").status_code == 404
-
-
-# ── goto ─────────────────────────────────────────────────────────────────────
 
 
 def run_loop(controller, arm, clock, max_steps: int = 5000) -> None:
@@ -129,111 +74,83 @@ def run_loop(controller, arm, clock, max_steps: int = 5000) -> None:
             break
 
 
-def test_goto_visits_one_waypoint_fires_its_actions_and_stays(rig):
-    """The use-layer atomic operation: tap an anchor — go, settle, act, hold."""
+def make_playing_sequence(client: TestClient, hold_s: float = 30.0) -> str:
+    """A sequence with one long hold, executing. Returns its id."""
+    pose = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "shoot"}).json()["id"]
+    client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pose, "duration_s": hold_s, "markers": []}]})
+    assert client.post(f"/api/sequences/{sid}/execute").status_code == 200
+    return sid
+
+
+# ── execution control ────────────────────────────────────────────────────────
+
+
+def test_stop_returns_to_idle_and_clears_the_progress(rig):
     client, controller, arm, clock = rig
-    rid = client.post("/api/routines", json={"name": "four angles"}).json()["id"]
-    client.post(f"/api/routines/{rid}/waypoints", json={"joints": {"joint1": 0.4, "joint2": 0.0}})
-    client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={
-            "joints": {"joint1": 0.8, "joint2": 0.0},
-            "note": "side",
-            "actions": [{"type": "shutter", "count": 2, "interval_s": 0.1}],
-        },
-    )
+    make_playing_sequence(client)
 
-    r = client.post(f"/api/routines/{rid}/waypoints/1/goto")
+    r = client.post("/api/execute/stop")
     assert r.status_code == 200
-    assert r.json()["mode"] == "playback"
-    assert r.json()["playback"]["waypoint_total"] == 1
-
-    run_loop(controller, arm, clock)
-
+    assert r.json()["mode"] == "idle"
+    assert r.json()["playback"] is None, "an explicit stop clears the progress"
     assert not controller.is_playing
-    assert arm.read_state().positions["joint1"] == pytest.approx(0.8, abs=0.02)
-    assert controller.shutter.shots == 2, "the anchor's burst ran on arrival"
-
-    # The stored routine is untouched — the ephemeral one was never persisted.
-    stored = client.get(f"/api/routines/{rid}").json()
-    assert [w["joints"]["joint1"] for w in stored["waypoints"]] == [0.4, 0.8]
 
 
-def test_goto_is_409_while_the_stop_is_engaged(client: TestClient):
-    rid = make_routine(client, 0.2)
+def test_stop_works_while_the_estop_is_engaged(client: TestClient):
+    """Stopping must never be blocked by the thing that stopped you."""
+    make_playing_sequence(client)
     client.post("/api/estop", json={"reason": "stop"})
 
-    r = client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    assert client.post("/api/execute/stop").status_code == 200
+
+
+def test_resume_continues_past_a_wait_marker(rig):
+    client, controller, arm, clock = rig
+    pose = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "waits"}).json()["id"]
+    client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pose, "duration_s": 5.0, "markers": [
+            {"kind": "wait", "params": {}, "at": 1.0, "estimate_s": 0.0}]}]})
+    client.post(f"/api/sequences/{sid}/execute")
+
+    for _ in range(500):
+        clock.now += 0.01
+        arm.step(0.01)
+        controller.tick()
+        if controller.executor and controller.executor.is_waiting:
+            break
+
+    state = client.get("/api/control").json()
+    assert state["playback"]["phase"] == "wait"
+    assert state["playback"]["t_in_block"] == pytest.approx(1.0, abs=0.05)
+
+    r = client.post("/api/execute/resume")
+    assert r.status_code == 200
+    assert r.json()["playback"]["phase"] == "hold"
+
+    run_loop(controller, arm, clock)
+    assert controller.executor.phase.value == "done"
+
+
+def test_resume_without_a_wait_is_409(client: TestClient):
+    r = client.post("/api/execute/resume")
+    assert r.status_code == 409
+    assert "no wait marker" in r.json()["detail"]
+
+
+def test_resume_is_gated_during_the_stop(rig):
+    """Resuming is motion; a stop engaged during the wait already aborted."""
+    client, *_ = rig
+    make_playing_sequence(client)
+    client.post("/api/estop", json={"reason": "stop"})
+
+    r = client.post("/api/execute/resume")
     assert r.status_code == 409
     assert r.json()["detail"]["error"] == "estop_latched"
-
-
-def test_goto_is_409_while_teaching_or_playing(client: TestClient):
-    rid = make_routine(client, 0.2, 0.4)
-
-    client.post("/api/teach", json={"enabled": True})
-    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 409
-    client.post("/api/teach", json={"enabled": False})
-
-    client.post(f"/api/routines/{rid}/play")
-    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 409
-
-
-def test_goto_on_a_bad_index_or_routine_is_404(client: TestClient):
-    rid = make_routine(client, 0.2)
-    assert client.post(f"/api/routines/{rid}/waypoints/5/goto").status_code == 404
-    assert client.post("/api/routines/nope/waypoints/0/goto").status_code == 404
-
-
-def test_goto_preflights_the_path_from_the_current_pose(tmp_path: Path):
-    """Two legal poses, an illegal line between them — refuse before moving.
-
-    Needs a six-joint arm so the "current pose" half of the path is real, so
-    this test builds its own rig rather than using the two-joint fixture.
-    """
-    clock = FakeClock()
-    arm = SimArm(
-        ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"), clock=clock, tau=0.05
-    )
-    arm.connect()
-    app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
-    app.state.broadcaster = Broadcaster()
-    shutter = SimShutter()
-    # Registered through the registry, not into the runner directly, so the
-    # two cannot disagree about what is installed.
-    runner = InlineRunner()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
-    app.state.controller = Controller(
-        arm=arm,
-        shutter=shutter,
-        latch=app.state.latch,
-        broadcaster=app.state.broadcaster,
-        clock=clock,
-        # Inline, so the fake clock above drives everything and no assertion
-        # depends on thread scheduling. That the threaded runner keeps the loop
-        # free while a provider blocks is tested in test_action_runner.py.
-        actions=runner,
-    )
-    client = TestClient(app)
-
-    here = {
-        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
-        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
-    }
-    there = {
-        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
-        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
-    }
-    rid = client.post("/api/routines", json={"name": "through the base"}).json()["id"]
-    assert client.post(f"/api/routines/{rid}/waypoints", json={"joints": there}).status_code == 201
-    arm.drag(here)  # from rest, a delta is an absolute pose
-
-    r = client.post(f"/api/routines/{rid}/waypoints/0/goto")
-    assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "unsafe_path"
-    assert client.get("/api/control").json()["playing"] is False
 
 
 # ── teaching ─────────────────────────────────────────────────────────────────
@@ -257,45 +174,9 @@ def test_teach_is_409_while_stopped(client: TestClient):
     assert client.post("/api/teach", json={"enabled": True}).status_code == 409
 
 
-# ── capture ──────────────────────────────────────────────────────────────────
-
-
-def test_capture_records_the_arms_current_pose(rig):
-    client, controller, arm, _ = rig
-    rid = client.post("/api/routines", json={"name": "taught"}).json()["id"]
-
-    client.post("/api/teach", json={"enabled": True})
-    arm.drag({"joint1": 0.42})
-
-    r = client.post(f"/api/routines/{rid}/waypoints/capture", json={"settle_ms": 700})
-    assert r.status_code == 201
-
-    waypoint = r.json()["waypoints"][0]
-    assert waypoint["joints"]["joint1"] == pytest.approx(0.42)
-    assert waypoint["settle_ms"] == 700
-
-
-def test_capturing_three_poses_records_them_in_order(rig):
-    """Drag, let go, press — three times. The whole teach loop."""
-    client, controller, arm, _ = rig
-    rid = client.post("/api/routines", json={"name": "taught"}).json()["id"]
-    client.post("/api/teach", json={"enabled": True})
-
-    for delta in (0.2, 0.3, -0.1):
-        arm.drag({"joint1": delta})
-        routine = client.post(f"/api/routines/{rid}/waypoints/capture").json()
-
-    angles = [round(w["joints"]["joint1"], 6) for w in routine["waypoints"]]
-    assert angles == [0.2, 0.5, 0.4]
-
-
-def test_capture_works_while_stopped(rig):
-    """An operator who just hit stop may well want the pose it stopped at."""
-    client, controller, arm, _ = rig
-    rid = client.post("/api/routines", json={"name": "taught"}).json()["id"]
-    client.post("/api/estop", json={"reason": "stop"})
-
-    assert client.post(f"/api/routines/{rid}/waypoints/capture").status_code == 201
+def test_teach_is_409_while_a_sequence_is_executing(client: TestClient):
+    make_playing_sequence(client)
+    assert client.post("/api/teach", json={"enabled": True}).status_code == 409
 
 
 # ── websocket ────────────────────────────────────────────────────────────────
@@ -329,34 +210,35 @@ def test_websocket_reports_the_stop(rig):
     assert message["data"]["estop"]["reason"] == "cable snagged"
 
 
-# ── pre-flight ───────────────────────────────────────────────────────────────
+def test_websocket_streams_seq_playback_progress(rig):
+    """The progress message is the SeqPlayback shape the frontend clamps."""
+    client, controller, arm, clock = rig
+    pose = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.3, "joint2": 0.0}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "ws"}).json()["id"]
+    client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pose, "duration_s": 0.3, "markers": []}]})
 
+    with client.websocket_connect("/ws") as ws:
+        client.post(f"/api/sequences/{sid}/execute")
+        run_loop(controller, arm, clock)
+        controller.tick()
 
-def test_play_preflights_the_path_between_legal_waypoints(client: TestClient):
-    """Both poses are legal; the straight line between them goes through the
-    base. Refuse before anything moves."""
-    a = {
-        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
-        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
+        seen_playback = None
+        for _ in range(100):
+            message = ws.receive_json()
+            if message["type"] == "state" and message["data"]["playback"]:
+                seen_playback = message["data"]["playback"]
+            if seen_playback and seen_playback["phase"] == "done":
+                break
+
+    assert seen_playback is not None
+    assert set(seen_playback) == {
+        "sequence_id", "sequence_name", "block_index", "block_total",
+        "phase", "t_in_block", "error", "finished",
     }
-    b = {
-        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
-        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
-    }
-    rid = client.post("/api/routines", json={"name": "through the base"}).json()["id"]
-    for pose in (a, b):
-        assert client.post(f"/api/routines/{rid}/waypoints", json={"joints": pose}).status_code == 201
-
-    r = client.post(f"/api/routines/{rid}/play")
-    assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "unsafe_routine"
-    assert any("path 0->1" in reason for reason in r.json()["detail"]["reasons"])
-    assert client.get("/api/control").json()["playing"] is False
-
-
-def test_a_clean_routine_still_plays(client: TestClient):
-    rid = make_routine(client, 0.2, 0.5)
-    assert client.post(f"/api/routines/{rid}/play").status_code == 200
+    assert seen_playback["phase"] == "done"
+    assert seen_playback["block_index"] == seen_playback["block_total"]
 
 
 # ── shutter self-test ────────────────────────────────────────────────────────
@@ -383,8 +265,8 @@ def test_a_reachable_board_with_no_camera_paired_is_not_a_pass(rig):
     """The gap this endpoint used to have. `ping` answers for the USB cable and
     the firmware deliberately does not touch the camera for it, so a board that
     answers perfectly says nothing about whether a frame will be taken. Reported
-    green, the first anyone would hear of an unpaired camera is a routine
-    failing at the first anchor with the subject already in place.
+    green, the first anyone would hear of an unpaired camera is a sequence
+    failing at the first station with the subject already in place.
 
     With the three-state fix, the endpoint now distinguishes "never paired"
     (needs a human with the menu) from "paired but sleeping" (resolves on the
@@ -462,18 +344,17 @@ def test_pairing_reports_a_camera_that_never_showed_up(rig):
     assert "no camera found" in body["error"]
 
 
-def test_pairing_is_refused_while_a_routine_is_playing(rig):
+def test_pairing_is_refused_while_a_sequence_is_executing(rig):
     """The driver takes one command at a time, so a thirty-second pairing scan
     would stall the frames queued behind it."""
     client, controller, _, _ = rig
-    rid = make_routine(client, 0.2, 0.4)
-    assert client.post(f"/api/routines/{rid}/play").status_code == 200
+    make_playing_sequence(client)
     assert controller.is_playing
 
     r = client.post("/api/shutter/pair")
 
     assert r.status_code == 409
-    assert "playing" in r.json()["detail"]
+    assert "executing" in r.json()["detail"]
     assert controller.shutter.pairs == 0
 
 
@@ -490,18 +371,17 @@ def test_smart_pairing_attaches_the_camera(rig):
     assert controller.shutter.smart_pairs == 1
 
 
-def test_smart_pairing_is_refused_while_a_routine_is_playing(rig):
+def test_smart_pairing_is_refused_while_a_sequence_is_executing(rig):
     """A 75-second smart-pairing scan would stall the frames queued behind it,
     same as the ordinary pair."""
     client, controller, _, _ = rig
-    rid = make_routine(client, 0.2, 0.4)
-    assert client.post(f"/api/routines/{rid}/play").status_code == 200
+    make_playing_sequence(client)
     assert controller.is_playing
 
     r = client.post("/api/shutter/pair_smart")
 
     assert r.status_code == 409
-    assert "playing" in r.json()["detail"]
+    assert "executing" in r.json()["detail"]
     assert controller.shutter.smart_pairs == 0
 
 
@@ -531,48 +411,20 @@ def test_the_service_arm_moves_without_anything_stepping_it(tmp_path: Path):
 
     Controller.tick() only reads the arm, so a simulator that has to be
     step()ed by hand never moves in a running service: every play and every
-    goto ended in "waypoint 0 not reached within 6.0s". This drives nothing but
-    the control loop, exactly as the service does.
+    goto ended in "not reached". This drives nothing but the control loop,
+    exactly as the service does.
     """
-    clock = FakeClock()
-    arm = SimArm(JOINTS, clock=clock, tau=0.05, self_driven=True)
-    arm.connect()
-    app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
-    app.state.broadcaster = Broadcaster()
-    shutter = SimShutter()
-    # Registered through the registry, not into the runner directly, so the
-    # two cannot disagree about what is installed.
-    runner = InlineRunner()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
-    app.state.controller = Controller(
-        arm=arm,
-        shutter=shutter,
-        latch=app.state.latch,
-        broadcaster=app.state.broadcaster,
-        clock=clock,
-        actions=runner,
-    )
-    client = TestClient(app)
+    client, controller, arm, clock = wire(tmp_path, self_driven=True)
 
-    rid = client.post("/api/routines", json={"name": "sim"}).json()["id"]
-    client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={
-            "joints": {"joint1": 0.3, "joint2": 0.0},
-            "settle_ms": 50,
-            "actions": [{"type": "shutter"}],
-        },
-    )
-    assert client.post(f"/api/routines/{rid}/waypoints/0/goto").status_code == 200
+    pid = client.post("/api/poses", json={
+        "name": "sim", "joints": {"joint1": 0.3, "joint2": 0.0}}).json()["id"]
+    assert client.post(f"/api/poses/{pid}/goto").status_code == 200
 
     for _ in range(5000):
         clock.now += 0.01
-        app.state.controller.tick()   # no arm.step() — that is the point
-        if not app.state.controller.is_playing:
+        controller.tick()   # no arm.step() — that is the point
+        if not controller.is_playing:
             break
 
-    assert app.state.controller.executor.phase.value == "done"
+    assert controller.executor.phase.value == "done"
     assert arm.read_state().positions["joint1"] == pytest.approx(0.3, abs=0.02)
-    assert shutter.shots == 1

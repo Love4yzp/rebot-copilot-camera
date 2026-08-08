@@ -10,7 +10,7 @@ import pytest
 from backend.actions import InlineRunner, ShutterProvider
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
-from backend.routines import Routine, ShutterAction, Waypoint
+from backend.sequences import EventMarker, HoldBlock, Pose, Sequence, TransitionBlock
 from backend.safety import LatchSource, SafetyLatch, Watchdog
 from backend.shutter import SimShutter
 
@@ -64,8 +64,24 @@ class Rig:
         raise AssertionError("playback never finished")
 
 
-def wp(j1: float, **kwargs) -> Waypoint:
-    return Waypoint(joints={"joint1": j1, "joint2": 0.0}, **kwargs)
+def seq(*angles: float, name: str = "x", shutter: bool = False) -> tuple[Sequence, dict]:
+    """A hold per angle, transitions between, optionally a shutter marker each."""
+    poses: dict[str, Pose] = {}
+    blocks = []
+    for i, q in enumerate(angles):
+        p = Pose(name=f"p{i + 1}", joints={"joint1": q, "joint2": 0.0})
+        poses[p.id] = p
+        if i:
+            blocks.append(TransitionBlock(duration_s=1.0))
+        markers = [
+            EventMarker(
+                kind="shutter",
+                params={"count": 1, "interval_s": 0.0, "focus_first": True},
+                at=0.1,
+            )
+        ] if shutter else []
+        blocks.append(HoldBlock(pose_id=p.id, duration_s=0.3, markers=markers))
+    return Sequence(name=name, blocks=blocks), poses
 
 
 @pytest.fixture
@@ -81,31 +97,38 @@ def test_idle_by_default(rig: Rig):
     assert rig.controller.mode == "idle"
 
 
-def test_playback_runs_a_routine_to_completion(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(0.2, actions=[ShutterAction()]), wp(0.5)]))
+def test_playback_runs_a_sequence_to_completion(rig: Rig):
+    sequence, poses = seq(0.2, 0.5, shutter=True)
+    rig.controller.play(sequence, poses)
     assert rig.controller.mode == "playback"
 
     rig.run_until_done()
 
     assert rig.controller.executor.phase is Phase.DONE
-    assert rig.shutter.shots == 1
+    assert rig.shutter.shots == 2
     assert rig.controller.mode == "idle"
 
 
-def test_cannot_start_two_routines(rig: Rig):
-    rig.controller.play(Routine(name="a", waypoints=[wp(0.9)]))
-    with pytest.raises(RuntimeError, match="already playing"):
-        rig.controller.play(Routine(name="b", waypoints=[wp(0.1)]))
+def test_cannot_start_two_sequences(rig: Rig):
+    a, aposes = seq(0.9, name="a")
+    b, bposes = seq(0.1, name="b")
+    rig.controller.play(a, aposes)
+    with pytest.raises(RuntimeError, match="already executing"):
+        rig.controller.play(b, bposes)
 
 
-def test_teaching_stops_playback(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(0.9)]))
+def test_teaching_is_refused_while_a_sequence_is_playing(rig: Rig):
+    """A floating arm and a moving target in the same loop is the mock's 409 —
+    the operator stops the run first, deliberately."""
+    sequence, poses = seq(0.9)
+    rig.controller.play(sequence, poses)
     rig.step(3)
 
-    rig.controller.set_teaching(True)
+    with pytest.raises(RuntimeError, match="cannot teach"):
+        rig.controller.set_teaching(True)
 
-    assert rig.controller.mode == "teach"
-    assert rig.controller.executor.phase is Phase.ABORTED
+    assert rig.controller.mode == "playback"
+    assert not rig.controller.executor.is_finished, "the run was not sacrificed"
 
 
 def test_teaching_starts_locked_and_floats_once_pushed(rig: Rig):
@@ -152,7 +175,10 @@ def test_a_floating_arm_is_not_commanded(rig: Rig):
 
 
 def test_stop_freezes_the_arm_where_it_was(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(1.0, duration_s=5)]))
+    sequence, poses = seq(1.0)
+    # A long first approach so the arm is mid-move when the stop lands.
+    sequence.blocks[0].duration_s = 5.0
+    rig.controller.play(sequence, poses)
     rig.step(20)
 
     rig.latch.engage("operator pressed stop", LatchSource.UI)
@@ -166,7 +192,8 @@ def test_stop_freezes_the_arm_where_it_was(rig: Rig):
 
 
 def test_the_freeze_pose_is_recorded_once_at_the_moment_the_loop_notices(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(1.0, duration_s=5)]))
+    sequence, poses = seq(1.0)
+    rig.controller.play(sequence, poses)
     rig.step(20)
 
     rig.latch.engage("stop", LatchSource.API)
@@ -180,15 +207,12 @@ def test_the_freeze_pose_is_recorded_once_at_the_moment_the_loop_notices(rig: Ri
 def test_stop_mid_playback_aborts_and_never_resumes(rig: Rig):
     """The one that matters.
 
-    Engage mid-run: the routine stops, the arm holds, and clearing the stop
+    Engage mid-run: the sequence stops, the arm holds, and clearing the stop
     leaves the system idle rather than picking up where it left off. By the
     time an operator clears a stop the scene has usually changed.
     """
-    routine = Routine(
-        name="multi-angle",
-        waypoints=[wp(0.3, actions=[ShutterAction()]), wp(0.9, actions=[ShutterAction()])],
-    )
-    rig.controller.play(routine)
+    sequence, poses = seq(0.3, 0.9, name="multi-angle", shutter=True)
+    rig.controller.play(sequence, poses)
     rig.step(10)
 
     rig.latch.engage("operator pressed stop", LatchSource.UI)
@@ -233,9 +257,10 @@ def test_stop_during_teaching_clamps_the_arm(rig: Rig):
 
 
 def test_play_is_refused_while_stopped(rig: Rig):
+    sequence, poses = seq(0.1)
     rig.latch.engage("stop", LatchSource.UI)
     with pytest.raises(RuntimeError, match="emergency stop"):
-        rig.controller.play(Routine(name="x", waypoints=[wp(0.1)]))
+        rig.controller.play(sequence, poses)
 
 
 def test_teaching_is_refused_while_stopped(rig: Rig):
@@ -245,7 +270,8 @@ def test_teaching_is_refused_while_stopped(rig: Rig):
 
 
 def test_mode_reports_estop_above_everything_else(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(0.9)]))
+    sequence, poses = seq(0.9)
+    rig.controller.play(sequence, poses)
     rig.latch.engage("stop", LatchSource.UI)
     rig.step()
     assert rig.controller.mode == "estop"
@@ -322,7 +348,9 @@ def test_persistent_read_failure_engages_the_stop():
 def test_drift_is_not_judged_against_a_moving_target():
     """During playback a large error is the whole point of moving."""
     rig = Rig(watchdog=True)
-    rig.controller.play(Routine(name="x", waypoints=[wp(1.0, duration_s=5)]))
+    sequence, poses = seq(1.0)
+    sequence.blocks[0].duration_s = 5.0
+    rig.controller.play(sequence, poses)
     rig.step(300)
 
     assert rig.latch.is_latched is False
@@ -353,13 +381,52 @@ def test_published_state_carries_the_stop_reason(rig: Rig):
     rig.step()
 
     estop = [m for m in rig.published if m["type"] == "state"][-1]["data"]["estop"]
-    assert estop == {"latched": True, "reason": "joint2 stalled", "source": "watchdog"}
+    assert estop["latched"] is True
+    assert estop["reason"] == "joint2 stalled"
+    assert estop["source"] == "watchdog"
 
 
 def test_playback_progress_is_published(rig: Rig):
-    rig.controller.play(Routine(name="x", waypoints=[wp(0.2)]))
+    sequence, poses = seq(0.2, 0.5)
+    rig.controller.play(sequence, poses)
     rig.run_until_done()
 
     phases = [m["data"]["phase"] for m in rig.published if m["type"] == "playback"]
-    assert "moving" in phases
+    assert "hold" in phases
+    assert "transition" in phases
     assert phases[-1] == "done"
+
+
+def test_the_progress_payload_is_the_seq_playback_shape(rig: Rig):
+    sequence, poses = seq(0.2, name="wire check")
+    rig.controller.play(sequence, poses)
+    rig.run_until_done()
+
+    last = [m for m in rig.published if m["type"] == "playback"][-1]["data"]
+    assert set(last) == {
+        "sequence_id", "sequence_name", "block_index", "block_total",
+        "phase", "t_in_block", "error", "finished",
+    }
+    assert last["sequence_id"] == sequence.id
+    assert last["sequence_name"] == "wire check"
+    assert last["finished"] is True
+    assert last["block_index"] == last["block_total"]
+
+
+def test_a_finished_run_keeps_broadcasting_done_but_a_stop_goes_null(rig: Rig):
+    """The UI relies on the lingering done to keep saying 到位; an explicit
+    stop clears the progress instead."""
+    sequence, poses = seq(0.2)
+    rig.controller.play(sequence, poses)
+    rig.run_until_done()
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["playback"]["phase"] == "done"
+
+    other, oposes = seq(0.9)
+    rig.controller.play(other, oposes)
+    rig.step(3)
+    rig.controller.stop_playback()
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["playback"] is None

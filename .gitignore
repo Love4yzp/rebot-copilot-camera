@@ -1,6 +1,10 @@
 # runtime data — teach/playback routines live here, never committed
 # (root-anchored: an unanchored "routines/" also swallows backend/routines/)
 /routines/
+# v2 libraries — same operator-data treatment as /routines/
+/poses/
+/sequences/
+/templates/
 
 # python
 __pycache__/

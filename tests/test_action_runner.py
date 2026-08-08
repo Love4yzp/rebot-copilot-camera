@@ -25,7 +25,6 @@ from backend.actions import (
 )
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
-from backend.routines import Routine, ShutterAction, Waypoint
 from backend.safety import SafetyLatch, Watchdog
 from backend.shutter import SimShutter
 
@@ -315,7 +314,8 @@ def test_a_provider_is_told_where_it_is_but_given_no_way_to_move():
 def test_an_abort_mid_action_abandons_the_job_and_never_acts_on_it():
     """A serial write already on its way cannot be recalled. What stops is
     anything happening because of how it turns out."""
-    from backend.core import Phase, RoutineExecutor
+    from backend.core import Phase, SequenceExecutor
+    from backend.sequences import EventMarker, HoldBlock, Pose, Sequence
 
     clock = FakeClock()
     provider = BlockingProvider()
@@ -326,27 +326,24 @@ def test_an_abort_mid_action_abandons_the_job_and_never_acts_on_it():
     # The executor asks for "shutter"; give that name to a provider that hangs.
     provider.id = "shutter"
     runner.register(provider)
-    routine = Routine(
+    target = Pose(name="p", joints={"joint1": 0.1, "joint2": 0.0})
+    sequence = Sequence(
         name="x",
-        waypoints=[
-            Waypoint(
-                joints={"joint1": 0.1, "joint2": 0.0},
-                settle_ms=0,
-                actions=[ShutterAction(timeout_s=120)],
-            ),
-            Waypoint(joints={"joint1": 0.5, "joint2": 0.0}),
+        blocks=[
+            HoldBlock(pose_id=target.id, duration_s=1.0, markers=[
+                EventMarker(kind="shutter", params={"count": 1}, at=0.1)]),
         ],
     )
-    executor = RoutineExecutor(routine, arm=arm, actions=runner, clock=clock)
+    executor = SequenceExecutor(
+        sequence, {target.id: target}, arm=arm, actions=runner, clock=clock)
 
     executor.start()
     for _ in range(2000):
         clock.now += DT
         arm.step(DT)
         executor.tick()
-        if executor.phase is Phase.ACTING:
+        if provider.entered.is_set():
             break
-    assert executor.phase is Phase.ACTING, "never reached the action"
     # Wait on the worker without moving the clock: the deadline must not pass
     # while the test is only waiting for the OS to schedule a thread.
     assert provider.entered.wait(JOIN_S), "the action was never handed over"
@@ -363,7 +360,7 @@ def test_an_abort_mid_action_abandons_the_job_and_never_acts_on_it():
         executor.tick()
 
     assert executor.phase is Phase.ABORTED
-    assert executor.progress().waypoint_index == 0, "the late result moved the routine on"
+    assert executor.progress().block_index == 0, "the late result moved the sequence on"
     runner.close()
 
 

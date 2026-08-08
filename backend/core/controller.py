@@ -23,25 +23,25 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable
+from typing import Callable, Mapping
 
 from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shutter import ShutterProvider
 from ..arm.base import ArmDriver
-from ..routines.models import Routine
+from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..arm.base import ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..shutter.base import ShutterDriver
 from . import events
 from .broadcaster import Broadcaster
-from .executor import Phase, RoutineExecutor
+from .executor import DEFAULT_APPROACH_S, SequenceExecutor
 from .floatlock import FloatLock, FloatLockConfig
 
 log = logging.getLogger(__name__)
 
 
 class Controller:
-    """Owns the arm, the latch and at most one running routine."""
+    """Owns the arm, the latch and at most one running sequence."""
 
     def __init__(
         self,
@@ -74,12 +74,16 @@ class Controller:
         self._expected_period_s = expected_period_s
 
         self._lock = threading.RLock()
-        self._executor: RoutineExecutor | None = None
+        # A finished executor is kept, not dropped: /ws goes on broadcasting
+        # its final progress, and the UI relies on that lingering "done" to
+        # keep saying 到位 while the arm holds. Dropped only by an explicit
+        # stop — after POST /api/execute/stop the playback field is null.
+        self._executor: SequenceExecutor | None = None
         self._teaching = False
         self._last_state = ArmState(positions={}, velocities={})
         self._hold_target: dict[str, float] | None = None
         self._was_latched = False
-        #: Who asked for the routine that is running (or last ran).
+        #: Who asked for the sequence that is running (or last ran).
         self._playback_source = "ui"
         self._floatlock = FloatLock(floatlock)
         self._float_engaged = False
@@ -121,34 +125,52 @@ class Controller:
             return self._playback_source
 
     @property
-    def executor(self) -> RoutineExecutor | None:
+    def executor(self) -> SequenceExecutor | None:
         with self._lock:
             return self._executor
+
+    @property
+    def playback_sequence_id(self) -> str | None:
+        """The id the current (or most recent) run belongs to. For a goto this
+        is the pose's id — the mock reports the same — so it never collides
+        with a real sequence in the library lockout."""
+        with self._lock:
+            return self._executor.sequence_id if self._executor is not None else None
 
     @property
     def is_playing(self) -> bool:
         with self._lock:
             return self._executor is not None and not self._executor.is_finished
 
-    def play(self, routine: Routine, source: str = "ui") -> RoutineExecutor:
-        """Start a routine. Refuses while stopped, teaching, or already playing.
+    def play(
+        self,
+        sequence: Sequence,
+        poses: Mapping[str, Pose],
+        source: str = "ui",
+    ) -> SequenceExecutor:
+        """Start a sequence. Refuses while stopped, teaching, or already playing.
 
-        ``source`` is who asked — the card that was tapped, an agent, a foot
-        switch, a shot-list script. It changes nothing about the motion and is
-        recorded only so that "why did the arm just move" has an answer. On a
-        machine several things can trigger, that question gets asked first and
-        is otherwise unanswerable after the fact.
+        Poses arrive resolved — the API layer read them out of the PoseStore,
+        so the executor never touches a store and a pose deleted mid-run cannot
+        change a run already in flight.
+
+        ``source`` is who asked — the transport bar, an agent, a foot switch, a
+        shot-list script. It changes nothing about the motion and is recorded
+        only so that "why did the arm just move" has an answer. On a machine
+        several things can trigger, that question gets asked first and is
+        otherwise unanswerable after the fact.
         """
         with self._lock:
             if self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
             if self.is_playing:
-                raise RuntimeError("a routine is already playing")
+                raise RuntimeError("a sequence is already executing")
             if self._teaching:
-                raise RuntimeError("cannot play while teaching")
+                raise RuntimeError("cannot execute while teaching")
 
-            executor = RoutineExecutor(
-                routine,
+            executor = SequenceExecutor(
+                sequence,
+                poses,
                 arm=self.arm,
                 actions=self.actions,
                 clock=self._clock,
@@ -158,18 +180,72 @@ class Controller:
                 on_event=self.emit_event,
             )
             self._playback_source = source
-            log.info("playing %r (%d waypoints) at the request of %r",
-                     routine.name, len(routine.waypoints), source)
+            log.info("playing %r (%d blocks) at the request of %r",
+                     sequence.name, len(sequence.blocks), source)
             executor.start()
             self._executor = executor
             return executor
 
+    def goto(self, pose: Pose, source: str = "ui") -> SequenceExecutor:
+        """Move to one library pose and stay there.
+
+        The use-layer atomic operation: tap a pose card, the arm goes and
+        holds. Implemented as an ephemeral one-block sequence — a lone
+        transition with the pose as its target — so arrival checking, the
+        first-approach speed limit (the arm can be anywhere when a card is
+        tapped) and stop-latch abort all come from the executor unchanged. The
+        ephemeral sequence is never stored.
+        """
+        ephemeral = Sequence(
+            id=pose.id,
+            name=f"位姿 · {pose.name}",
+            blocks=[TransitionBlock(duration_s=DEFAULT_APPROACH_S)],
+        )
+        with self._lock:
+            if self.latch.is_latched:
+                raise RuntimeError("emergency stop is engaged")
+            if self.is_playing:
+                raise RuntimeError("a sequence is already executing")
+            if self._teaching:
+                raise RuntimeError("cannot move while teaching")
+
+            executor = SequenceExecutor(
+                ephemeral,
+                {pose.id: pose},
+                goto=pose,
+                arm=self.arm,
+                actions=self.actions,
+                clock=self._clock,
+                on_progress=lambda p: self.broadcaster.publish(
+                    {"type": "playback", "data": _progress_payload(p)}
+                ),
+                on_event=self.emit_event,
+            )
+            self._playback_source = source
+            log.info("goto pose %r at the request of %r", pose.name, source)
+            executor.start()
+            self._executor = executor
+            return executor
+
+    def resume(self) -> bool:
+        """Continue past a wait marker. False when nothing is suspended."""
+        with self._lock:
+            if self._executor is None:
+                return False
+            return self._executor.resume()
+
     def stop_playback(self, reason: str = "stopped by operator") -> bool:
-        """Abort any running routine. Returns whether one was running."""
+        """Abort any running sequence. Returns whether one was running.
+
+        The executor is dropped afterwards, so the playback field goes null —
+        an explicit stop clears the progress, unlike a finished run, whose
+        final "done" keeps broadcasting (see __init__).
+        """
         with self._lock:
             if self._executor is None or self._executor.is_finished:
                 return False
             self._executor.abort(reason)
+            self._executor = None
             return True
 
     # ── teaching ─────────────────────────────────────────────────────────────
@@ -182,14 +258,14 @@ class Controller:
     def set_teaching(self, enabled: bool) -> None:
         """Enter or leave zero-force drag teaching.
 
-        Entering while a routine plays would put a floating arm and a moving
-        target in the same loop, so playback is stopped first.
+        Refused while a sequence plays: a floating arm and a moving target in
+        the same loop is the mock's 409, and the operator can stop first.
         """
         with self._lock:
             if enabled and self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
             if enabled and self.is_playing:
-                self.stop_playback("teaching started")
+                raise RuntimeError("cannot teach while a sequence is executing")
             self._teaching = enabled
             self._floatlock.reset()
             # Starts locked, so an arm nobody is holding yet does not sag.
@@ -345,6 +421,8 @@ class Controller:
                         "latched": latch.latched,
                         "reason": latch.reason,
                         "source": latch.source.value if latch.source else None,
+                        "engaged_at": latch.engaged_at,
+                        "freeze_pose": dict(latch.freeze_pose) if latch.freeze_pose else None,
                     },
                     "playback": _progress_payload(executor.progress()) if executor else None,
                     "source": self._playback_source if executor else None,
@@ -406,14 +484,14 @@ class Controller:
 
 
 def _progress_payload(progress) -> dict:
+    """The SeqPlayback wire shape — field for field what the frontend reads."""
     return {
+        "sequence_id": progress.sequence_id,
+        "sequence_name": progress.sequence_name,
+        "block_index": progress.block_index,
+        "block_total": progress.block_total,
         "phase": progress.phase.value,
-        "waypoint_index": progress.waypoint_index,
-        "waypoint_total": progress.waypoint_total,
-        "action_index": progress.action_index,
-        "action_total": progress.action_total,
-        "routine_id": progress.routine_id,
-        "routine_name": progress.routine_name,
+        "t_in_block": progress.t_in_block,
         "error": progress.error,
-        "finished": progress.phase in (Phase.DONE, Phase.ABORTED),
+        "finished": progress.is_finished,
     }

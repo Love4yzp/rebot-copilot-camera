@@ -1,8 +1,8 @@
-"""Motion endpoints and the state websocket.
+"""Control state, execution control, teaching, the state websocket, shutter.
 
-Everything here that moves the arm carries the motion gate. Capture does not:
-it reads the arm's current pose and writes a record, which is safe -- and
-useful -- while the stop is engaged.
+Everything here that moves the arm carries the motion gate. ``execute/stop``
+does not: stopping must work while stopped, and while the emergency stop is
+engaged.
 """
 
 from __future__ import annotations
@@ -13,10 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
-from ..actions import validate_providers
 from ..core import Broadcaster, Controller, events
-from ..routines import Routine, RoutineNotFound, RoutineStore, Waypoint
-from ..safety.kinematics import validate_pose, validate_sequence
 from ..shutter import (
     CAMERA_STATUS_DISCONNECTED,
     CAMERA_STATUS_UNPAIRED,
@@ -35,24 +32,13 @@ def _controller(request: Request) -> Controller:
     return request.app.state.controller
 
 
-def _store(request: Request) -> RoutineStore:
-    return request.app.state.routine_store
-
-
-def _load(request: Request, rid: str) -> Routine:
-    try:
-        return _store(request).get(rid)
-    except RoutineNotFound:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no routine {rid!r}") from None
-
-
 class PlaybackState(BaseModel):
     mode: str
     playing: bool
     teaching: bool
     rate_hz: float
     playback: dict | None = None
-    #: Who asked for the running routine. See Controller.play.
+    #: Who asked for the running sequence. See Controller.play.
     source: str | None = None
 
 
@@ -68,7 +54,8 @@ class TriggerRequest(BaseModel):
     )
 
 
-def _state(controller: Controller) -> PlaybackState:
+def playback_state(controller: Controller) -> PlaybackState:
+    """The PlaybackState the motion endpoints answer with."""
     from ..core.controller import _progress_payload
 
     executor = controller.executor
@@ -84,108 +71,33 @@ def _state(controller: Controller) -> PlaybackState:
 
 @router.get("/api/control", response_model=PlaybackState)
 def get_control_state(request: Request) -> PlaybackState:
-    return _state(_controller(request))
+    return playback_state(_controller(request))
 
 
-# ── playback ─────────────────────────────────────────────────────────────────
+# ── execution control ────────────────────────────────────────────────────────
 
 
-@router.post(
-    "/api/routines/{rid}/play",
-    response_model=PlaybackState,
-    dependencies=[Depends(require_arm_available)],
-)
-def play_routine(
-    rid: str, request: Request, body: TriggerRequest | None = None
-) -> PlaybackState:
-    routine = _load(request, rid)
-    if not routine.waypoints:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "routine has no waypoints")
-
-    # Pre-flight the whole sequence, including the straight lines between
-    # consecutive poses. Two legal waypoints can have an illegal path between
-    # them, and discovering that by watching the arm reach it is the expensive
-    # way to find out. Nothing has moved yet at this point.
-    unsafe = validate_sequence([w.joints for w in routine.waypoints])
-    if unsafe:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_routine", "reasons": unsafe}
-        )
-
-    # And pre-flight the actions the same way. A routine outlives the plugin it
-    # was written against -- packages get uninstalled, boards get unplugged --
-    # and an unavailable provider means walking the whole set to deliver
-    # nothing, which is the failure the abort-by-default policy exists for.
-    missing = validate_providers(routine, request.app.state.plugins)
-    if missing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
-        )
-
-    try:
-        _controller(request).play(routine, source=(body or TriggerRequest()).source)
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return _state(_controller(request))
-
-
-@router.post("/api/playback/stop", response_model=PlaybackState)
-def stop_playback(request: Request) -> PlaybackState:
-    """Stop the routine. Not gated: stopping must work while stopped."""
+@router.post("/api/execute/stop", response_model=PlaybackState)
+def stop_execution(request: Request) -> PlaybackState:
+    """Stop the run. Not gated: stopping must work while stopped."""
     _controller(request).stop_playback()
-    return _state(_controller(request))
+    return playback_state(_controller(request))
 
 
 @router.post(
-    "/api/routines/{rid}/waypoints/{index}/goto",
+    "/api/execute/resume",
     response_model=PlaybackState,
     dependencies=[Depends(require_arm_available)],
 )
-def goto_waypoint(
-    rid: str, index: int, request: Request, body: TriggerRequest | None = None
-) -> PlaybackState:
-    """Move to one waypoint and stay there, running its actions on arrival.
+def resume_execution(request: Request) -> PlaybackState:
+    """Continue past the wait marker the run is suspended on.
 
-    The use-layer atomic operation: tap an anchor, the arm goes, settles, fires
-    the anchor's actions, and holds. Implemented as a one-waypoint ephemeral
-    routine, so arrival checking, settling, the first-approach speed limit (the
-    arm can be anywhere when a single anchor is tapped) and stop-latch abort
-    all come from the executor unchanged. The ephemeral routine is never
-    stored.
+    Gated: resuming is motion. A stop engaged during the wait already aborted
+    the run, so by the time the gate passes there is usually nothing to resume.
     """
-    routine = _load(request, rid)
-    if not 0 <= index < len(routine.waypoints):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"waypoint index {index} out of range (routine has {len(routine.waypoints)})",
-        )
-    waypoint = routine.waypoints[index]
-    controller = _controller(request)
-
-    # Pre-flight the path from wherever the arm is now. Two legal poses can
-    # have an illegal line between them; nothing has moved yet at this point.
-    current = dict(controller.arm.read_state().positions)
-    unsafe = validate_sequence([current, waypoint.joints])
-    if unsafe:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_path", "reasons": unsafe}
-        )
-
-    missing = validate_providers(
-        Routine(name="preflight", waypoints=[waypoint]), request.app.state.plugins
-    )
-    if missing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
-        )
-
-    label = waypoint.note or f"#{index + 1}"
-    single = Routine(name=f"{routine.name} · {label}", waypoints=[waypoint])
-    try:
-        controller.play(single, source=(body or TriggerRequest()).source)
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return _state(controller)
+    if not _controller(request).resume():
+        raise HTTPException(status.HTTP_409_CONFLICT, "no wait marker to resume from")
+    return playback_state(_controller(request))
 
 
 # ── teaching ─────────────────────────────────────────────────────────────────
@@ -203,62 +115,7 @@ def set_teaching(body: TeachRequest, request: Request) -> PlaybackState:
         _controller(request).set_teaching(body.enabled)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return _state(_controller(request))
-
-
-class CaptureRequest(BaseModel):
-    settle_ms: int | None = None
-    duration_s: float | None = None
-    note: str = ""
-    index: int | None = Field(default=None, description="Insert position; appends when omitted.")
-
-
-@router.post("/api/routines/{rid}/waypoints/capture", response_model=Routine, status_code=201)
-def capture_waypoint(rid: str, request: Request, body: CaptureRequest | None = None) -> Routine:
-    """Record the arm's current pose as a waypoint.
-
-    This is the "press the button" half of drag teaching: the operator has
-    already positioned the arm by hand and let go.
-
-    Not behind the motion gate. It reads a pose and writes a record; doing that
-    while the stop is engaged is harmless, and an operator who has just stopped
-    the arm may well want the pose it stopped at.
-    """
-    body = body or CaptureRequest()
-    routine = _load(request, rid)
-    controller = _controller(request)
-
-    fields = body.model_dump(exclude_none=True, exclude={"index"})
-    pose = dict(controller.arm.read_state().positions)
-    waypoint = Waypoint(joints=pose, **fields)
-
-    # Deliberately a warning, not a rejection. The arm is physically at this
-    # pose; refusing to record where it actually is would be absurd. But if the
-    # model calls it unsafe, the model and reality disagree -- a bad URDF, a
-    # miscalibrated zero -- and that is worth saying out loud before playback
-    # trusts the same model to pre-flight the routine.
-    unsafe = validate_pose(pose)
-    if unsafe:
-        log.warning("captured a pose the model considers unsafe: %s", "; ".join(unsafe))
-
-    if body.index is None:
-        routine.waypoints.append(waypoint)
-    elif 0 <= body.index <= len(routine.waypoints):
-        routine.waypoints.insert(body.index, waypoint)
-    else:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"insert index {body.index} out of range")
-
-    routine.touch()
-    saved = _store(request).save(routine)
-    controller.emit_event(
-        events.TEACH_CAPTURED,
-        {
-            "routine_id": routine.id,
-            "waypoint_index": routine.waypoints.index(waypoint),
-            "anchor": waypoint.note,
-        },
-    )
-    return saved
+    return playback_state(_controller(request))
 
 
 # ── websocket ────────────────────────────────────────────────────────────────
@@ -284,7 +141,7 @@ async def event_socket(websocket: WebSocket) -> None:
     a position stream over a studio LAN to find out.
 
     Read-only and non-negotiable, like ``/ws``: an event is a notification, not
-    a hook. Nothing a subscriber sends back can change what the routine does,
+    a hook. Nothing a subscriber sends back can change what the sequence does,
     because a subscriber that could refuse would be third-party code in the
     path that decides whether the arm moves.
     """
@@ -404,9 +261,9 @@ def pair_shutter(request: Request, timeout_s: float = PAIR_TIMEOUT_S) -> Shutter
     had reset — which drops the pairing — could not be recovered from the
     screen that was reporting the problem.
 
-    Refused while a routine is playing: the driver takes one command at a time,
-    so a pairing scan would stall the frames behind it, and re-pairing mid-shoot
-    is not a thing anyone means to do.
+    Refused while a sequence is executing: the driver takes one command at a
+    time, so a pairing scan would stall the frames behind it, and re-pairing
+    mid-shoot is not a thing anyone means to do.
 
     Not behind the motion gate for the same reason the self-test is not: no
     joint moves, and this is exactly what an operator does while the arm is
@@ -415,7 +272,7 @@ def pair_shutter(request: Request, timeout_s: float = PAIR_TIMEOUT_S) -> Shutter
     controller = _controller(request)
     if controller.is_playing:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "cannot pair the camera while a routine is playing"
+            status.HTTP_409_CONFLICT, "cannot pair the camera while a sequence is executing"
         )
 
     shutter = controller.shutter
@@ -450,12 +307,12 @@ def pair_shutter_smart(request: Request, timeout_s: float = PAIR_SMART_TIMEOUT_S
     The user must confirm on the camera's screen within 60 s after the
     identification handshake.
 
-    Refused while a routine is playing, same as the BLE remote pair endpoint.
+    Refused while a sequence is executing, same as the BLE remote pair endpoint.
     """
     controller = _controller(request)
     if controller.is_playing:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "cannot pair the camera while a routine is playing"
+            status.HTTP_409_CONFLICT, "cannot pair the camera while a sequence is executing"
         )
 
     shutter = controller.shutter

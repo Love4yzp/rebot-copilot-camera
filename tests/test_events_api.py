@@ -15,7 +15,7 @@ from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, events
-from backend.routines import RoutineStore
+from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import LatchSource, SafetyLatch
 from backend.shutter import SimShutter, ShutterTimeout
 
@@ -39,7 +39,9 @@ def rig(tmp_path: Path):
     runner = InlineRunner()
 
     app.state.latch = SafetyLatch(clock=clock)
-    app.state.routine_store = RoutineStore(tmp_path / "routines")
+    app.state.pose_store = PoseStore(tmp_path / "poses")
+    app.state.sequence_store = SequenceStore(tmp_path / "sequences")
+    app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
     app.state.plugins = ActionRegistry(runner)
     app.state.plugins.register(ShutterProvider(shutter))
@@ -72,18 +74,19 @@ def names(seen) -> list[str]:
     return [e["event"] for e in seen]
 
 
-def anchor(client: TestClient, actions=(), note="正面") -> str:
-    rid = client.post("/api/routines", json={"name": "events"}).json()["id"]
-    client.post(
-        f"/api/routines/{rid}/waypoints",
-        json={
-            "joints": {"joint1": 0.2, "joint2": 0.0},
-            "settle_ms": 0,
-            "note": note,
-            "actions": list(actions),
-        },
-    )
-    return rid
+def station(client: TestClient, name: str, markers=()) -> tuple[str, str]:
+    """A pose plus a one-station sequence with the given markers on its hold."""
+    pose_id = client.post("/api/poses", json={
+        "name": name, "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    sid = client.post("/api/sequences", json={"name": "events"}).json()["id"]
+    client.patch(f"/api/sequences/{sid}", json={"blocks": [
+        {"type": "hold", "pose_id": pose_id, "duration_s": 1.0, "markers": list(markers)}]})
+    return sid, pose_id
+
+
+def shutter_marker(at: float, **params) -> dict:
+    return {"kind": "shutter", "params": {"count": 1, "interval_s": 0.0,
+            "focus_first": True, **params}, "at": at, "estimate_s": 0.3}
 
 
 def run(controller, arm, clock, steps: int = 5000) -> None:
@@ -100,40 +103,41 @@ def run(controller, arm, clock, steps: int = 5000) -> None:
 
 def test_a_run_reports_arrival_and_each_action(rig):
     client, controller, arm, clock, seen, _ = rig
-    rid = anchor(client, [{"type": "shutter", "count": 2, "interval_s": 0.0}])
-    client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    sid, _ = station(client, "正面", [shutter_marker(0.2, count=2, interval_s=0.0)])
+    client.post(f"/api/sequences/{sid}/execute")
     run(controller, arm, clock)
 
     # Only the host's own events; a provider is free to interleave its own
     # (the shutter reports shutter.fired), which is the point of ctx.emit.
-    host = [n for n in names(seen) if n.startswith(("routine.", "anchor.", "action."))]
+    host = [n for n in names(seen) if n.startswith(("sequence.", "pose.", "action."))]
     assert host == [
-        events.ROUTINE_STARTED,
-        events.ANCHOR_ARRIVED,
+        events.SEQUENCE_STARTED,
+        events.POSE_ARRIVED,
         events.ACTION_STARTED,
         events.ACTION_DONE,
         events.ACTION_STARTED,
         events.ACTION_DONE,
-        events.ROUTINE_DONE,
+        events.SEQUENCE_DONE,
     ]
 
     arrived = seen[1]
-    assert arrived["data"]["anchor"] == "正面", "the operator's name for it, not an index"
+    assert arrived["data"]["pose_name"] == "正面", "the operator's name for it, not an index"
+    assert arrived["data"]["sequence_id"] == sid
     assert [e["data"]["frame"] for e in seen if e["event"] == events.ACTION_DONE] == [1, 2]
 
 
 def test_a_failed_action_is_reported_with_what_went_wrong(rig):
     client, controller, arm, clock, seen, shutter = rig
-    rid = anchor(client, [{"type": "shutter"}])
+    sid, _ = station(client, "正面", [shutter_marker(0.2)])
     shutter.script([ShutterTimeout("camera asleep")])
-    client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    client.post(f"/api/sequences/{sid}/execute")
     run(controller, arm, clock)
 
     failed = next(e for e in seen if e["event"] == events.ACTION_FAILED)
     assert failed["data"]["provider"] == "shutter"
     assert "camera asleep" in failed["data"]["error"]
     assert failed["data"]["kind"] == "ShutterTimeout"
-    assert events.ROUTINE_ABORTED in names(seen)
+    assert events.SEQUENCE_ABORTED in names(seen)
 
 
 def test_the_stop_is_reported_on_the_transition_not_every_tick(rig):
@@ -156,19 +160,19 @@ def test_the_stop_is_reported_on_the_transition_not_every_tick(rig):
 def test_capturing_a_pose_by_hand_is_reported(rig):
     """Teaching happens over HTTP, so the control loop cannot see it."""
     client, *_, seen, _ = rig
-    rid = client.post("/api/routines", json={"name": "events"}).json()["id"]
-    client.post(f"/api/routines/{rid}/waypoints/capture", json={"note": "侧面"})
+    client.post("/api/poses/capture", json={"name": "侧面"})
 
     captured = next(e for e in seen if e["event"] == events.TEACH_CAPTURED)
-    assert captured["data"]["anchor"] == "侧面"
+    assert captured["data"]["pose_name"] == "侧面"
+    assert captured["data"]["pose_id"]
 
 
 def test_a_provider_can_report_its_own_facts(rig):
     """ctx.emit is how a plugin answers "tell me when you did the thing"
     without the host having to know what the thing was."""
     client, controller, arm, clock, seen, _ = rig
-    rid = anchor(client, [{"type": "shutter"}])
-    client.post(f"/api/routines/{rid}/waypoints/0/goto")
+    sid, _ = station(client, "正面", [shutter_marker(0.2)])
+    client.post(f"/api/sequences/{sid}/execute")
     run(controller, arm, clock)
 
     assert "shutter.fired" in names(seen)
@@ -183,17 +187,17 @@ def test_the_event_socket_carries_events_and_not_the_position_stream(rig):
     client, controller, *_ = rig
 
     with client.websocket_connect("/api/events") as socket:
-        controller.emit_event(events.ANCHOR_ARRIVED, {"anchor": "正面"})
+        controller.emit_event(events.POSE_ARRIVED, {"pose_name": "正面"})
         controller.broadcaster.publish({"type": "state", "data": {"positions": {}}})
-        controller.emit_event(events.ROUTINE_DONE, {"routine_id": "r"})
+        controller.emit_event(events.SEQUENCE_DONE, {"sequence_id": "s"})
 
         first = socket.receive_json()
         second = socket.receive_json()
 
-    assert first["event"] == events.ANCHOR_ARRIVED
-    assert first["data"] == {"anchor": "正面"}
+    assert first["event"] == events.POSE_ARRIVED
+    assert first["data"] == {"pose_name": "正面"}
     assert "type" not in first, "the envelope is noise when every message is an event"
-    assert second["event"] == events.ROUTINE_DONE
+    assert second["event"] == events.SEQUENCE_DONE
 
 
 def test_the_state_socket_does_not_carry_events(rig):
@@ -202,7 +206,7 @@ def test_the_state_socket_does_not_carry_events(rig):
     client, controller, *_ = rig
 
     with client.websocket_connect("/ws") as socket:
-        controller.emit_event(events.ANCHOR_ARRIVED, {"anchor": "正面"})
+        controller.emit_event(events.POSE_ARRIVED, {"pose_name": "正面"})
         controller.broadcaster.publish({"type": "state", "data": {"positions": {}}})
 
         message = socket.receive_json()
@@ -234,9 +238,10 @@ def test_a_trigger_says_who_it_was(rig):
     """On a machine several things can trigger — a card, an agent, a foot
     switch, a script — "why did the arm move" is the first question asked."""
     client, controller, *_ = rig
-    rid = anchor(client)
+    pid = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
 
-    r = client.post(f"/api/routines/{rid}/waypoints/0/goto", json={"source": "footswitch"})
+    r = client.post(f"/api/poses/{pid}/goto", json={"source": "footswitch"})
 
     assert r.status_code == 200
     assert r.json()["source"] == "footswitch"
@@ -245,11 +250,13 @@ def test_a_trigger_says_who_it_was(rig):
 
 def test_the_source_defaults_to_the_ui_and_grants_nothing(rig):
     client, controller, *_ = rig
-    rid = anchor(client)
+    pid = client.post("/api/poses", json={
+        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    sid, _ = station(client, "正面")
     client.post("/api/estop", json={"reason": "stop"})
 
-    r = client.post(f"/api/routines/{rid}/waypoints/0/goto", json={"source": "footswitch"})
+    r = client.post(f"/api/poses/{pid}/goto", json={"source": "footswitch"})
     assert r.status_code == 409, "a source is a label, not a permission"
 
     client.post("/api/estop/clear")
-    assert client.post(f"/api/routines/{rid}/play").json()["source"] == "ui"
+    assert client.post(f"/api/sequences/{sid}/execute").json()["source"] == "ui"

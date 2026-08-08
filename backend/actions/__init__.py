@@ -17,7 +17,7 @@ from .registry import (
 )
 from .runner import ActionRunner, InlineRunner, Job, ThreadedRunner
 from .shutter import ShutterParams, ShutterProvider
-from .validate import validate_action_params, validate_providers
+from .validate import validate_marker_params, validate_providers
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -39,6 +39,6 @@ __all__ = [
     "ShutterProvider",
     "ThreadedRunner",
     "check_shape",
-    "validate_action_params",
+    "validate_marker_params",
     "validate_providers",
 ]
