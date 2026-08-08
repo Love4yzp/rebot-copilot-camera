@@ -18,6 +18,7 @@ from typing import Callable, Protocol
 
 from .base import (
     CAMERA_STATUS_CONNECTED,
+    PAIR_SMART_TIMEOUT_S,
     PAIR_TIMEOUT_S,
     ShutterError,
     ShutterNotConnected,
@@ -26,6 +27,7 @@ from .base import (
 from .protocol import (
     FOCUS,
     PAIR,
+    PAIRSMART,
     PING,
     SHOOT,
     STATUS,
@@ -133,6 +135,12 @@ class Esp32Shutter:
         """Put the board into BLE pairing mode. Slow by nature — a human is
         holding a camera and pressing buttons on it."""
         self._command(PAIR, timeout_s=timeout_s)
+
+    def pair_smart(self, timeout_s: float = PAIR_SMART_TIMEOUT_S) -> None:
+        """Put the board into smartphone-mode pairing.  The camera must be in
+        "connect to smartphone" mode (not "remote" mode).  The user must
+        confirm on the camera's screen within 60 s."""
+        self._command(PAIRSMART, timeout_s=timeout_s)
 
     def camera_connected(self) -> bool:
         """Ask the board whether it has the camera.

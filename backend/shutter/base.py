@@ -29,6 +29,10 @@ from typing import Protocol, runtime_checkable
 #: is standing there holding the camera and working through its menu.
 PAIR_TIMEOUT_S = 30.0
 
+#: Smart-mode pairing needs extra time for the user to confirm on the camera's
+#: screen (up to 60 s for the confirmation dialog, plus scan time).
+PAIR_SMART_TIMEOUT_S = 75.0
+
 #: Camera status strings, matching the firmware's ``STATUS`` response.
 #: Keeping them literals here rather than on the driver so the constants are
 #: importable by the self-test endpoint without depending on the protocol layer.
@@ -72,6 +76,14 @@ class ShutterDriver(Protocol):
         Slow by nature — the camera has to be put into its own pairing mode by
         hand — and the one operation on this interface that needs a person in
         front of the machine.
+        """
+        ...
+
+    def pair_smart(self, timeout_s: float = PAIR_SMART_TIMEOUT_S) -> None:
+        """Put the board into smartphone-mode pairing.
+
+        The camera must be in "connect to smartphone" mode (not "remote" mode).
+        The user must confirm on the camera's screen within 60 s.
         """
         ...
 

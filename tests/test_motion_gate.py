@@ -47,6 +47,11 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     "stopped is exactly when an operator does it",
     (
         "POST",
+        "/api/shutter/pair_smart",
+    ): "smartphone-mode pairing over BLE, moves no joints; same reasoning as "
+    "/api/shutter/pair above",
+    (
+        "POST",
         "/api/plugins/probe",
     ): "self-tests accessories (ping, not shoot); finding out why one is dark "
     "is a reasonable thing to do while the arm is stopped",

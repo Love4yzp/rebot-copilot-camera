@@ -29,6 +29,7 @@ PING = "PING"
 FOCUS = "FOCUS"
 SHOOT = "SHOOT"
 PAIR = "PAIR"
+PAIRSMART = "PAIRSMART"
 STATUS = "STATUS"
 
 #: What ``STATUS`` answers when the board holds the camera on BLE. The firmware

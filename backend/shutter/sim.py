@@ -19,6 +19,7 @@ from .base import (
     CAMERA_STATUS_CONNECTED,
     CAMERA_STATUS_DISCONNECTED,
     CAMERA_STATUS_UNPAIRED,
+    PAIR_SMART_TIMEOUT_S,
     PAIR_TIMEOUT_S,
     ShutterError,
     ShutterNotConnected,
@@ -56,6 +57,7 @@ class SimShutter:
         self.focuses = 0
         self.pings = 0
         self.pairs = 0
+        self.smart_pairs = 0
 
     # ── ShutterDriver ────────────────────────────────────────────────────────
 
@@ -108,6 +110,18 @@ class SimShutter:
             self._camera = True
             self._unreachable = False
             log.debug("sim shutter: paired (%d)", self.pairs)
+
+    def pair_smart(self, timeout_s: float = PAIR_SMART_TIMEOUT_S) -> None:
+        """Smartphone-mode pairing. Same as pair() for simulation purposes."""
+        with self._lock:
+            self.smart_pairs += 1
+            self._require_link()
+            if self._pair_fails:
+                raise ShutterTimeout("no camera with smart service found")
+            self._paired = True
+            self._camera = True
+            self._unreachable = False
+            log.debug("sim shutter: smart paired (%d)", self.smart_pairs)
 
     def camera_connected(self) -> bool:
         with self._lock:

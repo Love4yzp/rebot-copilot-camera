@@ -20,6 +20,7 @@ from ..safety.kinematics import validate_pose, validate_sequence
 from ..shutter import (
     CAMERA_STATUS_DISCONNECTED,
     CAMERA_STATUS_UNPAIRED,
+    PAIR_SMART_TIMEOUT_S,
     PAIR_TIMEOUT_S,
     ShutterError,
 )
@@ -438,4 +439,44 @@ def pair_shutter(request: Request, timeout_s: float = PAIR_TIMEOUT_S) -> Shutter
         fired=False,
         firmware_version=getattr(shutter, "firmware_version", None),
         error=None if camera else "pairing finished but the camera is not connected",
+    )
+
+
+@router.post("/api/shutter/pair_smart", response_model=ShutterTestResult)
+def pair_shutter_smart(request: Request, timeout_s: float = PAIR_SMART_TIMEOUT_S) -> ShutterTestResult:
+    """Put the board into smartphone-mode pairing.
+
+    The camera must be in "connect to smartphone" mode (not "remote" mode).
+    The user must confirm on the camera's screen within 60 s after the
+    identification handshake.
+
+    Refused while a routine is playing, same as the BLE remote pair endpoint.
+    """
+    controller = _controller(request)
+    if controller.is_playing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "cannot pair the camera while a routine is playing"
+        )
+
+    shutter = controller.shutter
+    try:
+        shutter.pair_smart(timeout_s)
+    except ShutterError as exc:
+        return ShutterTestResult(
+            ok=False,
+            connected=shutter.is_connected,
+            camera=False,
+            fired=False,
+            firmware_version=getattr(shutter, "firmware_version", None),
+            error=str(exc),
+        )
+
+    camera = shutter.camera_connected()
+    return ShutterTestResult(
+        ok=camera,
+        connected=shutter.is_connected,
+        camera=camera,
+        fired=False,
+        firmware_version=getattr(shutter, "firmware_version", None),
+        error=None if camera else "smart pairing finished but the camera is not connected",
     )

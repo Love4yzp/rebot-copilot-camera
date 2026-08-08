@@ -477,6 +477,34 @@ def test_pairing_is_refused_while_a_routine_is_playing(rig):
     assert controller.shutter.pairs == 0
 
 
+def test_smart_pairing_attaches_the_camera(rig):
+    """Smartphone-mode pairing: the camera is in "connect to smartphone" mode
+    and the user confirms on its screen. Same endpoint contract as pair()."""
+    client, controller, _, _ = rig
+    controller.shutter.set_camera_connected(False)
+
+    body = client.post("/api/shutter/pair_smart").json()
+
+    assert body["ok"] is True
+    assert body["camera"] is True
+    assert controller.shutter.smart_pairs == 1
+
+
+def test_smart_pairing_is_refused_while_a_routine_is_playing(rig):
+    """A 75-second smart-pairing scan would stall the frames queued behind it,
+    same as the ordinary pair."""
+    client, controller, _, _ = rig
+    rid = make_routine(client, 0.2, 0.4)
+    assert client.post(f"/api/routines/{rid}/play").status_code == 200
+    assert controller.is_playing
+
+    r = client.post("/api/shutter/pair_smart")
+
+    assert r.status_code == 409
+    assert "playing" in r.json()["detail"]
+    assert controller.shutter.smart_pairs == 0
+
+
 def test_shutter_test_can_fire_on_request(rig):
     client, controller, _, _ = rig
 
