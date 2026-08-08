@@ -59,7 +59,9 @@ Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, w
 Frontend work: `cd frontend && npm run dev` (hot reload, proxies to 18790).
 Tests: `uv run pytest`.
 
-**Preview the frontend without the backend**: `cd frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
+`./start.sh` wraps the two ways to launch it locally — `./start.sh prod` builds the frontend and runs the backend on one origin (add `--sim` for no hardware), `./start.sh mock` runs the frontend alone. Deployment to the device is a different script, `./manage.sh`.
+
+**Preview the frontend without the backend**: `./start.sh mock`, or `cd frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
 
 ---
 

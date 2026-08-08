@@ -1,11 +1,11 @@
-# Teach & Repeat · 示教回放
+# Teach & Repeat · 可编程空间点位应用
 
 [English](./README.md) | **中文**
 
 > **教它走一遍，它替你走一万遍。**
 > Teach it once, it walks it a thousand times.
 
-机械臂空间点位示教与回放平台。用手把臂拖到一个位置，松手，按一下记录 —— 这就是一个点位。给点位挂上动作（快门是第一个），按播放：臂自己走遍全程，每到一处停稳、执行。
+用手把臂拖到一个位置，松手，按一下记录 —— 这就是一个点位。给点位挂上动作（快门是第一个），按播放：臂自己走遍全程，每到一处停稳、执行。
 
 ```
 教                        存                         拍
@@ -59,7 +59,9 @@ uv run -m backend.app --sim
 改前端：`cd frontend && npm run dev`（热更新，自动 proxy 到 18790）。
 跑测试：`uv run pytest`。
 
-**不启动后端也能预览前端**：`cd frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
+`./start.sh` 把本机两种启动方式包了起来 —— `./start.sh prod` 构建前端并起后端，同一个源（无硬件加 `--sim`）；`./start.sh mock` 只起前端。部署到设备是另一个脚本 `./manage.sh`。
+
+**不启动后端也能预览前端**：`./start.sh mock`，或 `cd frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
 
 ---
 
