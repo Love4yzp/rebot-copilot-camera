@@ -1,10 +1,13 @@
 import type {
-  Action,
+  Block,
   EstopState,
   PlaybackState,
+  Pose,
+  PoseLinks,
   ProviderInfo,
-  Routine,
-  RoutineSummary,
+  SeqTemplate,
+  Sequence,
+  SequenceSummary,
   ShutterResult,
 } from "./types";
 
@@ -63,6 +66,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+
+const del = (path: string) => request<void>(path, { method: "DELETE" });
+
 export const api = {
   health: () => request<Record<string, unknown>>("/api/health"),
 
@@ -73,54 +81,59 @@ export const api = {
     clear: () => post<EstopState>("/api/estop/clear"),
   },
 
-  // ── routines ────────────────────────────────────────────────────────────
-  routines: {
-    list: () => request<RoutineSummary[]>("/api/routines"),
-    get: (id: string) => request<Routine>(`/api/routines/${id}`),
-    create: (name: string) => post<Routine>("/api/routines", { name }),
-    rename: (id: string, name: string) =>
-      request<Routine>(`/api/routines/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ name }),
-      }),
-    remove: (id: string) => request<void>(`/api/routines/${id}`, { method: "DELETE" }),
+  // ── poses (the library) ─────────────────────────────────────────────────
+  poses: {
+    list: () => request<Pose[]>("/api/poses"),
+    create: (name: string, joints: Record<string, number>) =>
+      post<Pose>("/api/poses", { name, joints }),
+    /** Record wherever the arm is standing right now, under a name. */
+    capture: (name: string) => post<Pose>("/api/poses/capture", { name }),
+    patch: (id: string, body: { name?: string; joints?: Record<string, number> }) =>
+      patch<Pose>(`/api/poses/${id}`, body),
+    remove: (id: string) => del(`/api/poses/${id}`),
+    /**
+     * Which sequences link this pose. The UI asks before deleting or
+     * overwriting — silently rewriting the physical path of N sequences is
+     * the "a whole round of empty frames" class of failure.
+     */
+    links: (id: string) => request<PoseLinks>(`/api/poses/${id}/links`),
+    /** Single-pose goto: eased move, then hold. */
+    goto: (id: string) => post<PlaybackState>(`/api/poses/${id}/goto`),
   },
 
-  // ── waypoints ───────────────────────────────────────────────────────────
-  waypoints: {
+  // ── sequences ───────────────────────────────────────────────────────────
+  sequences: {
+    list: () => request<SequenceSummary[]>("/api/sequences"),
+    get: (id: string) => request<Sequence>(`/api/sequences/${id}`),
+    create: (name: string) => post<Sequence>("/api/sequences", { name }),
     /**
-     * Add a waypoint from explicit joint angles, optionally at a given index.
-     *
-     * `capture` records wherever the arm is standing; this one records a pose
-     * you already hold. That is what makes undoing a delete possible — the
-     * arm has usually moved on by the time the operator changes their mind.
+     * Whole-document patch. When `blocks` is present the server normalizes
+     * before storing (transitions are automatic, never edited directly).
      */
-    add: (
-      routineId: string,
-      body: {
-        joints: Record<string, number>;
-        duration_s?: number;
-        settle_ms?: number;
-        actions?: Action[];
-        note?: string;
-        index?: number;
-      },
-    ) => post<Routine>(`/api/routines/${routineId}/waypoints`, body),
-    capture: (routineId: string, note?: string) =>
-      post<Routine>(`/api/routines/${routineId}/waypoints/capture`, note === undefined ? undefined : { note }),
-    remove: (routineId: string, index: number) =>
-      request<Routine>(`/api/routines/${routineId}/waypoints/${index}`, { method: "DELETE" }),
-    update: (
-      routineId: string,
-      index: number,
-      patch: { settle_ms?: number; duration_s?: number; note?: string; actions?: Action[] },
-    ) =>
-      request<Routine>(`/api/routines/${routineId}/waypoints/${index}`, {
-        method: "PATCH",
-        body: JSON.stringify(patch),
-      }),
-    reorder: (routineId: string, order: number[]) =>
-      post<Routine>(`/api/routines/${routineId}/waypoints/reorder`, { order }),
+    patch: (id: string, body: { name?: string; blocks?: Block[] }) =>
+      patch<Sequence>(`/api/sequences/${id}`, body),
+    remove: (id: string) => del(`/api/sequences/${id}`),
+    /** Run it for real — the arm moves. */
+    execute: (id: string) => post<PlaybackState>(`/api/sequences/${id}/execute`),
+  },
+
+  // ── templates ───────────────────────────────────────────────────────────
+  templates: {
+    list: () => request<SeqTemplate[]>("/api/templates"),
+    /** Snapshot a sequence as a structural recipe (pose slots, no joints). */
+    create: (sequenceId: string, name?: string) =>
+      post<SeqTemplate>("/api/templates", { sequence_id: sequenceId, name }),
+    remove: (id: string) => del(`/api/templates/${id}`),
+    /** Copy the recipe with each slot bound to a library pose. */
+    instantiate: (id: string, body: { name: string; pose_ids: string[] }) =>
+      post<Sequence>(`/api/templates/${id}/instantiate`, body),
+  },
+
+  // ── execution control ───────────────────────────────────────────────────
+  execute: {
+    stop: () => post<PlaybackState>("/api/execute/stop"),
+    /** Continue past a wait marker the run is suspended on. */
+    resume: () => post<PlaybackState>("/api/execute/resume"),
   },
 
   // ── plugins ─────────────────────────────────────────────────────────────
@@ -131,19 +144,13 @@ export const api = {
     probe: () => post<ProviderInfo[]>("/api/plugins/probe"),
   },
 
-  // ── motion ──────────────────────────────────────────────────────────────
-  play: (routineId: string, source = "ui") =>
-    post<PlaybackState>(`/api/routines/${routineId}/play`, { source }),
-  /** Single-shot goto: move to one anchor, settle, fire its actions, hold. */
-  goto: (routineId: string, index: number, source = "ui") =>
-    post<unknown>(`/api/routines/${routineId}/waypoints/${index}/goto`, { source }),
-  stopPlayback: () => post<PlaybackState>("/api/playback/stop"),
+  // ── teach + shutter ─────────────────────────────────────────────────────
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
   testShutter: (shoot: boolean) => post<ShutterResult>(`/api/shutter/test?shoot=${shoot}`),
   /**
    * Attach the camera over BLE. Slow — the board scans for thirty seconds
    * while somebody puts the camera into its own pairing mode — and refused
-   * with a 409 while a routine is playing.
+   * with a 409 while a sequence is executing.
    */
   pairShutter: () => post<ShutterResult>("/api/shutter/pair"),
 };

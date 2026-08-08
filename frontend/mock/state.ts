@@ -1,65 +1,49 @@
 /**
  * In-memory state for the no-backend preview (`npm run dev:mock`).
  *
- * The dev-server mock stands in for the FastAPI backend: it holds the same
- * data the backend would (routine CRUD, estop latch, control mode, joint
- * positions) so the React UI can be exercised end to end without the arm
- * service running. Shapes mirror `frontend/src/types.ts` and
- * `backend/routines/models.py` — keep them aligned by hand; there is no
- * generated client.
+ * The dev-server mock stands in for the v2 FastAPI backend: it holds the same
+ * data the backend would (pose library, block/marker sequences, templates,
+ * estop latch, control mode, joint positions) so the React UI can be
+ * exercised end to end without the arm service running. Shapes mirror
+ * `frontend/src/types.ts` — keep them aligned by hand; there is no generated
+ * client. The REST surface this state backs is the contract the v2 backend
+ * implements against.
  */
+
+import type { Block, Easing, EventMarker, Sequence } from "../src/types";
+import { makeHold, makeMarker, makeTransition, newId, normalize } from "../src/timeline/model";
+
+export { newId };
 
 export const JOINTS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper"];
 
 export type MockMode = "idle" | "teach" | "playback" | "estop";
-export type FailurePolicy = "abort" | "skip" | "retry";
 
-export interface MockActionBase {
-  timeout_s: number;
-  on_failure: FailurePolicy;
-  retries: number;
-}
-
-export interface MockShutterAction extends MockActionBase {
-  type: "shutter";
-  focus_first: boolean;
-  count: number;
-  interval_s: number;
-}
-
-export interface MockSleepAction extends MockActionBase {
-  type: "sleep";
-  duration_s: number;
-}
-
-export type MockAction = MockShutterAction | MockSleepAction;
-
-export interface MockWaypoint {
+export interface MockPose {
   id: string;
+  name: string;
   joints: Record<string, number>;
-  duration_s: number;
-  settle_ms: number;
-  actions: MockAction[];
-  note: string;
+  created_at: number;
+  updated_at: number;
 }
 
-export interface MockRoutine {
-  schema_version: number;
+export type MockSequence = Sequence;
+
+export interface MockTemplate {
   id: string;
   name: string;
   created_at: number;
-  updated_at: number;
-  waypoints: MockWaypoint[];
+  station_count: number;
+  recipe: Block[];
 }
 
-export interface MockPlayback {
-  phase: "idle" | "moving" | "settling" | "acting" | "done" | "aborted";
-  waypoint_index: number;
-  waypoint_total: number;
-  action_index: number | null;
-  action_total: number;
-  routine_id: string | null;
-  routine_name: string | null;
+export interface MockSeqPlayback {
+  sequence_id: string;
+  sequence_name: string;
+  block_index: number;
+  block_total: number;
+  phase: "hold" | "transition" | "wait" | "done" | "aborted";
+  t_in_block: number;
   error: string | null;
   finished: boolean;
 }
@@ -72,20 +56,30 @@ export interface MockEstop {
   freeze_pose: Record<string, number> | null;
 }
 
+/**
+ * A single-pose goto in flight: an eased lerp from wherever the arm stood to
+ * the target pose, standing in for the backend's ephemeral move. Null during
+ * idle, teach, and sequence execution.
+ */
+export interface MockGoto {
+  pose_id: string;
+  name: string;
+  from: Record<string, number>;
+  to: Record<string, number>;
+  duration_s: number;
+}
+
 export interface MockState {
   started_at: number;
   positions: Record<string, number>;
   velocities: Record<string, number>;
   mode: MockMode;
   estop: MockEstop;
-  playback: MockPlayback | null;
-  routines: MockRoutine[];
-  /**
-   * The single waypoint a `goto` is executing, standing in for the backend's
-   * one-waypoint ephemeral routine (which is never stored). Null during idle,
-   * teach, and full-routine playback.
-   */
-  gotoWaypoint: MockWaypoint | null;
+  playback: MockSeqPlayback | null;
+  poses: MockPose[];
+  sequences: MockSequence[];
+  templates: MockTemplate[];
+  goto: MockGoto | null;
   /**
    * The BLE half of the shutter chain: whether the imaginary board holds the
    * camera. Separate from the USB link, which the preview always has, because
@@ -95,109 +89,95 @@ export interface MockState {
   camera: boolean;
 }
 
-/** Pseudo-random 12-hex id, same length as the backend's uuid4().hex[:12]. */
-export function newId(): string {
-  return Math.random().toString(16).slice(2, 14).padEnd(12, "0");
-}
-
-export function touch(routine: MockRoutine, now: number): void {
-  routine.updated_at = now;
-}
-
-export function shutterAction(overrides: Partial<MockShutterAction> = {}): MockShutterAction {
-  return {
-    type: "shutter",
-    focus_first: true,
-    count: 1,
-    interval_s: 0,
-    timeout_s: 5,
-    on_failure: "abort",
-    retries: 0,
-    ...overrides,
-  };
-}
-
-export function sleepAction(duration_s: number): MockSleepAction {
-  return { type: "sleep", duration_s, timeout_s: duration_s + 1, on_failure: "abort", retries: 0 };
-}
-
 /** A plausible resting pose for every joint, so the 3D view starts relaxed. */
-function zeroPose(): Record<string, number> {
+export function zeroPose(): Record<string, number> {
   return Object.fromEntries(JOINTS.map((j) => [j, 0]));
 }
 
-export function toSummary(routine: MockRoutine): {
-  id: string;
-  name: string;
-  created_at: number;
-  updated_at: number;
-  waypoint_count: number;
-  action_count: number;
-} {
-  return {
-    id: routine.id,
-    name: routine.name,
-    created_at: routine.created_at,
-    updated_at: routine.updated_at,
-    waypoint_count: routine.waypoints.length,
-    action_count: routine.waypoints.reduce(
-      (n, w) => n + w.actions.length,
-      0,
-    ),
-  };
+function shutterMarker(at: number): EventMarker {
+  return makeMarker("shutter", at, { count: 1, interval_s: 1, focus_first: true }, 0.3);
 }
 
-function seedWaypoint(partial: Omit<MockWaypoint, "id">): MockWaypoint {
-  return { id: newId(), ...partial };
+function holdWith(poseId: string, duration_s: number, markers: EventMarker[] = []): Block {
+  return { ...makeHold(poseId, duration_s), markers };
 }
 
-function seedRoutines(): MockRoutine[] {
-  const now = Date.now() / 1000;
+function transWith(
+  duration_s: number,
+  easing: Easing,
+  markers: EventMarker[] = [],
+): Block {
+  return { ...makeTransition(duration_s, easing), markers };
+}
+
+function seedPoses(now: number): MockPose[] {
+  const pose = (name: string, joints: Partial<Record<string, number>>, age_s: number): MockPose => ({
+    id: newId(),
+    name,
+    joints: { ...zeroPose(), ...joints } as Record<string, number>,
+    created_at: now - age_s,
+    updated_at: now - age_s,
+  });
   return [
-    {
-      schema_version: 1,
-      id: "mockdemo000001",
-      name: "示例拍摄 (3 点)",
-      created_at: now - 3600,
-      updated_at: now - 600,
-      waypoints: [
-        seedWaypoint({
-          joints: { ...zeroPose(), joint2: 0.4, joint3: -0.3, gripper: 0.02 },
-          duration_s: 2.0,
-          settle_ms: 300,
-          actions: [],
-          note: "第一视角",
-        }),
-        seedWaypoint({
-          joints: { ...zeroPose(), joint1: 0.7, joint2: 0.5, joint3: -0.5, joint6: 0.25, gripper: 0.02 },
-          duration_s: 2.5,
-          settle_ms: 400,
-          actions: [shutterAction(), sleepAction(0.5)],
-          note: "侧面特写",
-        }),
-        seedWaypoint({
-          joints: { ...zeroPose(), joint1: 1.2, joint2: 0.3, joint3: -0.2, joint6: 0.5, gripper: 0.02 },
-          duration_s: 3.0,
-          settle_ms: 300,
-          actions: [shutterAction()],
-          note: "",
-        }),
-      ],
-    },
-    {
-      schema_version: 1,
-      id: "mockempty00002",
-      name: "空序列 (演示校验)",
-      created_at: now - 1200,
-      updated_at: now - 1200,
-      waypoints: [],
-    },
+    pose("正面", { joint2: 0.35, joint3: -0.3, joint5: 0.1, gripper: 0.02 }, 7200),
+    pose("右45°", { joint1: 0.8, joint2: 0.45, joint3: -0.5, joint6: 0.25, gripper: 0.02 }, 7000),
+    pose("侧面", { joint1: 1.4, joint2: 0.3, joint3: -0.25, joint5: -0.2, joint6: 0.5, gripper: 0.02 }, 6800),
+    pose("俯拍", { joint1: 0.15, joint2: 0.9, joint3: -0.9, joint4: 0.3, joint5: 0.4, gripper: 0.02 }, 6600),
   ];
 }
 
-export function createState(): MockState {
+/**
+ * The demo sequence from `docs/TIMELINE.md`: 20.5 s on the plan ruler, with a
+ * wait marker at t=8 s that suspends both preview and execution until the
+ * operator taps 继续.
+ */
+function seedDemoSequence(poses: MockPose[], now: number): MockSequence {
+  const [front, right, side, top] = poses;
+  const blocks = normalize([
+    holdWith(front.id, 3),
+    transWith(2, "ease_in_out"),
+    holdWith(right.id, 5, [shutterMarker(2), makeMarker("wait", 3, {}, 0), shutterMarker(4)]),
+    transWith(1.5, "linear", [
+      // Record start/stop bracketing the move: the "duration" is carried by
+      // the start marker's estimate, displayed as a translucent span.
+      makeMarker("record_start", 0, {}, 1.5),
+      makeMarker("record_stop", 1, {}, 0.3),
+    ]),
+    holdWith(side.id, 3),
+    transWith(2, "ease_in_out", [makeMarker("fill_light", 0.4, {}, 0.3)]),
+    holdWith(top.id, 4),
+  ]);
   return {
-    started_at: Date.now() / 1000,
+    schema_version: 2,
+    id: "mockdemo000001",
+    name: "四方位拍摄",
+    created_at: now - 3600,
+    updated_at: now - 600,
+    blocks,
+  };
+}
+
+/** The four-station recipe: 3 s + one shutter per station, eased transitions. */
+function seedTemplate(now: number): MockTemplate {
+  const recipe: Block[] = [];
+  for (let slot = 1; slot <= 4; slot++) {
+    if (slot > 1) recipe.push(transWith(2, "ease_in_out"));
+    recipe.push(holdWith(`slot:${slot}`, 3, [shutterMarker(2)]));
+  }
+  return {
+    id: newId(),
+    name: "四方位",
+    created_at: now - 3000,
+    station_count: 4,
+    recipe: normalize(recipe),
+  };
+}
+
+export function createState(): MockState {
+  const now = Date.now() / 1000;
+  const poses = seedPoses(now);
+  return {
+    started_at: now,
     positions: zeroPose(),
     velocities: zeroPose(),
     mode: "idle",
@@ -206,7 +186,19 @@ export function createState(): MockState {
     camera: true,
     estop: { latched: false, reason: null, source: null, engaged_at: null, freeze_pose: null },
     playback: null,
-    routines: seedRoutines(),
-    gotoWaypoint: null,
+    poses,
+    sequences: [
+      seedDemoSequence(poses, now),
+      {
+        schema_version: 2,
+        id: "mockempty00002",
+        name: "空序列",
+        created_at: now - 1200,
+        updated_at: now - 1200,
+        blocks: [],
+      },
+    ],
+    templates: [seedTemplate(now)],
+    goto: null,
   };
 }

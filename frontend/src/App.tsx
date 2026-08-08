@@ -1,70 +1,95 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
-import type { ProviderInfo, Routine, RoutineSummary, Waypoint } from "./types";
+import type { Block, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
 import { useControlSocket } from "./useControlSocket";
-import { AnchorBoard } from "./components/AnchorBoard";
-import type { AnchorCardStatus } from "./components/AnchorCard";
-import { AnchorEditSheet } from "./components/AnchorEditSheet";
-import { CollectionBar } from "./components/CollectionBar";
-import { ControlBar } from "./components/ControlBar";
+import { usePreview } from "./preview/usePreview";
+import { markerSchedule, playbackAbsTime, sequenceDuration } from "./timeline/model";
 import { EstopBar } from "./components/EstopBar";
 import { LogDrawer } from "./components/LogDrawer";
 import { TallyRail } from "./components/TallyRail";
 import type { TallyState } from "./components/TallyRail";
-import { TeachRail } from "./components/TeachRail";
+import { Dialog } from "./components/Dialog";
 import { ToastProvider, useToast } from "./components/Toasts";
-import { ViewerDrawer } from "./components/ViewerDrawer";
+import { LibraryPanel } from "./library/LibraryPanel";
+import { TeachBar } from "./library/TeachBar";
+import { MonitorPanel } from "./monitor/MonitorPanel";
+import { TimelineView } from "./timeline/TimelineView";
+import type { Selection } from "./timeline/TimelineView";
+import { Inspector } from "./timeline/Inspector";
+import { TransportBar } from "./transport/TransportBar";
 
-/** The four-corner wizard's step names, recorded as each anchor's note. */
-const FOUR_CORNER_NAMES = ["正面", "右 45°", "侧面", "俯拍"];
+/** Which sequence was open last, so a reload does not cost a tap. */
+const LAST_SEQUENCE_KEY = "rebot:last-sequence";
 
-/** Which collection was open last, so a reload does not cost a tap. */
-const LAST_COLLECTION_KEY = "rebot:last-collection";
-
-/**
- * How long a tapped card may claim "出发中" before the arm has said anything.
- * Past this the optimistic state is dropped rather than left hanging — an
- * interface that keeps insisting something is about to happen is worse than
- * one that admits it does not know.
- */
-const PENDING_TIMEOUT_MS = 3000;
+/** A shutter marker reads as a white flash for this long after crossing. */
+const SHUTTER_FLASH_S = 0.5;
 
 function Workspace() {
   const { state, playback, connected } = useControlSocket();
   const { attempt, show } = useToast();
 
-  const [summaries, setSummaries] = useState<RoutineSummary[]>([]);
+  const [poses, setPoses] = useState<Pose[]>([]);
+  const [summaries, setSummaries] = useState<SequenceSummary[]>([]);
+  const [templates, setTemplates] = useState<SeqTemplate[]>([]);
+  /** True when the v2 sequence API is not deployed (real backend, transition). */
+  const [sequencesUnavailable, setSequencesUnavailable] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [routine, setRoutine] = useState<Routine | null>(null);
-  // Config mode is opt-in; the board boots into the use layer.
-  const [config, setConfig] = useState(false);
-  /** The anchor the arm is running against, or holding at. */
-  const [target, setTarget] = useState<number | null>(null);
-  /** Tapped, request in flight, arm has not reported back yet. */
-  const [pending, setPending] = useState<number | null>(null);
-  const [editingAnchor, setEditingAnchor] = useState<number | null>(null);
-  /** null names = record a single anchor; an array runs the template wizard. */
-  const [teachFlow, setTeachFlow] = useState<{ names: string[] | null } | null>(null);
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  // Installed action providers. *Which* ones exist cannot change under a
-  // running page — plugins arrive by installing a package and restarting the
-  // service — but whether each one answers can, because accessories get
-  // unplugged and plugged back in. Hence the refresh below rather than a reload
-  // of the list. The edit sheet draws its trigger controls from this.
+  const [sequence, setSequence] = useState<Sequence | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [teachOpen, setTeachOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [dialog, setDialog] = useState<"create" | "rename" | "delete" | "template" | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
 
-  const refreshList = useCallback(async () => {
-    const list = await attempt(() => api.routines.list());
-    if (list) setSummaries(list);
-  }, [attempt]);
+  const blocks = useMemo<Block[]>(() => sequence?.blocks ?? [], [sequence]);
+  const poseMap = useMemo(
+    () => Object.fromEntries(poses.map((p) => [p.id, p.joints])),
+    [poses],
+  );
+  const poseName = useCallback(
+    (id: string) => poses.find((p) => p.id === id)?.name ?? "已删除位姿",
+    [poses],
+  );
+
+  const preview = usePreview(blocks, poseMap);
+
+  const mode = state?.mode ?? null;
+  const latched = state?.estop.latched ?? false;
+  const executing = mode === "playback" && !latched;
+  const teaching = mode === "teach";
+  const total = sequenceDuration(blocks);
+
+  // ── data loading ──────────────────────────────────────────────────────────
+
+  const refreshLibrary = useCallback(async () => {
+    // The pose/template lists ride along; the sequence list is the one that
+    // may not exist yet against the real backend, and it must fail soft —
+    // monitor, estop and logs keep working either way.
+    try {
+      const list = await api.sequences.list();
+      setSummaries(list);
+      setSequencesUnavailable(false);
+    } catch {
+      setSummaries([]);
+      setSequencesUnavailable(true);
+    }
+    try {
+      setPoses(await api.poses.list());
+    } catch {
+      setPoses([]);
+    }
+    try {
+      setTemplates(await api.templates.list());
+    } catch {
+      setTemplates([]);
+    }
+  }, []);
 
   useEffect(() => {
-    void refreshList();
-  }, [refreshList]);
+    void refreshLibrary();
+  }, [refreshLibrary]);
 
-  // A provider list that fails to load must not take the board with it: the
-  // anchors and the arm still work, only the trigger editor is poorer.
+  // A provider list that fails to load must not take the bench with it.
   useEffect(() => {
     api.plugins
       .list()
@@ -72,368 +97,392 @@ function Workspace() {
       .catch(() => setProviders([]));
   }, []);
 
-  // Re-run every provider's self-test. The operator reaches for this after
-  // plugging an accessory in: without it the only way back from a greyed-out
-  // row is restarting the service, which on a device in a studio means finding
-  // a terminal. Probing moves no joints and burns no frame, so it is not behind
-  // the motion gate.
-  const probeProviders = useCallback(async () => {
-    const list = await attempt(() => api.plugins.probe());
-    if (list) setProviders(list);
-  }, [attempt]);
-
-  // Land on something usable. Reopening the app on the collection that was
-  // last in use is right far more often than landing on an empty board, and a
-  // first-run operator gets the first collection rather than a dead end.
+  // Land on something usable: the sequence that was open last, else the first.
   useEffect(() => {
     if (selectedId !== null || summaries.length === 0) return;
-    const remembered = localStorage.getItem(LAST_COLLECTION_KEY);
+    const remembered = localStorage.getItem(LAST_SEQUENCE_KEY);
     const wanted = summaries.find((s) => s.id === remembered) ?? summaries[0];
     setSelectedId(wanted.id);
   }, [summaries, selectedId]);
 
   useEffect(() => {
     if (!selectedId) {
-      setRoutine(null);
+      setSequence(null);
       return;
     }
-    localStorage.setItem(LAST_COLLECTION_KEY, selectedId);
-    void attempt(() => api.routines.get(selectedId)).then((loaded) => setRoutine(loaded ?? null));
-  }, [selectedId, attempt]);
+    localStorage.setItem(LAST_SEQUENCE_KEY, selectedId);
+    api
+      .sequences
+      .get(selectedId)
+      .then(setSequence)
+      .catch(() => setSequence(null));
+  }, [selectedId]);
 
-  const reloadRoutine = useCallback(async () => {
-    if (!selectedId) return;
-    const loaded = await attempt(() => api.routines.get(selectedId));
-    if (loaded) setRoutine(loaded);
-    void refreshList();
-  }, [selectedId, attempt, refreshList]);
-
-  const mode = state?.mode ?? null;
-  const teaching = mode === "teach";
-  const latched = state?.estop.latched ?? false;
-  const phase = playback?.phase ?? null;
-
-  // The estop force-closes the teach rail: unmounting TeachRail runs its
-  // cleanup, which exits teach mode. Dragging against a latched arm is the one
-  // combination that must be impossible to leave on screen.
-  useEffect(() => {
-    if (latched) setTeachFlow(null);
-  }, [latched]);
-
-  // Anything that moves the arm without the board's knowledge invalidates
-  // "已到位". A latched stop freezes it somewhere else; teach mode means a
-  // human is about to push it somewhere else. Leaving a card lit through
-  // either is the interface claiming to know where the arm is when it does
-  // not — which is the one claim this board exists to make truthfully.
-  useEffect(() => {
-    if (latched || teaching) {
-      setTarget(null);
-      setPending(null);
-    }
-  }, [latched, teaching]);
-
-  // Hand the card over to the arm's own report the moment there is one.
-  //
-  // Only a *running* phase counts. The controller keeps the last finished run
-  // on the wire, so at the instant of a tap the socket is still repeating
-  // `done` from the previous anchor — treating that as this anchor's answer
-  // would light the new card 已到位 before the arm had moved a millimetre,
-  // which is the exact failure this state machine exists to prevent.
-  useEffect(() => {
-    if (pending === null) return;
-
-    const running =
-      playback?.phase === "moving" ||
-      playback?.phase === "settling" ||
-      playback?.phase === "acting";
-
-    if (running) {
-      setTarget(pending);
-      setPending(null);
-      return;
-    }
-
-    // Nothing ever reported. Drop the claim rather than promoting it: the
-    // board does not know where the arm is, and saying so is the honest
-    // answer. `target` is deliberately left alone.
-    const timer = window.setTimeout(() => setPending(null), PENDING_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [playback, pending]);
-
-  // A finished whole-collection run leaves the arm holding its last anchor.
-  useEffect(() => {
-    if (playback?.finished && playback.waypoint_total > 1) setTarget(playback.waypoint_total - 1);
-  }, [playback]);
-
-  const motionBlocked = latched || mode === "playback" || mode === "teach";
-
-  /**
-   * Which card the board should be reporting on. A tap wins immediately, then
-   * a whole-collection run follows the executor, and otherwise it is whatever
-   * anchor the arm last went to.
-   */
-  const boardActive =
-    pending !== null
-      ? pending
-      : playback && playback.waypoint_total > 1
-        ? // The executor increments past the last waypoint before it notices
-          // it is done, so a finished run reports an index one out of range.
-          // Clamp, or the card the arm is holding goes dark at the finish.
-          Math.min(playback.waypoint_index, playback.waypoint_total - 1)
-        : target;
-
-  const statusAt = useCallback(
-    (index: number): AnchorCardStatus => {
-      if (index !== boardActive) return "idle";
-      if (pending !== null) return "pending";
-      switch (phase) {
-        case "moving":
-        case "settling":
-        case "acting":
-          return phase;
-        case "done":
-          return "arrived";
-        default:
-          // No live phase means nothing is known — not that the arm arrived.
-          return "idle";
-      }
+  // Switching sequences closes whatever pointed into the old one.
+  const selectSequence = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      setSelection(null);
+      preview.stop();
     },
-    [boardActive, pending, phase],
+    [preview],
   );
 
-  const tally: TallyState = latched
-    ? "latched"
-    : teaching
-      ? "teach"
-      : phase === "moving" || phase === "settling" || phase === "acting"
-        ? phase
-        : boardActive !== null && phase === "done"
-          ? "arrived"
-          : "idle";
+  // A reload can drop the block/marker the inspector was editing.
+  useEffect(() => {
+    if (!selection || !sequence) return;
+    if (selection.kind === "block" && !sequence.blocks.some((b) => b.id === selection.id)) {
+      setSelection(null);
+    } else if (
+      selection.kind === "marker" &&
+      !sequence.blocks.some(
+        (b) => b.id === selection.blockId && b.markers.some((m) => m.id === selection.markerId),
+      )
+    ) {
+      setSelection(null);
+    }
+  }, [sequence, selection]);
 
-  const goto = useCallback(
-    async (index: number) => {
-      if (!routine) return;
+  // ── machine-state effects ─────────────────────────────────────────────────
 
-      // A dead control that swallows the tap in silence teaches nothing. The
-      // two reasons motion is unavailable are different problems with
-      // different fixes, so they get different sentences.
+  // The estop force-closes teach (unmounting exits teach mode) and stops the
+  // preview — one button stops everything on screen, simulation included.
+  useEffect(() => {
+    if (latched) {
+      setTeachOpen(false);
+      preview.stop();
+    }
+  }, [latched, preview]);
+
+  // ── verbs ─────────────────────────────────────────────────────────────────
+
+  const patchBlocks = useCallback(
+    async (next: Block[]) => {
+      if (!selectedId) return;
+      const updated = await attempt(() => api.sequences.patch(selectedId, { blocks: next }));
+      if (updated) {
+        setSequence(updated);
+        void refreshLibrary();
+      }
+    },
+    [selectedId, attempt, refreshLibrary],
+  );
+
+  const execute = useCallback(async () => {
+    if (!sequence) return;
+    if (sequence.blocks.length === 0) {
+      show("info", "空序列 — 先从素材库拖位姿上轴");
+      return;
+    }
+    // 点执行 = 停预演进执行。
+    preview.stop();
+    try {
+      await api.sequences.execute(sequence.id);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        show("info", latched ? "已急停 — 先解除急停" : "臂正忙 — 等当前动作完成");
+      } else {
+        show("error", error instanceof Error ? error.message : String(error));
+      }
+    }
+  }, [sequence, preview, show, latched]);
+
+  const stop = useCallback(() => {
+    if (preview.active) preview.stop();
+    if (executing) void attempt(() => api.execute.stop(), "已停止");
+  }, [preview, executing, attempt]);
+
+  const resume = useCallback(() => {
+    if (preview.waiting) preview.continueWait();
+    else void attempt(() => api.execute.resume());
+  }, [preview, attempt]);
+
+  const gotoPose = useCallback(
+    async (pose: Pose) => {
       if (latched) {
         show("info", "已急停 — 先解除急停");
         return;
       }
-
-      setPending(index);
       try {
-        await api.goto(routine.id, index);
+        await api.poses.goto(pose.id);
       } catch (error) {
-        setPending(null);
         if (error instanceof ApiError && error.status === 409) {
-          show("info", "臂正忙 — 等当前动作完成");
+          show("info", executing ? "执行中 — 等当前序列完成" : "臂正忙 — 等当前动作完成");
         } else {
           show("error", error instanceof Error ? error.message : String(error));
         }
       }
     },
-    [routine, latched, show],
+    [latched, executing, show],
   );
 
-  // Number keys fire anchors. The operator's hands are usually on the camera
-  // or the arm, so the card's corner number is also the key that runs it — and
-  // the same binding takes a foot pedal that sends digits.
-  const gotoRef = useRef(goto);
-  gotoRef.current = goto;
+  // Number keys fire the first nine poses: the operator's hands are usually
+  // on the camera or the arm, and the same binding takes a foot pedal.
+  const posesRef = useRef(poses);
+  posesRef.current = poses;
+  const gotoRef = useRef(gotoPose);
+  gotoRef.current = gotoPose;
   useEffect(() => {
-    if (config) return;
-
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const node = event.target as HTMLElement | null;
       if (node && /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return;
       if (node?.closest("[role='dialog']")) return;
-
       const digit = Number(event.key);
       if (!Number.isInteger(digit) || digit < 1 || digit > 9) return;
+      const pose = posesRef.current[digit - 1];
+      if (!pose) return;
       event.preventDefault();
-      void gotoRef.current(digit - 1);
+      void gotoRef.current(pose);
     };
-
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [config]);
+  }, []);
 
-  const move = async (index: number, dir: -1 | 1) => {
-    if (!routine) return;
-    const to = index + dir;
-    if (to < 0 || to >= routine.waypoints.length) return;
-    // The backend demands a full permutation — anything else silently drops or
-    // duplicates a waypoint — so build it here rather than sending a pair.
-    const order = routine.waypoints.map((_, i) => i);
-    order.splice(to, 0, ...order.splice(index, 1));
-    const updated = await attempt(() => api.waypoints.reorder(routine.id, order));
-    if (updated) {
-      setRoutine(updated);
-      // The swap moved the lit card with its anchor.
-      setTarget((current) => (current === index ? to : current === to ? index : current));
-      void refreshList();
+  // ── sequence menu dialogs ─────────────────────────────────────────────────
+
+  const openDialog = (kind: NonNullable<typeof dialog>) => {
+    setNameDraft(kind === "create" ? "" : (sequence?.name ?? ""));
+    setDialog(kind);
+  };
+
+  const submitDialog = async () => {
+    const name = nameDraft.trim();
+    if (dialog === "create" && name) {
+      const created = await attempt(() => api.sequences.create(name));
+      if (created) {
+        await refreshLibrary();
+        selectSequence(created.id);
+      }
+    } else if (dialog === "rename" && sequence && name && name !== sequence.name) {
+      const updated = await attempt(() => api.sequences.patch(sequence.id, { name }));
+      if (updated) {
+        setSequence(updated);
+        void refreshLibrary();
+      }
+    } else if (dialog === "delete" && sequence) {
+      const removed = await attempt(async () => {
+        await api.sequences.remove(sequence.id);
+        return true;
+      }, `已删除序列「${sequence.name}」`);
+      if (removed) {
+        setDialog(null);
+        await refreshLibrary();
+        selectSequence(null);
+        return;
+      }
+    } else if (dialog === "template" && sequence) {
+      const created = await attempt(() =>
+        api.templates.create(sequence.id, name || sequence.name),
+      );
+      if (created) {
+        show("success", `已存为模板「${created.name}」—— 复印即脱钩，两不相干`);
+        void refreshLibrary();
+      }
     }
+    setDialog(null);
   };
 
-  const select = (id: string) => {
-    setSelectedId(id);
-    setTarget(null);
-    setPending(null);
-    setEditingAnchor(null);
-    setTeachFlow(null);
-  };
+  // ── display state ─────────────────────────────────────────────────────────
 
-  const startWizard = (kind: "blank" | "four", created: Routine) => {
-    setSelectedId(created.id);
-    setRoutine(created);
-    setTarget(null);
-    setPending(null);
-    setEditingAnchor(null);
-    setConfig(true);
-    if (kind === "four") setTeachFlow({ names: FOUR_CORNER_NAMES });
-  };
+  const clockT = executing && playback ? playbackAbsTime(blocks, playback) : preview.active ? preview.t : 0;
 
-  /** Deleting an anchor throws away a pose somebody walked over and set by hand. */
-  const undoRemove = (removed: Waypoint, index: number) => {
-    if (!routine) return;
-    void attempt(async () => {
-      const restored = await api.waypoints.add(routine.id, {
-        joints: removed.joints,
-        duration_s: removed.duration_s,
-        settle_ms: removed.settle_ms,
-        actions: removed.actions,
-        note: removed.note,
-        index,
-      });
-      setRoutine(restored);
-      void refreshList();
-      return restored;
-    }, "已恢复");
-  };
+  // A shutter marker crossed in the last half-second reads as one white frame.
+  const shutterJustFired = useMemo(() => {
+    if (!executing || !playback || blocks.length === 0) return false;
+    const t = playbackAbsTime(blocks, playback);
+    return markerSchedule(blocks).some(
+      (s) => s.marker.kind === "shutter" && s.t <= t && t - s.t < SHUTTER_FLASH_S,
+    );
+  }, [executing, blocks, playback]);
 
-  // The 3D view previews whichever anchor is open for editing. Selection, not
-  // hover: the device this runs on has no hover, and the old binding left a
-  // stale pose on screen after the pointer wandered off.
-  const previewWaypoint =
-    editingAnchor !== null ? (routine?.waypoints[editingAnchor] ?? null) : null;
+  const tally: TallyState = latched
+    ? "latched"
+    : teaching
+      ? "teach"
+      : executing
+        ? shutterJustFired
+          ? "acting"
+          : "moving"
+        : playback?.finished && playback.phase === "done"
+          ? "arrived"
+          : "idle";
+
+  const canEditSequences = !sequencesUnavailable;
+  const meta = sequence
+    ? `${summaries.find((s) => s.id === sequence.id)?.station_count ?? 0} 站位 · 预估 ${total.toFixed(1)}s`
+    : null;
 
   return (
-    <div className="app">
+    <div className={`app ${preview.active ? "previewing" : ""} ${executing ? "exec" : ""}`}>
       <TallyRail state={tally} />
-
       <EstopBar estop={state?.estop ?? null} mode={mode} connected={connected} />
 
-      <CollectionBar
-        routines={summaries}
-        selectedId={selectedId}
-        config={config}
-        menuOpen={menuOpen}
-        onMenuOpen={setMenuOpen}
-        onSelect={select}
-        onChanged={refreshList}
-        onStartWizard={startWizard}
-      />
+      <header className="seq-bar">
+        <span className="engrave seq-bar__tag">序列</span>
+        <select
+          value={selectedId ?? ""}
+          disabled={!canEditSequences || summaries.length === 0}
+          onChange={(event) => selectSequence(event.target.value || null)}
+          aria-label="选择序列"
+        >
+          {summaries.length === 0 ? <option value="">—</option> : null}
+          {summaries.map((summary) => (
+            <option key={summary.id} value={summary.id}>
+              {summary.name}
+            </option>
+          ))}
+        </select>
+        {meta ? <span className="seq-bar__meta num">{meta}</span> : null}
+        <span className="seq-bar__spacer" />
+        <button type="button" className="ghost" disabled={!canEditSequences} onClick={() => openDialog("create")}>
+          新建
+        </button>
+        <button type="button" className="ghost" disabled={!sequence} onClick={() => openDialog("rename")}>
+          改名
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          disabled={!sequence || sequence.blocks.length === 0}
+          onClick={() => openDialog("template")}
+        >
+          存为模板
+        </button>
+        <button type="button" className="ghost" disabled={!sequence || executing} onClick={() => openDialog("delete")}>
+          删除
+        </button>
+      </header>
 
-      {/* The drawer shares this row so it can only ever cover the cards —
-        * never the emergency stop above it or the run controls below. */}
-      <div className="board-row">
-        <AnchorBoard
-          routine={routine}
-          noCollections={summaries.length === 0}
-          config={config}
-          statusAt={statusAt}
-          motionBlocked={motionBlocked}
-          onGoto={(index) => void goto(index)}
-          onEditAnchor={setEditingAnchor}
-          onMove={(index, dir) => void move(index, dir)}
-          onCreateCollection={() => setMenuOpen(true)}
-          onRecordFirst={() => {
-            setConfig(true);
-            setTeachFlow({ names: null });
+      <main className="main">
+        <LibraryPanel
+          poses={poses}
+          templates={templates}
+          executing={executing}
+          latched={latched}
+          teaching={teaching}
+          sequencesUnavailable={sequencesUnavailable}
+          onGoto={(pose) => void gotoPose(pose)}
+          onChanged={() => void refreshLibrary()}
+          onSequenceCreated={(created) => {
+            void refreshLibrary();
+            selectSequence(created.id);
           }}
+          onSelectSequence={selectSequence}
+          onTeach={() => setTeachOpen(true)}
         />
+        <MonitorPanel
+          state={state}
+          playback={playback}
+          preview={preview}
+          blocks={blocks}
+          poseName={poseName}
+          sequenceName={sequence?.name ?? null}
+        />
+      </main>
 
-        <ViewerDrawer
-          open={viewerOpen}
-          onClose={() => setViewerOpen(false)}
-          positions={state?.positions ?? {}}
-          preview={mode === "playback" ? null : (previewWaypoint?.joints ?? null)}
-          previewName={
-            previewWaypoint && mode !== "playback"
-              ? previewWaypoint.note.trim() || `锚点 ${(editingAnchor ?? 0) + 1}`
-              : null
-          }
-        />
-      </div>
+      <footer className="foot">
+        {/* Teaching replaces the transport rather than covering it — the run
+          * controls mean nothing while a human is pushing the arm around. */}
+        {teachOpen ? (
+          <TeachBar positions={state?.positions ?? {}} onDone={() => setTeachOpen(false)} />
+        ) : (
+          <TransportBar
+            preview={preview}
+            executing={executing}
+            playback={playback}
+            latched={latched}
+            total={total}
+            clockT={clockT}
+            canExecute={canEditSequences && sequence !== null}
+            onExecute={() => void execute()}
+            onStop={stop}
+            onResume={resume}
+          />
+        )}
+        <div className="foot__timeline">
+          <TimelineView
+            sequence={sequence}
+            poses={poses}
+            playback={playback}
+            executing={executing}
+            latched={latched}
+            preview={preview}
+            selection={selection}
+            onSelect={setSelection}
+            onPatch={(next) => void patchBlocks(next)}
+            providers={providers}
+          />
+          {selection && sequence ? (
+            <Inspector
+              sequence={sequence}
+              poses={poses}
+              providers={providers}
+              selection={selection}
+              executing={executing}
+              onPatch={(next) => void patchBlocks(next)}
+              onClose={() => setSelection(null)}
+            />
+          ) : null}
+        </div>
+      </footer>
 
       <LogDrawer rateHz={state?.rate_hz ?? 0} />
 
-      {/* Teaching replaces the bottom bar rather than covering it: the run
-        * controls mean nothing while a human is pushing the arm around, and
-        * leaving them visible-but-unclickable underneath an overlay is the
-        * same trap the old teach modal set with the emergency stop. */}
-      {teachFlow && routine ? (
-        <TeachRail
-          routine={routine}
-          names={teachFlow.names}
-          onDone={() => {
-            setTeachFlow(null);
-            void reloadRoutine();
-          }}
-        />
-      ) : (
-        <ControlBar
-          routine={routine}
-          playback={playback}
-          mode={mode}
-          teaching={teaching}
-          latched={latched}
-          config={config}
-          viewerOpen={viewerOpen}
-          onToggleConfig={() => setConfig((value) => !value)}
-          onToggleViewer={() => setViewerOpen((value) => !value)}
-        />
-      )}
-
-      {config && routine && !teachFlow && (
-        <button
-          className="record-fab primary"
-          disabled={latched}
-          onClick={() => setTeachFlow({ names: null })}
+      {dialog ? (
+        <Dialog
+          label={
+            dialog === "create"
+              ? "新建序列"
+              : dialog === "rename"
+                ? "序列改名"
+                : dialog === "template"
+                  ? "存为模板"
+                  : "删除序列"
+          }
+          onClose={() => setDialog(null)}
         >
-          + 录锚点
-        </button>
-      )}
-
-      {editingAnchor !== null && routine && routine.waypoints[editingAnchor] && (
-        <AnchorEditSheet
-          routine={routine}
-          index={editingAnchor}
-          providers={providers}
-          onProbe={probeProviders}
-          onClose={(updated) => {
-            if (updated) {
-              setRoutine(updated);
-              void refreshList();
-            }
-            setEditingAnchor(null);
-          }}
-          onRemoved={(updated, removed, index) => {
-            setRoutine(updated);
-            void refreshList();
-            setTarget(null);
-            setEditingAnchor(null);
-            show("info", `已删除「${removed.note.trim() || `锚点 ${index + 1}`}」`, {
-              label: "撤销",
-              run: () => undoRemove(removed, index),
-            });
-          }}
-        />
-      )}
+          <div className="sheet__head">
+            <h2 className="sheet__title">
+              {dialog === "create"
+                ? "新建序列"
+                : dialog === "rename"
+                  ? "序列改名"
+                  : dialog === "template"
+                    ? "存为模板"
+                    : `删除序列「${sequence?.name}」？`}
+            </h2>
+          </div>
+          {dialog === "delete" ? (
+            <p className="hint">序列删除不可撤销；它引用的位姿都保留在素材库里。</p>
+          ) : (
+            <div className="sheet__field">
+              <span className="sheet__label">名称</span>
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitDialog();
+                }}
+              />
+            </div>
+          )}
+          {dialog === "template" ? (
+            <p className="hint">模板只存结构（站位 / 时长 / 标记 / 过渡），不存关节角。</p>
+          ) : null}
+          <div className="sheet__actions">
+            <button
+              type="button"
+              className={dialog === "delete" ? "danger primary" : "primary"}
+              disabled={dialog !== "delete" && nameDraft.trim() === ""}
+              onClick={() => void submitDialog()}
+            >
+              {dialog === "delete" ? "确认删除" : "确定"}
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

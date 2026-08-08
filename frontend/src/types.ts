@@ -1,41 +1,7 @@
 export type Mode = "idle" | "teach" | "playback" | "estop";
 
-export type FailurePolicy = "abort" | "skip" | "retry";
-
-export interface ShutterAction {
-  type: "shutter";
-  focus_first: boolean;
-  timeout_s: number;
-  on_failure: FailurePolicy;
-  retries: number;
-  /** How many times the trigger fires per visit (1–50). */
-  count: number;
-  /** Pause between repeated triggers, in seconds (0–60). */
-  interval_s: number;
-}
-
-export interface SleepAction {
-  type: "sleep";
-  duration_s: number;
-  timeout_s: number;
-  on_failure: FailurePolicy;
-  retries: number;
-}
-
-/** An action carried out by an installed provider (a plugin). */
-export interface PluginAction {
-  type: "plugin";
-  provider: string;
-  params: Record<string, unknown>;
-  timeout_s: number;
-  on_failure: FailurePolicy;
-  retries: number;
-}
-
-export type Action = ShutterAction | SleepAction | PluginAction;
-
 /**
- * One control in the anchor edit sheet, as described by the provider.
+ * One control in the marker inspector, as described by the provider.
  *
  * Only three kinds, and that is the contract: they are the three this app
  * already implements, and those have been through the touch-target, focus and
@@ -73,32 +39,107 @@ export interface ProviderInfo {
   fields: ProviderField[];
 }
 
-export interface Waypoint {
+// ── timeline model (schema_version 2) ──────────────────────────────────────
+// These shapes are the contract the v2 backend implements against: the mock
+// serves them today and the FastAPI side will serve the same documents.
+
+/** A named arm pose in the library. Hold blocks link to it by id. */
+export interface Pose {
   id: string;
+  name: string;
   joints: Record<string, number>;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * An action pinned inside its parent block, at a time position inside it.
+ * Inside a hold `at` is a second offset (0..duration_s); inside a transition
+ * it is a proportion (0..1) — splitting a transition to say "midway" would
+ * invent a pose nobody taught.
+ */
+export interface EventMarker {
+  id: string;
+  /** "wait" is built in; anything else is a provider id (e.g. "shutter"). */
+  kind: "wait" | string;
+  /** Provider params (shutter: count/interval_s/focus_first); wait has none. */
+  params: Record<string, unknown>;
+  at: number;
+  /**
+   * Estimated execution time in seconds, for the translucent span display.
+   * Instant triggers ≈ 0.3; a wait marker is open-ended and carries 0.
+   */
+  estimate_s: number;
+}
+
+export interface HoldBlock {
+  type: "hold";
+  id: string;
+  /** Link, not a copy: the joints live in the library pose. */
+  pose_id: string;
   duration_s: number;
-  settle_ms: number;
-  actions: Action[];
-  note: string;
+  markers: EventMarker[];
 }
 
-export interface Routine {
-  schema_version: number;
+export type Easing = "linear" | "ease_in" | "ease_out" | "ease_in_out";
+
+export interface TransitionBlock {
+  type: "transition";
+  id: string;
+  duration_s: number;
+  easing: Easing;
+  markers: EventMarker[];
+}
+
+export type Block = HoldBlock | TransitionBlock;
+
+export interface Sequence {
+  schema_version: 2;
   id: string;
   name: string;
   created_at: number;
   updated_at: number;
-  waypoints: Waypoint[];
+  blocks: Block[];
 }
 
-export interface RoutineSummary {
+export interface SequenceSummary {
+  id: string;
+  name: string;
+  updated_at: number;
+  /** Number of hold blocks (stations). */
+  station_count: number;
+  /** Sum of commanded durations — the plan-ruler length. */
+  duration_s: number;
+}
+
+/**
+ * A structural recipe: blocks with each hold's pose_id replaced by a slot
+ * placeholder ("slot:1".."slot:N"). No joint angles — a template's value is
+ * the structure, and angles taught in one studio are wrong in another.
+ */
+export interface SeqTemplate {
   id: string;
   name: string;
   created_at: number;
-  updated_at: number;
-  waypoint_count: number;
-  action_count: number;
+  station_count: number;
+  recipe: Block[];
 }
+
+/** Which sequences link a pose, reported before delete/overwrite. */
+export interface PoseLink {
+  sequence_id: string;
+  sequence_name: string;
+  /** How many hold blocks in that sequence reference the pose. */
+  block_count: number;
+}
+
+export interface PoseLinks {
+  pose_id: string;
+  count: number;
+  links: PoseLink[];
+}
+
+// ── live control ────────────────────────────────────────────────────────────
 
 export interface EstopState {
   latched: boolean;
@@ -108,26 +149,31 @@ export interface EstopState {
   freeze_pose?: Record<string, number> | null;
 }
 
-export interface PlaybackProgress {
-  phase: "idle" | "moving" | "settling" | "acting" | "done" | "aborted";
-  waypoint_index: number;
-  waypoint_total: number;
-  action_index: number | null;
-  action_total: number;
-  routine_id: string | null;
-  routine_name: string | null;
+/**
+ * Block-walking playback progress, as broadcast over /ws by the mock today
+ * and by the v2 backend later. `block_index` sits one past the last block
+ * once finished (the executor increments before it notices it is done) —
+ * clamp before indexing.
+ */
+export interface SeqPlayback {
+  sequence_id: string;
+  sequence_name: string;
+  block_index: number;
+  block_total: number;
+  phase: "hold" | "transition" | "wait" | "done" | "aborted";
+  t_in_block: number;
   error: string | null;
   finished: boolean;
 }
 
-/** What the motion endpoints (play / goto / teach / stop) return. */
+/** What the motion endpoints (execute / goto / teach / stop) return. */
 export interface PlaybackState {
   mode: string;
   playing: boolean;
   teaching: boolean;
   rate_hz: number;
-  playback: PlaybackProgress | null;
-  /** Who asked for the running routine. A label, never a permission. */
+  playback: SeqPlayback | null;
+  /** Who asked for the running sequence. A label, never a permission. */
   source?: string | null;
 }
 
@@ -139,12 +185,12 @@ export interface ControlState {
   rate_hz: number;
   mode: Mode;
   estop: EstopState;
-  playback: PlaybackProgress | null;
+  playback: SeqPlayback | null;
 }
 
 export type SocketMessage =
   | { type: "state"; data: ControlState }
-  | { type: "playback"; data: PlaybackProgress };
+  | { type: "playback"; data: SeqPlayback };
 
 /**
  * What the shutter self-test and the pairing endpoint report.

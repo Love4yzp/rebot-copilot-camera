@@ -8,7 +8,7 @@
  *   - `/api/*`     — REST, handled by `./api.ts` against an in-memory `MockState`
  *   - `/ws`        — a real WebSocket streaming `{type:"state"}` ControlState
  *                    frames at 20 Hz, with a tiny arm simulation (playback
- *                    progresses waypoint by waypoint, teach drifts the joints)
+ *                    walks the block list, teach drifts the joints)
  *   - `/assets/urdf/**` — URDF + STL meshes straight from the vendored
  *                    submodule, so the 3D view renders for real
  *
@@ -23,12 +23,15 @@ import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import type { Connect, Plugin, ViteDevServer } from "vite";
 
+import { easingFn } from "../src/timeline/model";
+import type { Block, EventMarker, HoldBlock } from "../src/types";
 import { handleApi } from "./api";
 import { createState, JOINTS } from "./state";
 import type { MockState } from "./state";
 
 const TICK_MS = 50; // 20 Hz state broadcast
 const RATE_HZ = Math.round(1000 / TICK_MS);
+const TICK_S = TICK_MS / 1000;
 
 //: Vendored submodule — the same directory the backend mounts at /assets/urdf.
 const URDF_ROOT = fileURLToPath(new URL("../../vendor/reBotArm_control_py/urdf", import.meta.url));
@@ -45,10 +48,10 @@ const MIME: Record<string, string> = {
 };
 
 interface SimContext {
-  /** ms timestamp of when the current playback phase (settle/acting) began. */
-  phaseAt: number;
   /** ms timestamp of the previous tick, for velocity differencing. */
   lastTickAt: number;
+  /** Markers already fired in the current block — a wait must not re-suspend after resume. */
+  fired: Set<string>;
 }
 
 // ── REST ─────────────────────────────────────────────────────────────────────
@@ -114,10 +117,10 @@ function urdfHandler(req: Connect.IncomingMessage, res: ServerResponse): void {
 // ── websocket + arm simulation ───────────────────────────────────────────────
 
 function simulateTick(state: MockState, nowMs: number, sim: SimContext): void {
-  if (state.mode === "estop") return; // frozen in place until cleared
-
   const dt = Math.max((nowMs - sim.lastTickAt) / 1000, 0);
   sim.lastTickAt = nowMs;
+  if (state.mode === "estop") return; // frozen in place until cleared
+
   const prev = { ...state.positions };
 
   if (state.mode === "teach") {
@@ -127,7 +130,7 @@ function simulateTick(state: MockState, nowMs: number, sim: SimContext): void {
       state.positions[joint] += (Math.random() - 0.5) * 0.004;
     }
   } else if (state.mode === "playback" && state.playback) {
-    advancePlayback(state, nowMs, sim);
+    advancePlayback(state, sim);
   }
 
   for (const joint of JOINTS) {
@@ -135,106 +138,156 @@ function simulateTick(state: MockState, nowMs: number, sim: SimContext): void {
   }
 }
 
-function advancePlayback(state: MockState, nowMs: number, sim: SimContext): void {
+/** Where a marker sits inside its block, in seconds (proportion → seconds). */
+function markerTimeInBlock(block: Block, marker: EventMarker): number {
+  return block.type === "hold" ? marker.at : marker.at * block.duration_s;
+}
+
+function poseJoints(state: MockState, poseId: string): Record<string, number> | undefined {
+  return state.poses.find((p) => p.id === poseId)?.joints;
+}
+
+function lerpInto(
+  state: MockState,
+  from: Record<string, number>,
+  to: Record<string, number>,
+  k: number,
+): void {
+  for (const joint of JOINTS) {
+    const a = from[joint] ?? 0;
+    const b = to[joint] ?? 0;
+    state.positions[joint] = a + (b - a) * k;
+  }
+}
+
+/**
+ * Walk the block list one tick.
+ *
+ * Holds count down their commanded duration; transitions eased-lerp the
+ * joints from the previous station's pose to the next one's. Markers fire as
+ * their in-block time passes (the white flash itself is drawn by the UI from
+ * the same clock); a wait marker suspends the run until the operator resumes.
+ */
+function advancePlayback(state: MockState, sim: SimContext): void {
   const pb = state.playback;
-  if (!pb) return;
-  const routine = state.routines.find((r) => r.id === pb.routine_id);
-  // A goto runs one waypoint outside the stored routine (the backend's
-  // ephemeral single-waypoint routine); full playback walks the routine.
-  const waypoint = state.gotoWaypoint ?? routine?.waypoints[pb.waypoint_index];
-  if (!waypoint) {
-    finishPlayback(state);
+  if (!pb || pb.finished) return;
+
+  // A goto is an ephemeral one-block run: eased lerp to the pose, then done.
+  if (state.goto) {
+    const goto_ = state.goto;
+    pb.t_in_block += TICK_S;
+    const k = easingFn("ease_in_out", pb.t_in_block / goto_.duration_s);
+    lerpInto(state, goto_.from, goto_.to, k);
+    if (pb.t_in_block >= goto_.duration_s) {
+      lerpInto(state, goto_.from, goto_.to, 1);
+      finishPlayback(state);
+    }
     return;
   }
 
-  switch (pb.phase) {
-    case "moving": {
-      // Step a fixed fraction of the move per tick, so the whole move takes
-      // about `duration_s` (the target is snapped once within one step, which
-      // is exactly what the real arm's trapezoidal profile ends as).
-      const step = TICK_MS / 1000 / Math.max(waypoint.duration_s, 0.1);
-      let maxError = 0;
-      for (const joint of JOINTS) {
-        const target = waypoint.joints[joint] ?? 0;
-        const delta = target - state.positions[joint];
-        if (Math.abs(delta) <= step) {
-          state.positions[joint] = target;
-        } else {
-          state.positions[joint] += Math.sign(delta) * step;
-        }
-        maxError = Math.max(maxError, Math.abs(target - state.positions[joint]));
-      }
-      if (maxError === 0) {
-        if (waypoint.actions.length === 0) {
-          nextWaypoint(state);
-        } else {
-          pb.phase = "settling";
-          sim.phaseAt = nowMs;
-        }
-      }
-      break;
-    }
-    case "settling": {
-      if (nowMs - sim.phaseAt >= waypoint.settle_ms) {
-        pb.phase = "acting";
-        pb.action_index = 0;
-        sim.phaseAt = nowMs;
-      }
-      break;
-    }
-    case "acting": {
-      const action = waypoint.actions[pb.action_index ?? 0];
-      // sleep takes its duration; a shutter burst runs count × interval_s
-      // (with a minimum beat so a single instant shot still reads as one).
-      const durationMs =
-        action?.type === "sleep"
-          ? action.duration_s * 1000
-          : Math.max((action?.count ?? 1) * (action?.interval_s ?? 0) * 1000, 300);
-      if (nowMs - sim.phaseAt >= durationMs) {
-        pb.action_index = (pb.action_index ?? 0) + 1;
-        sim.phaseAt = nowMs;
-        if (pb.action_index >= waypoint.actions.length) nextWaypoint(state);
-      }
-      break;
-    }
-    default:
-      break;
+  const sequence = state.sequences.find((s) => s.id === pb.sequence_id);
+  const block = sequence?.blocks[pb.block_index];
+  if (!sequence || !block) {
+    // Defensive: the REST layer refuses to delete/patch a running sequence,
+    // so this should be unreachable — but a run whose plan vanished must say
+    // so, not hang.
+    pb.phase = "aborted";
+    pb.finished = true;
+    pb.error = "sequence disappeared mid-run";
+    state.mode = "idle";
+    return;
   }
+
+  if (pb.phase === "wait") return; // suspended until POST /api/execute/resume
+
+  pb.t_in_block += TICK_S;
+
+  // Fire markers whose time has come, in block order. A wait marker suspends
+  // the run exactly on its own time; everything else is an instant event.
+  for (const marker of block.markers) {
+    if (sim.fired.has(marker.id)) continue;
+    if (pb.t_in_block < markerTimeInBlock(block, marker)) continue;
+    sim.fired.add(marker.id);
+    if (marker.kind === "wait") {
+      pb.t_in_block = markerTimeInBlock(block, marker);
+      pb.phase = "wait";
+      return;
+    }
+  }
+
+  if (block.type === "hold") {
+    // Settle toward the station's pose. Transitions already land exactly on
+    // it — this covers the very first block and poses deleted mid-life.
+    const target = poseJoints(state, block.pose_id);
+    if (target) {
+      const rate = Math.min(1, TICK_S * 4);
+      for (const joint of JOINTS) {
+        const delta = (target[joint] ?? 0) - state.positions[joint];
+        state.positions[joint] = Math.abs(delta) < 1e-4 ? target[joint] : state.positions[joint] + delta * rate;
+      }
+    }
+    if (pb.t_in_block >= block.duration_s) nextBlock(state, sim);
+    return;
+  }
+
+  // Transition: eased joint-space lerp between the flanking stations.
+  const prev = blockAt(sequence.blocks, pb.block_index, -1);
+  const next = blockAt(sequence.blocks, pb.block_index, +1);
+  const from = (prev && poseJoints(state, prev.pose_id)) ?? { ...state.positions };
+  const to = (next && poseJoints(state, next.pose_id)) ?? { ...state.positions };
+  const k = easingFn(block.easing, pb.t_in_block / block.duration_s);
+  lerpInto(state, from, to, k);
+  if (pb.t_in_block >= block.duration_s) {
+    lerpInto(state, from, to, 1);
+    nextBlock(state, sim);
+  }
+}
+
+function blockAt(blocks: Block[], index: number, step: -1 | 1): HoldBlock | undefined {
+  for (let i = index + step; i >= 0 && i < blocks.length; i += step) {
+    if (blocks[i].type === "hold") return blocks[i] as HoldBlock;
+  }
+  return undefined;
+}
+
+function nextBlock(state: MockState, sim: SimContext): void {
+  const pb = state.playback;
+  if (!pb) return;
+  pb.block_index += 1;
+  pb.t_in_block = 0;
+  sim.fired.clear();
+  if (pb.block_index >= pb.block_total) {
+    finishPlayback(state);
+    return;
+  }
+  const sequence = state.sequences.find((s) => s.id === pb.sequence_id);
+  const block = sequence?.blocks[pb.block_index];
+  if (!block) {
+    finishPlayback(state);
+    return;
+  }
+  pb.phase = block.type;
 }
 
 /**
  * End a run the way the real controller ends one.
  *
- * `Controller` keeps its finished `RoutineExecutor` rather than dropping it,
- * so `/ws` goes on broadcasting the final progress — phase `done`, and
- * `waypoint_index` sitting one past the last waypoint, because
- * `_advance_waypoint` increments before it notices it is finished. The UI
- * relies on that lingering `done` to keep saying 已到位 while the arm holds,
- * so a mock that nulled the progress out would preview a state the real
- * device never reaches.
+ * `Controller` keeps its finished executor rather than dropping it, so `/ws`
+ * goes on broadcasting the final progress — phase `done`, and `block_index`
+ * sitting one past the last block, because the advance step increments
+ * before it notices it is finished. The UI relies on that lingering `done`
+ * to keep saying 到位 while the arm holds, so a mock that nulled the progress
+ * out would preview a state the real device never reaches.
  */
 function finishPlayback(state: MockState): void {
   const pb = state.playback;
   if (!pb) return;
   pb.phase = "done";
   pb.finished = true;
-  pb.action_index = null;
+  pb.block_index = pb.block_total;
+  pb.t_in_block = 0;
   state.mode = "idle";
-  state.gotoWaypoint = null;
-}
-
-function nextWaypoint(state: MockState): void {
-  const pb = state.playback;
-  if (!pb) return;
-  pb.waypoint_index += 1;
-  if (pb.waypoint_index >= pb.waypoint_total) {
-    finishPlayback(state);
-    return;
-  }
-  const routine = state.routines.find((r) => r.id === pb.routine_id);
-  pb.phase = "moving";
-  pb.action_index = null;
-  pb.action_total = routine?.waypoints[pb.waypoint_index].actions.length ?? 0;
+  state.goto = null;
 }
 
 function broadcastState(state: MockState, clients: Set<WebSocket>): void {
@@ -280,7 +333,7 @@ export function mockPreview(): Plugin {
     configureServer(server) {
       const state = createState();
       const clients = new Set<WebSocket>();
-      const sim: SimContext = { phaseAt: 0, lastTickAt: Date.now() };
+      const sim: SimContext = { lastTickAt: Date.now(), fired: new Set() };
 
       // Plain middleware with a prefix check rather than a connect mount path:
       // a mount path rewrites req.url, and the handlers need the full path.

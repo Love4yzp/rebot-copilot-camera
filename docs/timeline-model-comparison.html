@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>时间轴模型对比：动作是块还是标记？</title>
+<style>
+  /* ===== 调色板：深色文档主题，两种克制的方案强调色 ===== */
+  :root{
+    --bg:#0a0d12;            /* 页面背景 */
+    --p1:#14181f;            /* 面板一级 */
+    --p2:#1a2029;            /* 面板二级 / 保持块 */
+    --p3:#10141b;            /* 更深一层（标记底） */
+    --line:#232b36;          /* 细边线 */
+    --line2:#2a3340;         /* 稍亮的边线 */
+    --tx:#b8c0cc;            /* 正文 */
+    --dim:#7d8794;           /* 次要文字 */
+    --faint:#5b6572;         /* 更弱文字 */
+    --aa:#7d9cc4;            /* 方案 A 强调色：冷灰蓝 */
+    --ab:#9cba97;            /* 方案 B 强调色：暖灰绿 */
+    --warn:#c4907d;          /* 警示（仅用于「不可表达 / 脱钩」） */
+    --w-track:1025px;        /* 20.5s × 50px/s，两个时间轴共用 */
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg)}
+  body{
+    color:var(--tx);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue","Segoe UI","Microsoft YaHei",sans-serif;
+    padding:44px 24px 90px;
+  }
+  /* 数字一律等宽，时刻/时长对齐才稳 */
+  .t{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1120px;margin:0 auto}
+
+  h1{font-size:23px;font-weight:650;letter-spacing:.5px;color:#d4dbe4}
+  h2{font-size:15px;font-weight:600;color:#cdd5df;margin-bottom:4px}
+  .sub{color:var(--dim);font-size:13px;margin-top:8px;max-width:760px}
+  .meta{color:var(--faint);font-size:12px;margin-top:14px}
+  .panel{background:var(--p1);border:1px solid var(--line);border-radius:12px;padding:22px 24px;margin-top:22px}
+
+  /* ===== 图例 ===== */
+  .legend{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;margin-top:14px}
+  .lg{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--dim)}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--p2);border:1px solid var(--line2);
+        border-radius:20px;padding:2px 11px;font-size:12px;color:var(--tx)}
+  .pdot{width:8px;height:8px;border-radius:50%;flex:none}
+  .swatch{width:44px;height:16px;border-radius:4px;border:1px solid var(--line2)}
+  .sw-hold{background:var(--p2)}
+  .sw-trans{background:repeating-linear-gradient(45deg,#161b23 0 5px,#1a2029 5px 10px)}
+  .mi{width:17px;height:17px;border-radius:50%;background:var(--p3);border:1.5px solid var(--dim);
+      color:#cfd6de;font-size:10px;line-height:15px;text-align:center;flex:none}
+  .sw-band{width:44px;height:12px;background:rgba(232,236,241,.10);
+           border-top:1px dashed rgba(232,236,241,.4);border-bottom:1px dashed rgba(232,236,241,.4)}
+  .lg-note{width:100%;color:var(--faint);font-size:12px}
+
+  /* ===== 时间轴通用 ===== */
+  .tl-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .badge{font-size:11.5px;padding:2px 10px;border-radius:12px;border:1px solid var(--line2);color:var(--dim)}
+  .badge.a{color:var(--aa);border-color:rgba(125,156,196,.4)}
+  .badge.b{color:var(--ab);border-color:rgba(156,186,151,.4)}
+  .tl-hint{font-size:12px;color:var(--faint)}
+  .tl-scroll{overflow-x:auto;margin-top:14px}
+  .tl{width:var(--w-track)}
+  /* 注释行：绝对定位在刻度尺上方 */
+  .notes{position:relative;height:24px}
+  .note{position:absolute;top:2px;font-size:11px;color:var(--dim);white-space:nowrap;
+        border-left:2px solid var(--line2);padding-left:6px}
+  .note.warn{color:var(--warn);border-left-color:var(--warn)}
+  /* 刻度尺：tick 由 JS 生成，保证两个方案严格同一刻度 */
+  .ruler{position:relative;height:20px;border-bottom:1px solid var(--line2)}
+  .tick{position:absolute;top:6px;bottom:0;width:1px;background:var(--line2)}
+  .tick span{position:absolute;bottom:2px;left:4px;font-size:10px;color:var(--faint)}
+  .tick.end span{left:6px;color:var(--dim)} /* 终点标签放刻度右侧，避免与 20s 标签重叠 */
+  /* 轨道：块一个挨一个（时间是连续的，不留缝），outline 描边以免裁掉悬浮提示 */
+  .track{position:relative;height:74px;margin-top:8px;outline:1px solid var(--line2);border-radius:8px;
+         display:flex;user-select:none;-webkit-user-select:none}
+  .blk{position:relative;height:100%;border-right:1px solid var(--line2);flex:none}
+  .blk:first-child{border-top-left-radius:7px;border-bottom-left-radius:7px}
+  .blk:last-child{border-right:none;border-top-right-radius:7px;border-bottom-right-radius:7px}
+  .hold{background:var(--p2)}
+  .trans{background:repeating-linear-gradient(45deg,#161b23 0 6px,#1a2029 6px 12px)}
+  /* 方案色：块顶 2px 色条区分两个时间轴 */
+  #tl-a .blk{box-shadow:inset 0 2px 0 rgba(125,156,196,.55)}
+  #tl-b .blk{box-shadow:inset 0 2px 0 rgba(156,186,151,.55)}
+  #tl-b .hold{cursor:crosshair}
+  .hold .in{position:absolute;left:9px;right:9px;bottom:8px;display:flex;align-items:center;gap:6px;
+            font-size:12px;color:var(--tx);white-space:nowrap;overflow:hidden}
+  .hold .in .dur{margin-left:auto;font-size:11px;color:var(--dim)}
+  .hold.frag .in{left:0;right:0;justify-content:center;font-size:11px;color:var(--dim)}
+  .trans .in{position:absolute;left:0;right:0;top:30px;text-align:center;font-size:10px;line-height:1.35;
+             color:var(--dim);white-space:nowrap;overflow:visible}
+
+  /* 块内标记（方案 B）：小圆点，hover 出名称与时刻 */
+  .mk{position:absolute;top:7px;width:20px;height:20px;margin-left:-10px;border-radius:50%;
+      background:var(--p3);border:1.5px solid var(--ab);color:#dfe6dd;
+      font-size:11px;line-height:18px;text-align:center;z-index:3;cursor:pointer}
+  .mk.sm{font-size:9px}
+  .mk.user{border-style:dashed}          /* 交互新增的标记：虚线圈以示区别 */
+  /* 事件薄片块（方案 A）：零时长，不占时间宽度，绝对定位在时刻点上 */
+  .ev{position:absolute;top:8px;width:22px;height:22px;margin-left:-11px;border-radius:6px;
+      background:var(--p3);border:1.5px solid var(--aa);color:#cfd9e8;
+      font-size:11px;line-height:20px;text-align:center;z-index:3}
+  .ev.sm{font-size:9px}
+  /* 悬浮提示（标记与薄片共用） */
+  .mk::after,.ev::after{
+    content:attr(data-label);display:none;position:absolute;bottom:135%;left:50%;transform:translateX(-50%);
+    white-space:nowrap;background:#0d1117;border:1px solid var(--line2);color:var(--tx);
+    font-size:11px;line-height:1.5;padding:3px 9px;border-radius:6px;z-index:60;pointer-events:none}
+  .mk:hover::after,.ev:hover::after{display:block}
+  /* 预估跨度：半透明横带，示意「动作执行时长是预估，不占指令时间」 */
+  .band{position:absolute;left:0;right:0;bottom:5px;height:13px;z-index:2;
+        background:rgba(232,236,241,.09);
+        border-top:1px dashed rgba(232,236,241,.35);border-bottom:1px dashed rgba(232,236,241,.35);
+        display:flex;align-items:center;justify-content:center;
+        font-size:9px;color:#9aa4b0;white-space:nowrap;overflow:visible}
+  /* 「不可表达」警示徽标 */
+  .warn{position:absolute;top:8px;transform:translateX(-50%);z-index:3;white-space:nowrap;
+        background:#1b1512;border:1px solid var(--warn);color:var(--warn);
+        font-size:11px;padding:1px 8px;border-radius:6px}
+
+  .reset-btn{margin-left:auto;background:var(--p2);border:1px solid var(--line2);color:var(--dim);
+             font-size:12px;padding:4px 14px;border-radius:7px;cursor:pointer}
+  .reset-btn:hover{color:var(--tx);border-color:var(--ab)}
+
+  /* ===== 六个任务的交互对比卡片 ===== */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .card{background:var(--p1);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .card h3{font-size:13.5px;font-weight:600;color:#cdd5df;margin-bottom:12px}
+  .case + .case{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+  .case-head{font-size:11px;letter-spacing:.5px;margin-bottom:6px}
+  .case-head .ca{color:var(--aa)} .case-head .cb{color:var(--ab)}
+  .steps{list-style:none;counter-reset:st}
+  .steps li{counter-increment:st;position:relative;padding-left:25px;margin:4px 0;font-size:12.5px;color:var(--tx)}
+  .steps li::before{content:counter(st);position:absolute;left:0;top:2px;width:16px;height:16px;border-radius:50%;
+                    background:var(--line);color:#9aa4b0;font-size:10px;text-align:center;line-height:16px}
+  .steps li.warn-step{color:var(--warn)}
+  .steps li.warn-step::before{background:#2a1d17;color:var(--warn)}
+  /* 手势示意小条（不按比例，仅示意） */
+  .mini{display:flex;height:24px;margin-top:8px}
+  .mb{position:relative;display:flex;align-items:center;justify-content:center;height:100%;
+      font-size:10px;color:var(--dim);background:var(--p2);border:1px solid var(--line);white-space:nowrap}
+  .mb.tr{background:repeating-linear-gradient(45deg,#161b23 0 5px,#1a2029 5px 10px)}
+  .mb.ev{background:var(--p3);color:var(--aa)}
+  .mb.ev.bad{color:var(--warn);border-color:var(--warn)}
+  .mb.sel{outline:1.5px dashed var(--aa);outline-offset:1px;z-index:1}
+  .mb.sel-b{outline:1.5px dashed var(--ab);outline-offset:1px;z-index:1}
+  .mdot{position:absolute;top:3px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;
+        border:1.5px solid var(--ab);background:var(--p3)}
+  .mdot.hollow{border-style:dashed;opacity:.55}
+  .verdict{margin-top:8px;font-size:12px}
+  .verdict.va{color:var(--aa)} .verdict.vb{color:var(--ab)}
+
+  /* ===== 结论区 ===== */
+  .concl ol{margin:12px 0 0 0;padding-left:0;list-style:none;counter-reset:cc}
+  .concl li{counter-increment:cc;position:relative;padding:0 0 14px 34px;font-size:13px}
+  .concl li::before{content:counter(cc);position:absolute;left:0;top:1px;width:22px;height:22px;border-radius:50%;
+                    border:1.5px solid var(--ab);color:var(--ab);font-size:12px;text-align:center;line-height:20px}
+  .concl li b{color:#d4dbe4;font-weight:600}
+  .cost{border-top:1px dashed var(--line);margin-top:6px;padding-top:14px;font-size:13px;color:var(--dim)}
+  .foot{margin-top:26px;text-align:center;color:var(--faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= 1. 标题区 ================= -->
+  <header>
+    <h1>时间轴模型对比：动作是块还是标记？</h1>
+    <p class="sub">这是一台机械臂运动序列的「剪辑软件式」编辑器 —— 用户编排的不是视频片段，而是臂在物理空间里的时间。
+       本文用同一条演示序列对比两种数据模型：外设动作（快门 / 等待 / 录制 / 补光）应该表达为
+       <b>时间轴上的块</b>，还是<b>块内的标记</b>。</p>
+    <p class="meta">内部设计文档 · 演示序列：产品拍摄，四个站位（正面 → 右45° → 侧面 → 俯拍） · 统一刻度 <span class="t">50px/秒</span> · 总长 <span class="t">20.5s</span></p>
+  </header>
+
+  <!-- ================= 2. 图例 ================= -->
+  <section class="panel">
+    <h2>图例</h2>
+    <div class="legend">
+      <span class="lg">位姿素材（可反复拖入时间轴复用）：</span>
+      <span class="chip"><i class="pdot" style="background:#8ba3c7"></i>正面</span>
+      <span class="chip"><i class="pdot" style="background:#c2a678"></i>右45°</span>
+      <span class="chip"><i class="pdot" style="background:#8fae9a"></i>侧面</span>
+      <span class="chip"><i class="pdot" style="background:#ad9cc0"></i>俯拍</span>
+      <span class="lg"><i class="swatch sw-hold"></i>保持块（位姿 + 停留时长）</span>
+      <span class="lg"><i class="swatch sw-trans"></i>过渡块（时长 + 缓动，自动生成不可删）</span>
+      <span class="lg">事件标记：</span>
+      <span class="lg"><i class="mi">◉</i>快门</span>
+      <span class="lg"><i class="mi" style="font-size:8px">⏸</i>等待（播放到此暂停，手动继续）</span>
+      <span class="lg"><i class="mi" style="font-size:8px">▶</i>开录</span>
+      <span class="lg"><i class="mi" style="font-size:8px">■</i>停录</span>
+      <span class="lg"><i class="mi">✦</i>补光</span>
+      <span class="lg"><i class="sw-band"></i>预估跨度（半透明）</span>
+      <span class="lg-note">时间尺规则：保持块 / 过渡块的长度是「指令时长」，机器照做；动作自身的执行时长是「预估」
+        （例如快门经蓝牙唤醒相机最长约 <span class="t">6s</span>），以半透明跨度挂在标记上，不占用指令时间。</span>
+    </div>
+  </section>
+
+  <!-- ================= 3. 方案 A 时间轴 ================= -->
+  <section class="panel">
+    <div class="tl-head">
+      <h2>方案 A · 纯块模型</h2>
+      <span class="badge a">时间块 10 · 事件薄片 5</span>
+      <span class="tl-hint">一切都是轨道上的块，顺序即时刻。事件是零时长的薄片块（不占时间宽度，仅标出时刻）。</span>
+    </div>
+    <div class="tl-scroll">
+      <div class="tl" id="tl-a">
+        <div class="notes">
+          <span class="note" style="left:250px">站位「右45°」→ 4 段保持 + 3 个薄片</span>
+          <span class="note" style="left:500px">开录/停录 = 夹着过渡的两个薄片块</span>
+          <span class="note warn" style="left:768px">⚠ 「运动到 40% 开补光」不可表达</span>
+        </div>
+        <div class="ruler"></div>
+        <div class="track">
+          <!-- 站位 1：保持「正面」3s -->
+          <div class="blk hold" style="width:150px">
+            <div class="in"><i class="pdot" style="background:#8ba3c7"></i>正面<span class="dur t">3s</span></div>
+          </div>
+          <!-- 过渡 2s 缓入缓出 -->
+          <div class="blk trans" style="width:100px">
+            <div class="in"><span class="t">2s</span><br>缓入缓出</div>
+          </div>
+          <!-- 站位 3：保持「右45°」5s，被 3 个事件劈成 4 段 -->
+          <div class="blk hold" style="width:100px">
+            <div class="in"><i class="pdot" style="background:#c2a678"></i>右45°<span class="dur t">2s</span></div>
+          </div>
+          <div class="blk hold frag" style="width:50px">
+            <div class="in"><i class="pdot" style="background:#c2a678"></i><span class="t">1s</span></div>
+          </div>
+          <div class="blk hold frag" style="width:50px">
+            <div class="in"><i class="pdot" style="background:#c2a678"></i><span class="t">1s</span></div>
+          </div>
+          <div class="blk hold frag" style="width:50px">
+            <div class="in"><i class="pdot" style="background:#c2a678"></i><span class="t">1s</span></div>
+          </div>
+          <!-- 过渡 1.5s 线性 -->
+          <div class="blk trans" style="width:75px">
+            <div class="in"><span class="t">1.5s</span> 线性</div>
+          </div>
+          <!-- 站位 5：保持「侧面」3s -->
+          <div class="blk hold" style="width:150px">
+            <div class="in"><i class="pdot" style="background:#8fae9a"></i>侧面<span class="dur t">3s</span></div>
+          </div>
+          <!-- 过渡 2s 缓入缓出 -->
+          <div class="blk trans" style="width:100px">
+            <div class="in"><span class="t">2s</span><br>缓入缓出</div>
+          </div>
+          <!-- 站位 7：保持「俯拍」4s -->
+          <div class="blk hold" style="width:200px">
+            <div class="in"><i class="pdot" style="background:#ad9cc0"></i>俯拍<span class="dur t">4s</span></div>
+          </div>
+          <!-- 事件薄片块：零时长，绝对定位在时刻点（50px/s） -->
+          <div class="ev" style="left:350px" data-label="快门 · t=7.0s · 零时长薄片块">◉</div>
+          <div class="ev sm" style="left:400px" data-label="等待 · t=8.0s · 播放到此暂停，等手动继续">⏸</div>
+          <div class="ev" style="left:450px" data-label="快门 · t=9.0s · 零时长薄片块">◉</div>
+          <div class="ev sm" style="left:500px" data-label="开录 · t=10.0s · 过渡起点的薄片块">▶</div>
+          <div class="ev sm" style="left:575px" data-label="停录 · t=11.5s · 过渡终点的薄片块">■</div>
+          <!-- 40% 补光：方案 A 表达不了 -->
+          <div class="warn" style="left:765px">⚠ 40%「补光开」不可表达</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. 方案 B 时间轴 ================= -->
+  <section class="panel">
+    <div class="tl-head">
+      <h2>方案 B · 骨架块 + 块内标记（推荐）</h2>
+      <span class="badge b">骨架块 7 · 块内标记 6</span>
+      <span class="tl-hint">保持 / 过渡交替构成骨架；事件挂在父块内部时间位置，随父块移动、修剪一起走。</span>
+      <button class="reset-btn" id="reset-b" type="button">重置标记</button>
+      <span class="tl-hint">可交互：点保持块内空白 = 在该位置加快门标记；点标记 = 删除。</span>
+    </div>
+    <div class="tl-scroll">
+      <div class="tl" id="tl-b">
+        <div class="notes">
+          <span class="note" style="left:250px">一个站位 = 一个块，3 个事件挂块内</span>
+          <span class="note" style="left:500px">开录/停录钉在过渡两端 + 预估跨度</span>
+          <span class="note" style="left:765px">过渡 40% 处直接打点</span>
+        </div>
+        <div class="ruler"></div>
+        <div class="track">
+          <!-- 站位 1：保持「正面」3s（data-start/dur 供交互计算时刻） -->
+          <div class="blk hold" style="width:150px" data-start="0" data-dur="3">
+            <div class="in"><i class="pdot" style="background:#8ba3c7"></i>正面<span class="dur t">3s</span></div>
+          </div>
+          <!-- 过渡 2s 缓入缓出 -->
+          <div class="blk trans" style="width:100px">
+            <div class="in"><span class="t">2s</span><br>缓入缓出</div>
+          </div>
+          <!-- 站位 3：保持「右45°」5s，三个事件在块内 -->
+          <div class="blk hold" style="width:250px" data-start="5" data-dur="5">
+            <div class="in"><i class="pdot" style="background:#c2a678"></i>右45°<span class="dur t">5s</span></div>
+            <div class="mk" style="left:40%" data-label="快门 · t=7.0s（块内 2.0s）· 点击删除">◉</div>
+            <div class="mk sm" style="left:60%" data-label="等待 · t=8.0s（块内 3.0s）· 播放到此暂停，等手动继续">⏸</div>
+            <div class="mk" style="left:80%" data-label="快门 · t=9.0s（块内 4.0s）· 点击删除">◉</div>
+          </div>
+          <!-- 过渡 1.5s 线性：开录/停录在两端，录制中为预估跨度 -->
+          <div class="blk trans" style="width:75px">
+            <div class="in"><span class="t">1.5s</span> 线性</div>
+            <div class="mk sm" style="left:0%" data-label="开录 · t=10.0s · 过渡起点">▶</div>
+            <div class="mk sm" style="left:100%" data-label="停录 · t=11.5s · 过渡终点">■</div>
+            <div class="band">录制中（预估）</div>
+          </div>
+          <!-- 站位 5：保持「侧面」3s -->
+          <div class="blk hold" style="width:150px" data-start="11.5" data-dur="3">
+            <div class="in"><i class="pdot" style="background:#8fae9a"></i>侧面<span class="dur t">3s</span></div>
+          </div>
+          <!-- 过渡 2s 缓入缓出：40% 处补光开 -->
+          <div class="blk trans" style="width:100px">
+            <div class="in"><span class="t">2s</span><br>缓入缓出</div>
+            <div class="mk" style="left:40%" data-label="补光开 · t=15.3s（过渡 40%）">✦</div>
+          </div>
+          <!-- 站位 7：保持「俯拍」4s -->
+          <div class="blk hold" style="width:200px" data-start="16.5" data-dur="4">
+            <div class="in"><i class="pdot" style="background:#ad9cc0"></i>俯拍<span class="dur t">4s</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. 六个任务的交互对比 ================= -->
+  <section>
+    <div class="panel" style="margin-bottom:0">
+      <h2>六个任务，两种手势</h2>
+      <p class="sub" style="margin-top:2px">每条任务下面的小条是手势示意图（不按比例）。注意 A 的步骤数、心算次数，和 B 的差距。</p>
+    </div>
+    <div class="cards">
+
+      <!-- 任务 ① -->
+      <div class="card">
+        <h3>① 在「停 5s」的第 2s 加一张快门</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li>选中保持块「右45° · 5s」</li>
+            <li>在 2s 刻度处执行「劈开」</li>
+            <li>把「快门」块从素材栏拖进缝隙</li>
+            <li>核对左右两段时长还是不是 2s + 3s</li>
+          </ol>
+          <div class="mini">
+            <div class="mb" style="width:36%">保持 2s</div>
+            <div class="mb ev" style="width:12%">◉</div>
+            <div class="mb" style="width:52%">保持 3s</div>
+          </div>
+          <p class="verdict va">→ 一个站位从此变成 3 个块</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>在块内 2s 处点一下</li></ol>
+          <div class="mini">
+            <div class="mb" style="width:100%">保持「右45°」 5s<i class="mdot" style="left:40%"></i></div>
+          </div>
+          <p class="verdict vb">→ 骨架不动，块内多一个标记</p>
+        </div>
+      </div>
+
+      <!-- 任务 ② -->
+      <div class="card">
+        <h3>② 总停留 5s 改成 8s</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li>修剪快门左侧的保持块</li>
+            <li>心算：两段保持要凑出 8s</li>
+            <li>再修剪右侧的保持块（改错一段就得重来）</li>
+          </ol>
+          <div class="mini">
+            <div class="mb" style="width:36%">保持 ⇢</div>
+            <div class="mb ev" style="width:12%">◉</div>
+            <div class="mb" style="width:52%">⇢ 保持</div>
+          </div>
+          <p class="verdict va">→ 两次修剪 + 一次心算</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>拖保持块右缘到 8s</li></ol>
+          <div class="mini">
+            <div class="mb" style="width:100%">保持 5s → 8s ⇢<i class="mdot" style="left:40%"></i></div>
+          </div>
+          <p class="verdict vb">→ 一次拖拽</p>
+        </div>
+      </div>
+
+      <!-- 任务 ③ -->
+      <div class="card">
+        <h3>③ 快门从 2s 挪到 3s</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li>修剪左保持块：2s → 3s</li>
+            <li>修剪右保持块：3s → 2s（总长靠心算守住）</li>
+          </ol>
+          <div class="mini">
+            <div class="mb" style="width:45%">保持 3s</div>
+            <div class="mb ev" style="width:12%">◉</div>
+            <div class="mb" style="width:43%">保持 2s</div>
+          </div>
+          <p class="verdict va">→ 薄片块没有「时刻」属性，位置由相邻块时长挤出</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>把标记拖到 3s</li></ol>
+          <div class="mini">
+            <div class="mb" style="width:100%">保持 5s<i class="mdot hollow" style="left:40%"></i><i class="mdot" style="left:60%"></i></div>
+          </div>
+          <p class="verdict vb">→ 一次手势</p>
+        </div>
+      </div>
+
+      <!-- 任务 ④ -->
+      <div class="card">
+        <h3>④ 删掉这张快门</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li>选中快门块，删除</li>
+            <li>把左右两段保持块手动合并回一个</li>
+          </ol>
+          <div class="mini">
+            <div class="mb" style="width:36%">保持 2s</div>
+            <div class="mb ev bad" style="width:12%">✕</div>
+            <div class="mb" style="width:52%">保持 3s</div>
+          </div>
+          <p class="verdict va">→ 忘了合并 = 埋下一个隐形断点</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>点中标记，按 Delete（或再点一下）</li></ol>
+          <div class="mini">
+            <div class="mb" style="width:100%">保持 5s<i class="mdot hollow" style="left:40%"></i></div>
+          </div>
+          <p class="verdict vb">→ 一步到位，骨架从未变过</p>
+        </div>
+      </div>
+
+      <!-- 任务 ⑤ -->
+      <div class="card">
+        <h3>⑤ 整个站位往后挪</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li>框选 3 个块（保持 / 快门 / 保持）</li>
+            <li>一起拖到新位置</li>
+            <li class="warn-step">⚠ 漏选快门块 = 快门与「右45°」脱钩：臂停在别的姿态时按下快门</li>
+          </ol>
+          <div class="mini">
+            <div class="mb sel" style="width:36%">保持 2s</div>
+            <div class="mb ev bad" style="width:12%">◉</div>
+            <div class="mb sel" style="width:52%">保持 3s</div>
+          </div>
+          <p class="verdict va">→ 漏选一个 = 物理事故：拍完一整轮全是空片</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>拖保持块，标记跟着走</li></ol>
+          <div class="mini">
+            <div class="mb sel-b" style="width:100%">保持「右45°」<i class="mdot" style="left:40%"></i><i class="mdot" style="left:60%"></i><i class="mdot" style="left:80%"></i></div>
+          </div>
+          <p class="verdict vb">→ 标记是块的属性，脱钩在结构上不可能</p>
+        </div>
+      </div>
+
+      <!-- 任务 ⑥ -->
+      <div class="card">
+        <h3>⑥ 运动到 40% 时开补光</h3>
+        <div class="case">
+          <div class="case-head ca">方案 A</div>
+          <ol class="steps">
+            <li class="warn-step">✕ 不可表达 —— 劈开过渡块 = 在中点捏造一个从未示教过的姿态，48V 的臂会真往那里去</li>
+          </ol>
+          <div class="mini">
+            <div class="mb tr" style="width:100%"><span style="color:var(--warn)">⚠ 过渡块不可劈</span></div>
+          </div>
+          <p class="verdict va">→ 只能放弃，或把动作挪到起点 / 终点凑合</p>
+        </div>
+        <div class="case">
+          <div class="case-head cb">方案 B</div>
+          <ol class="steps"><li>在过渡块 40% 处打点</li></ol>
+          <div class="mini">
+            <div class="mb tr" style="width:100%">过渡 2s · 缓入缓出<i class="mdot" style="left:40%"></i></div>
+          </div>
+          <p class="verdict vb">→ 标记挂在过渡上，随块移动 / 修剪</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ================= 6. 结论区 ================= -->
+  <section class="panel concl">
+    <h2>结论：方案 B —— 骨架块 + 块内标记</h2>
+    <ol>
+      <li><b>脱钩在这台机器上是物理事故，不是剪辑瑕疵。</b>视频剪辑里音画脱钩只是回放难听；这里快门与姿态脱钩，
+        意味着臂停错了位置还按了快门 —— 一整轮拍摄全是空片。块内标记让「动作」和「姿态」在数据结构上是同一个物体，
+        脱钩从「容易犯的错」变成「结构上不可能」—— 让错的事够不到。</li>
+      <li><b>时间轴的第一读者是骨架。</b>任何人扫一眼要先回答：几个站位？各停多久？之间怎么动？
+        纯块模型里零时长的快门薄片和承载站位的保持块在同一层级竞争注意力 —— A 版 15 个元素里只有 7 个是骨架；
+        B 版一眼就是 7 个块。</li>
+      <li><b>剪辑软件几十年收敛出的分工：</b>片段承载结构（拖 / 剪 / 整体挪），标记承载事件（点 / 微调 / 删）。
+        这不是审美偏好，是两种操作频率的分离 —— 结构改动少而大，事件调整多而小。</li>
+    </ol>
+    <p class="cost"><b style="color:#cdd5df">代价：</b>B 多一层「块内」细节视图，首次接触的直觉成本略高于纯块。
+      但纯块的直白优势，在第一次「中间加一张」时就用光了 —— 从那一刀劈开开始，用户就在替数据结构打工：
+      心算时长、手动合并、框选防漏。</p>
+  </section>
+
+  <p class="foot">同一条演示序列 · 两个时间轴同一刻度（<span class="t">50px/秒</span>），上下块边缘一一对齐 · 本页零外部依赖，可离线查看</p>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var PPS = 50;     // 统一刻度：每秒 50px，两个时间轴共用
+  var TOTAL = 20.5; // 演示序列总长（秒）
+
+  /* 生成刻度尺：0–20s 整秒 tick + 20.5s 终点 tick */
+  function buildRuler(el) {
+    for (var s = 0; s <= 20; s++) {
+      var t = document.createElement("div");
+      t.className = "tick";
+      t.style.left = (s * PPS) + "px";
+      var lb = document.createElement("span");
+      lb.className = "t";
+      lb.textContent = s + "s";
+      t.appendChild(lb);
+      el.appendChild(t);
+    }
+    var end = document.createElement("div");
+    end.className = "tick end";
+    end.style.left = (TOTAL * PPS) + "px";
+    var elb = document.createElement("span");
+    elb.className = "t";
+    elb.textContent = "20.5s";
+    end.appendChild(elb);
+    el.appendChild(end);
+  }
+  var rulers = document.querySelectorAll(".ruler");
+  for (var i = 0; i < rulers.length; i++) buildRuler(rulers[i]);
+
+  /* ===== 方案 B 的适度交互 =====
+     点击保持块空白：在该位置添加一个快门标记（吸附到 0.1s）
+     点击标记：删除；「重置标记」按钮：恢复初始状态 */
+  function fmt(n) { return n.toFixed(1); }
+
+  function addMarker(hold, rel) {
+    var dur = parseFloat(hold.getAttribute("data-dur"));
+    var start = parseFloat(hold.getAttribute("data-start"));
+    var m = document.createElement("div");
+    m.className = "mk user";
+    m.style.left = (rel / dur * 100) + "%";
+    m.textContent = "◉";
+    m.setAttribute("data-label", "快门 · t=" + fmt(start + rel) + "s（块内 " + fmt(rel) + "s）· 点击删除");
+    hold.appendChild(m);
+  }
+
+  var holds = document.querySelectorAll("#tl-b .hold");
+  var snapshot = []; // 初始状态快照，供重置
+  for (var j = 0; j < holds.length; j++) {
+    (function (hold) {
+      snapshot.push([hold, hold.innerHTML]);
+      hold.addEventListener("click", function (e) {
+        var mk = e.target.closest ? e.target.closest(".mk") : null;
+        if (mk) { mk.parentNode.removeChild(mk); return; } // 点到标记：删除
+        var r = hold.getBoundingClientRect();
+        var x = Math.min(Math.max(e.clientX - r.left, 0), r.width);
+        var rel = Math.round(x / PPS * 10) / 10; // 像素 → 块内秒，吸附 0.1s
+        addMarker(hold, rel);
+      });
+    })(holds[j]);
+  }
+  document.getElementById("reset-b").addEventListener("click", function () {
+    for (var k = 0; k < snapshot.length; k++) snapshot[k][0].innerHTML = snapshot[k][1];
+  });
+})();
+</script>
+</body>
+</html>

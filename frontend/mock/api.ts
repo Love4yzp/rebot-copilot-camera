@@ -1,23 +1,24 @@
 /**
  * Mock REST handlers for the no-backend preview.
  *
- * Pure functions over `MockState`, mirroring the FastAPI endpoints the UI
- * calls (`backend/api/{estop,routines,control}.py`). Behavior follows the
- * backend where the UI depends on it: 201 on create, 204 on delete, 400 on an
- * empty-routine play, 409 on motion commands while the estop is latched,
- * re-engaging a latched estop reports `changed: false`. Exact pydantic
- * validation errors are not reproduced — the UI only renders their message
- * strings.
+ * Pure functions over `MockState`. The routes here are the v2 backend's
+ * contract — the React UI only ever talks to these shapes, and the FastAPI
+ * side will implement the same surface. Behavior follows the conventions the
+ * UI depends on: 201 on create, 204 on delete, 400 on an empty-sequence
+ * execute, 409 on motion commands while the estop is latched or another run
+ * is in flight, re-engaging a latched estop reports `changed: false`.
  */
 
+import { sequenceDuration, normalize, newId } from "../src/timeline/model";
+import type { Block, HoldBlock } from "../src/types";
 import type {
-  MockAction,
   MockEstop,
-  MockRoutine,
+  MockPose,
+  MockSequence,
   MockState,
-  MockWaypoint,
+  MockTemplate,
 } from "./state";
-import { JOINTS, newId, toSummary, touch } from "./state";
+import { JOINTS } from "./state";
 
 export interface MockResponse {
   status: number;
@@ -39,6 +40,19 @@ function badRequest(detail: string): MockResponse {
 
 function conflict(detail: string): MockResponse {
   return json(409, { detail });
+}
+
+/** 409 the way the motion gate phrases it: structured, with the latch's story. */
+function estopConflict(state: MockState): MockResponse {
+  return json(409, {
+    detail: {
+      error: "estop_latched",
+      message: "Emergency stop is engaged; clear it before commanding motion.",
+      reason: state.estop.reason,
+      source: state.estop.source,
+      engaged_at: state.estop.engaged_at,
+    },
+  });
 }
 
 /** `{mode, playing, teaching, rate_hz, playback}` — the PlaybackState shape. */
@@ -63,12 +77,40 @@ function estopStatus(estop: MockEstop, changed?: boolean): Record<string, unknow
   };
 }
 
-function findRoutine(state: MockState, rid: string): MockRoutine | undefined {
-  return state.routines.find((r) => r.id === rid);
+function findPose(state: MockState, id: string): MockPose | undefined {
+  return state.poses.find((p) => p.id === id);
 }
 
-function findWaypoint(routine: MockRoutine, index: number): MockWaypoint | undefined {
-  return routine.waypoints[index];
+function findSequence(state: MockState, id: string): MockSequence | undefined {
+  return state.sequences.find((s) => s.id === id);
+}
+
+function findTemplate(state: MockState, id: string): MockTemplate | undefined {
+  return state.templates.find((t) => t.id === id);
+}
+
+function holdsOf(blocks: Block[]): HoldBlock[] {
+  return blocks.filter((b): b is HoldBlock => b.type === "hold");
+}
+
+function toSummary(sequence: MockSequence): Record<string, unknown> {
+  return {
+    id: sequence.id,
+    name: sequence.name,
+    updated_at: sequence.updated_at,
+    station_count: holdsOf(sequence.blocks).length,
+    duration_s: sequenceDuration(sequence.blocks),
+  };
+}
+
+/** A live run holds a structural claim on its sequence — see TIMELINE rule 5. */
+function isExecuting(state: MockState, sequenceId: string): boolean {
+  return (
+    state.mode === "playback" &&
+    state.playback !== null &&
+    !state.playback.finished &&
+    state.playback.sequence_id === sequenceId
+  );
 }
 
 /** URL-decode a path segment (ids are hex, but be safe). */
@@ -134,6 +176,15 @@ export function handleApi(
     state.estop.engaged_at = now;
     state.estop.freeze_pose = { ...state.positions };
     state.mode = "estop";
+    // The real control loop calls executor.abort() the moment it sees the
+    // latch: a frozen run is over, not paused. Abort at engage — not at
+    // clear — so the UI stops offering "继续" for a wait that can never
+    // resume while the arm is pinned.
+    if (state.playback && !state.playback.finished) {
+      state.playback.phase = "aborted";
+      state.playback.finished = true;
+      state.playback.error = "执行中被急停中止";
+    }
     return json(200, estopStatus(state.estop, true));
   }
   if (pathname === "/api/estop/clear" && method === "POST") {
@@ -146,6 +197,9 @@ export function handleApi(
     state.estop.engaged_at = null;
     state.estop.freeze_pose = null;
     if (state.mode === "estop") state.mode = "idle";
+    // The run was already aborted at engage (see above) — nothing to resume
+    // here; clearing only re-arms the machine to idle.
+    state.goto = null;
     return json(200, estopStatus(state.estop, true));
   }
 
@@ -154,222 +208,301 @@ export function handleApi(
     return json(200, playbackState(state));
   }
 
-  // ── routines ──────────────────────────────────────────────────────────────
-  if (pathname === "/api/routines" && method === "GET") {
-    return json(200, state.routines.map(toSummary));
+  // ── poses ─────────────────────────────────────────────────────────────────
+  if (pathname === "/api/poses" && method === "GET") {
+    return json(200, state.poses);
   }
-  if (pathname === "/api/routines" && method === "POST") {
+  if (pathname === "/api/poses" && method === "POST") {
     const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
     if (!name) return badRequest("name must be at least 1 character");
-    const routine: MockRoutine = {
-      schema_version: 1,
+    if (typeof reqBody.joints !== "object" || reqBody.joints === null) {
+      return badRequest("a pose needs joint angles");
+    }
+    const pose: MockPose = {
+      id: newId(),
+      name,
+      joints: reqBody.joints as Record<string, number>,
+      created_at: now,
+      updated_at: now,
+    };
+    state.poses.push(pose);
+    return json(201, pose);
+  }
+  if (pathname === "/api/poses/capture" && method === "POST") {
+    const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
+    if (!name) return badRequest("name must be at least 1 character");
+    const pose: MockPose = {
+      id: newId(),
+      name,
+      joints: { ...state.positions },
+      created_at: now,
+      updated_at: now,
+    };
+    state.poses.push(pose);
+    return json(201, pose);
+  }
+
+  const poseMatch = /^\/api\/poses\/([^/]+)$/.exec(pathname);
+  if (poseMatch) {
+    const pose = findPose(state, decodeSegment(poseMatch[1]));
+    if (!pose) return notFound(`no pose '${decodeSegment(poseMatch[1])}'`);
+    if (method === "PATCH") {
+      if (reqBody.name !== undefined) {
+        const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
+        if (!name) return badRequest("name must be at least 1 character");
+        pose.name = name;
+      }
+      if (reqBody.joints !== undefined) {
+        if (typeof reqBody.joints !== "object" || reqBody.joints === null) {
+          return badRequest("joints must be an object");
+        }
+        pose.joints = reqBody.joints as Record<string, number>;
+      }
+      pose.updated_at = now;
+      return json(200, pose);
+    }
+    if (method === "DELETE") {
+      // Directly executes: telling the operator what this pose feeds first is
+      // the UI's job (it asked GET links before offering the button).
+      state.poses = state.poses.filter((p) => p.id !== pose.id);
+      return { status: 204 };
+    }
+  }
+
+  const poseLinksMatch = /^\/api\/poses\/([^/]+)\/links$/.exec(pathname);
+  if (poseLinksMatch && method === "GET") {
+    const pose = findPose(state, decodeSegment(poseLinksMatch[1]));
+    if (!pose) return notFound(`no pose '${decodeSegment(poseLinksMatch[1])}'`);
+    const links = state.sequences
+      .map((sequence) => ({
+        sequence_id: sequence.id,
+        sequence_name: sequence.name,
+        block_count: holdsOf(sequence.blocks).filter((h) => h.pose_id === pose.id).length,
+      }))
+      .filter((link) => link.block_count > 0);
+    return json(200, { pose_id: pose.id, count: links.length, links });
+  }
+
+  const poseGotoMatch = /^\/api\/poses\/([^/]+)\/goto$/.exec(pathname);
+  if (poseGotoMatch && method === "POST") {
+    // Check order mirrors the backend: the motion gate (estop) runs as a
+    // dependency before the endpoint body ever loads the pose.
+    if (state.estop.latched) return estopConflict(state);
+    const pose = findPose(state, decodeSegment(poseGotoMatch[1]));
+    if (!pose) return notFound(`no pose '${decodeSegment(poseGotoMatch[1])}'`);
+    if (state.mode === "playback") return conflict("a sequence is already executing");
+    if (state.mode === "teach") return conflict("cannot move while teaching");
+    state.mode = "playback";
+    state.goto = {
+      pose_id: pose.id,
+      name: pose.name,
+      from: { ...state.positions },
+      to: { ...pose.joints },
+      duration_s: 2,
+    };
+    state.playback = {
+      sequence_id: pose.id,
+      sequence_name: `位姿 · ${pose.name}`,
+      block_index: 0,
+      block_total: 1,
+      phase: "transition",
+      t_in_block: 0,
+      error: null,
+      finished: false,
+    };
+    return json(200, playbackState(state));
+  }
+
+  // ── sequences ─────────────────────────────────────────────────────────────
+  if (pathname === "/api/sequences" && method === "GET") {
+    return json(200, state.sequences.map(toSummary));
+  }
+  if (pathname === "/api/sequences" && method === "POST") {
+    const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
+    if (!name) return badRequest("name must be at least 1 character");
+    const sequence: MockSequence = {
+      schema_version: 2,
       id: newId(),
       name,
       created_at: now,
       updated_at: now,
-      waypoints: [],
+      blocks: [],
     };
-    state.routines.push(routine);
-    return json(201, routine);
+    state.sequences.push(sequence);
+    return json(201, sequence);
   }
 
-  const ridMatch = /^\/api\/routines\/([^/]+)$/.exec(pathname);
-  if (ridMatch) {
-    const rid = decodeSegment(ridMatch[1]);
-    const routine = findRoutine(state, rid);
-    if (!routine) return notFound(`no routine '${rid}'`);
-
-    if (method === "GET") return json(200, routine);
+  const seqMatch = /^\/api\/sequences\/([^/]+)$/.exec(pathname);
+  if (seqMatch) {
+    const sequence = findSequence(state, decodeSegment(seqMatch[1]));
+    if (!sequence) return notFound(`no sequence '${decodeSegment(seqMatch[1])}'`);
+    if (method === "GET") return json(200, sequence);
     if (method === "PATCH") {
-      const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
-      if (!name) return badRequest("name must be at least 1 character");
-      routine.name = name;
-      touch(routine, now);
-      return json(200, routine);
-    }
-    if (method === "DELETE") return { status: 204 };
-  }
-
-  // ── waypoints ─────────────────────────────────────────────────────────────
-  const captureMatch = /^\/api\/routines\/([^/]+)\/waypoints\/capture$/.exec(pathname);
-  if (captureMatch && method === "POST") {
-    const routine = findRoutine(state, decodeSegment(captureMatch[1]));
-    if (!routine) return notFound(`no routine '${decodeSegment(captureMatch[1])}'`);
-    const waypoint: MockWaypoint = {
-      id: newId(),
-      joints: { ...state.positions },
-      duration_s: typeof reqBody.duration_s === "number" ? reqBody.duration_s : 2.0,
-      settle_ms: typeof reqBody.settle_ms === "number" ? reqBody.settle_ms : 300,
-      actions: Array.isArray(reqBody.actions) ? (reqBody.actions as MockAction[]) : [],
-      note: typeof reqBody.note === "string" ? reqBody.note : "",
-    };
-    const index = typeof reqBody.index === "number" ? reqBody.index : null;
-    if (index === null || index === routine.waypoints.length) {
-      routine.waypoints.push(waypoint);
-    } else if (index >= 0 && index < routine.waypoints.length) {
-      routine.waypoints.splice(index, 0, waypoint);
-    } else {
-      return notFound(`insert index ${index} out of range`);
-    }
-    touch(routine, now);
-    return json(201, routine);
-  }
-
-  const reorderMatch = /^\/api\/routines\/([^/]+)\/waypoints\/reorder$/.exec(pathname);
-  if (reorderMatch && method === "POST") {
-    const routine = findRoutine(state, decodeSegment(reorderMatch[1]));
-    if (!routine) return notFound(`no routine '${decodeSegment(reorderMatch[1])}'`);
-    const order = reqBody.order;
-    const isValid =
-      Array.isArray(order) &&
-      order.length === routine.waypoints.length &&
-      [...order].sort((a, b) => (a as number) - (b as number)).every((v, i) => v === i);
-    if (!isValid) {
-      return badRequest(
-        `order must be a permutation of 0..${routine.waypoints.length - 1}, got ${JSON.stringify(order)}`,
-      );
-    }
-    routine.waypoints = (order as number[]).map((i) => routine.waypoints[i]);
-    touch(routine, now);
-    return json(200, routine);
-  }
-
-  const addMatch = /^\/api\/routines\/([^/]+)\/waypoints$/.exec(pathname);
-  if (addMatch && method === "POST") {
-    const routine = findRoutine(state, decodeSegment(addMatch[1]));
-    if (!routine) return notFound(`no routine '${decodeSegment(addMatch[1])}'`);
-    const joints = reqBody.joints;
-    if (typeof joints !== "object" || joints === null) {
-      return badRequest("a waypoint needs at least one joint angle");
-    }
-    const waypoint: MockWaypoint = {
-      id: newId(),
-      joints: joints as Record<string, number>,
-      duration_s: typeof reqBody.duration_s === "number" ? reqBody.duration_s : 2.0,
-      settle_ms: typeof reqBody.settle_ms === "number" ? reqBody.settle_ms : 300,
-      actions: Array.isArray(reqBody.actions) ? (reqBody.actions as MockAction[]) : [],
-      note: typeof reqBody.note === "string" ? reqBody.note : "",
-    };
-    const index = typeof reqBody.index === "number" ? reqBody.index : null;
-    if (index === null || index === routine.waypoints.length) {
-      routine.waypoints.push(waypoint);
-    } else if (index >= 0 && index < routine.waypoints.length) {
-      routine.waypoints.splice(index, 0, waypoint);
-    } else {
-      return notFound(`insert index ${index} out of range`);
-    }
-    touch(routine, now);
-    return json(201, routine);
-  }
-
-  const waypointMatch = /^\/api\/routines\/([^/]+)\/waypoints\/(\d+)$/.exec(pathname);
-  if (waypointMatch) {
-    const routine = findRoutine(state, decodeSegment(waypointMatch[1]));
-    if (!routine) return notFound(`no routine '${decodeSegment(waypointMatch[1])}'`);
-    const index = Number(waypointMatch[2]);
-    const waypoint = findWaypoint(routine, index);
-    if (!waypoint) {
-      return notFound(`waypoint index ${index} out of range (routine has ${routine.waypoints.length})`);
-    }
-    if (method === "PATCH") {
-      if (reqBody.joints !== undefined) waypoint.joints = reqBody.joints as Record<string, number>;
-      if (reqBody.duration_s !== undefined) waypoint.duration_s = reqBody.duration_s as number;
-      if (reqBody.settle_ms !== undefined) waypoint.settle_ms = reqBody.settle_ms as number;
-      if (reqBody.actions !== undefined) waypoint.actions = reqBody.actions as MockAction[];
-      if (reqBody.note !== undefined) waypoint.note = reqBody.note as string;
-      touch(routine, now);
-      return json(200, routine);
+      if (reqBody.blocks !== undefined) {
+        // The executor is consuming this structure block by block — changing
+        // it under a live run is the lockout the timeline overlay enforces.
+        if (isExecuting(state, sequence.id)) {
+          return conflict("sequence is executing; stop it before editing");
+        }
+        if (!Array.isArray(reqBody.blocks)) return badRequest("blocks must be an array");
+        // Write-side normalization: transitions are automatic and undeletable,
+        // so they are rebuilt here rather than trusted from the client.
+        sequence.blocks = normalize(reqBody.blocks as Block[]);
+      }
+      if (reqBody.name !== undefined) {
+        const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
+        if (!name) return badRequest("name must be at least 1 character");
+        sequence.name = name;
+      }
+      sequence.updated_at = now;
+      return json(200, sequence);
     }
     if (method === "DELETE") {
-      routine.waypoints.splice(index, 1);
-      touch(routine, now);
-      return json(200, routine);
+      if (isExecuting(state, sequence.id)) {
+        return conflict("sequence is executing; stop it before deleting");
+      }
+      state.sequences = state.sequences.filter((s) => s.id !== sequence.id);
+      return { status: 204 };
     }
   }
 
-  // ── playback / goto / teach / shutter ─────────────────────────────────────
-  const playMatch = /^\/api\/routines\/([^/]+)\/play$/.exec(pathname);
-  if (playMatch && method === "POST") {
-    const routine = findRoutine(state, decodeSegment(playMatch[1]));
-    if (!routine) return notFound(`no routine '${decodeSegment(playMatch[1])}'`);
-    if (state.mode === "estop") return conflict("arm unavailable while emergency stop is engaged");
-    if (!routine.waypoints.length) return badRequest("routine has no waypoints");
+  const executeMatch = /^\/api\/sequences\/([^/]+)\/execute$/.exec(pathname);
+  if (executeMatch && method === "POST") {
+    if (state.estop.latched) return estopConflict(state);
+    const sequence = findSequence(state, decodeSegment(executeMatch[1]));
+    if (!sequence) return notFound(`no sequence '${decodeSegment(executeMatch[1])}'`);
+    if (sequence.blocks.length === 0) return badRequest("sequence has no blocks");
+    if (state.mode === "playback") return conflict("a sequence is already executing");
+    if (state.mode === "teach") return conflict("cannot execute while teaching");
     state.mode = "playback";
-    state.gotoWaypoint = null;
+    state.goto = null;
     state.playback = {
-      phase: "moving",
-      waypoint_index: 0,
-      waypoint_total: routine.waypoints.length,
-      action_index: null,
-      action_total: routine.waypoints[0].actions.length,
-      routine_id: routine.id,
-      routine_name: routine.name,
+      sequence_id: sequence.id,
+      sequence_name: sequence.name,
+      block_index: 0,
+      block_total: sequence.blocks.length,
+      phase: sequence.blocks[0].type,
+      t_in_block: 0,
       error: null,
       finished: false,
     };
     return json(200, playbackState(state));
   }
-  const gotoMatch = /^\/api\/routines\/([^/]+)\/waypoints\/(\d+)\/goto$/.exec(pathname);
-  if (gotoMatch && method === "POST") {
-    // Check order mirrors the backend: the motion gate (estop) runs as a
-    // dependency before the endpoint body ever loads the routine.
-    if (state.estop.latched) {
-      return json(409, {
-        detail: {
-          error: "estop_latched",
-          message: "Emergency stop is engaged; clear it before commanding motion.",
-          reason: state.estop.reason,
-          source: state.estop.source,
-          engaged_at: state.estop.engaged_at,
-        },
-      });
-    }
-    const rid = decodeSegment(gotoMatch[1]);
-    const routine = findRoutine(state, rid);
-    if (!routine) return notFound(`no routine '${rid}'`);
-    const index = Number(gotoMatch[2]);
-    const waypoint = findWaypoint(routine, index);
-    if (!waypoint) {
-      return notFound(`waypoint index ${index} out of range (routine has ${routine.waypoints.length})`);
-    }
-    if (state.mode === "playback") return conflict("a routine is already playing");
-    if (state.mode === "teach") return conflict("cannot play while teaching");
-    // A one-waypoint ephemeral run: gotoWaypoint stands in for the ephemeral
-    // routine, the broadcast reports waypoint_total=1, and the sim moves,
-    // settles, runs the actions, then holds (mode back to idle).
-    const label = waypoint.note || `#${index + 1}`;
-    state.mode = "playback";
-    state.gotoWaypoint = waypoint;
-    state.playback = {
-      phase: "moving",
-      waypoint_index: 0,
-      waypoint_total: 1,
-      action_index: null,
-      action_total: waypoint.actions.length,
-      routine_id: routine.id,
-      routine_name: `${routine.name} · ${label}`,
-      error: null,
-      finished: false,
-    };
-    return json(200, playbackState(state));
-  }
-  if (pathname === "/api/playback/stop" && method === "POST") {
-    state.mode = state.mode === "playback" ? "idle" : state.mode;
+
+  // ── execution control ─────────────────────────────────────────────────────
+  if (pathname === "/api/execute/stop" && method === "POST") {
+    if (state.mode === "playback") state.mode = "idle";
     state.playback = null;
-    state.gotoWaypoint = null;
+    state.goto = null;
     return json(200, playbackState(state));
   }
+  if (pathname === "/api/execute/resume" && method === "POST") {
+    const pb = state.playback;
+    if (!pb || pb.finished || pb.phase !== "wait") {
+      return conflict("no wait marker to resume from");
+    }
+    const sequence = findSequence(state, pb.sequence_id);
+    const block = sequence?.blocks[pb.block_index];
+    if (!sequence || !block) return conflict("the executing sequence is gone");
+    pb.phase = block.type;
+    return json(200, playbackState(state));
+  }
+
+  // ── templates ─────────────────────────────────────────────────────────────
+  if (pathname === "/api/templates" && method === "GET") {
+    return json(200, state.templates);
+  }
+  if (pathname === "/api/templates" && method === "POST") {
+    const sequenceId = typeof reqBody.sequence_id === "string" ? reqBody.sequence_id : "";
+    const sequence = findSequence(state, sequenceId);
+    if (!sequence) return notFound(`no sequence '${sequenceId}'`);
+    const holds = holdsOf(sequence.blocks);
+    if (holds.length === 0) return badRequest("a sequence with no stations cannot be a template");
+    // Snapshot the structure with pose slots, not joint angles: a template's
+    // value is the structure, and angles taught here are wrong elsewhere.
+    const slots = new Map<string, number>();
+    holds.forEach((hold, i) => slots.set(hold.id, i));
+    const recipe: Block[] = sequence.blocks.map((block) => {
+      const copy = { ...block, id: newId(), markers: block.markers.map((m) => ({ ...m, id: newId() })) };
+      if (copy.type === "hold") copy.pose_id = `slot:${(slots.get(block.id) ?? 0) + 1}`;
+      return copy;
+    });
+    const template: MockTemplate = {
+      id: newId(),
+      name:
+        typeof reqBody.name === "string" && reqBody.name.trim()
+          ? reqBody.name.trim()
+          : sequence.name,
+      created_at: now,
+      station_count: holds.length,
+      recipe: normalize(recipe),
+    };
+    state.templates.push(template);
+    return json(201, template);
+  }
+
+  const tplMatch = /^\/api\/templates\/([^/]+)$/.exec(pathname);
+  if (tplMatch && method === "DELETE") {
+    const template = findTemplate(state, decodeSegment(tplMatch[1]));
+    if (!template) return notFound(`no template '${decodeSegment(tplMatch[1])}'`);
+    state.templates = state.templates.filter((t) => t.id !== template.id);
+    return { status: 204 };
+  }
+
+  const instantiateMatch = /^\/api\/templates\/([^/]+)\/instantiate$/.exec(pathname);
+  if (instantiateMatch && method === "POST") {
+    const template = findTemplate(state, decodeSegment(instantiateMatch[1]));
+    if (!template) return notFound(`no template '${decodeSegment(instantiateMatch[1])}'`);
+    const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";
+    if (!name) return badRequest("name must be at least 1 character");
+    const poseIds = reqBody.pose_ids;
+    if (!Array.isArray(poseIds) || poseIds.length !== template.station_count) {
+      return badRequest(`pose_ids must list ${template.station_count} poses, one per slot`);
+    }
+    for (const id of poseIds) {
+      if (typeof id !== "string" || !findPose(state, id)) {
+        return badRequest(`unknown pose '${String(id)}'`);
+      }
+    }
+    // Copy and detach: the new sequence and the template owe each other
+    // nothing from here on.
+    const blocks: Block[] = template.recipe.map((block) => {
+      const copy = { ...block, id: newId(), markers: block.markers.map((m) => ({ ...m, id: newId() })) };
+      if (copy.type === "hold") {
+        const slot = /^slot:(\d+)$/.exec(copy.pose_id);
+        const index = slot ? Number(slot[1]) - 1 : -1;
+        copy.pose_id = poseIds[index] as string;
+      }
+      return copy;
+    });
+    const sequence: MockSequence = {
+      schema_version: 2,
+      id: newId(),
+      name,
+      created_at: now,
+      updated_at: now,
+      blocks: normalize(blocks),
+    };
+    state.sequences.push(sequence);
+    return json(201, sequence);
+  }
+
+  // ── teach ─────────────────────────────────────────────────────────────────
   if (pathname === "/api/teach" && method === "POST") {
     if (state.mode === "estop") return conflict("arm unavailable while emergency stop is engaged");
+    if (reqBody.enabled && state.mode === "playback") {
+      return conflict("cannot teach while a sequence is executing");
+    }
     state.mode = reqBody.enabled ? "teach" : "idle";
     return json(200, playbackState(state));
   }
+
   // ── plugins ───────────────────────────────────────────────────────────────
   // Only the shutter, and always healthy: the preview has no serial port and
   // no way to install a package. The shape must match backend/api/plugins.py
-  // and the field list must match ShutterProvider.fields(), because the edit
-  // sheet draws itself from this and a preview that drew a different form
-  // would be previewing an app that does not exist.
+  // and the field list must match ShutterProvider.fields(), because the
+  // marker inspector draws itself from this and a preview that drew a
+  // different form would be previewing an app that does not exist.
   if (pathname === "/api/plugins" && (method === "GET" || method === "POST")) {
     return json(200, [
       {
@@ -418,7 +551,7 @@ export function handleApi(
 
   if (pathname === "/api/shutter/pair" && method === "POST") {
     if (state.mode === "playback") {
-      return json(409, { detail: "cannot pair the camera while a routine is playing" });
+      return json(409, { detail: "cannot pair the camera while a sequence is executing" });
     }
     state.camera = true;
     return json(200, {

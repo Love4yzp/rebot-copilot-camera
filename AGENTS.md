@@ -18,9 +18,16 @@ uvx ruff check backend tests
 cd frontend && npm install && npm run build  # 产物进 backend/static/
 cd frontend && npm run dev                   # 热更新，proxy 到 18790
 
-./manage.sh push                             # build + rsync + 重启（部署）
+./start.sh prod [--sim]                      # 本机：构建前端 + 起后端，同一个源
+./start.sh mock                              # 本机：只起前端，内存 mock，无后端
+./start.sh build                             # 只构建前端（唯一所有者）
+
+./manage.sh push                             # build + rsync + 重启（部署到 r2x）
 ./manage.sh status                           # 跑在真臂还是模拟器上
 ```
+
+**区分两个脚本的是代码在哪台机器上执行**：`start.sh` 全在本机，`manage.sh` 每条命令都经 ssh 落到设备上。
+构建是本机工作，所以归 `start.sh build`，`manage.sh push` 调它 —— 抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是你要发的那个。
 
 运动学、动力学、碰撞检查在开发机上就能跑和测（`pin` 和 `motorbridge` 在 macOS arm64 上可用），**只有 CAN 传输层需要真机**。
 
@@ -109,8 +116,8 @@ backend/
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
     logs.py         journalctl 包装
 
-frontend/src/       Vite + React + TS。围绕锚点卡片板（使用层 / 配置层双模式）
-frontend/mock/      `npm run dev:mock` 的内存后端，形状必须跟着 backend 手工对齐
+frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，是 v2 后端移植蓝本
+frontend/mock/      `npm run dev:mock` 的内存后端。v1 起它的数据形状（poses/sequences/templates/execute）就是 v2 后端的契约
 frontend/public/    自托管字体（离线设备，不能挂 CDN）
 firmware/esp32-shutter/  PlatformIO 工程
 deploy/             systemd unit ×2 + udev 规则
@@ -197,8 +204,9 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
-| [`docs/INTERACTION.md`](./docs/INTERACTION.md) | 交互骨架详细设计：布局 / 流程 / 参数隐藏 / goto 接口 | 动前端界面或加运动端点时 |
+| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴编辑器设计定稿（新一版交互骨架）：块/标记模型 / 预演与执行 / 布局 / 三期路线 | 动前端界面或编排交互时 |
 | [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
+| [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份 B601-RS 主从录制/回放 demo 提炼的**物理事实与策略**（限速、插值、首尾衔接、温度保护）。那份走 LeRobot，**代码一行都不能抄，抄的是数值和「为什么必须这么做」** | 写示教录制、轨迹回放、限速/过热保护时 |
 | [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 历史设计决策记录（不再追加；当前设计模式看 ARCHITECTURE.md） | 想知道某个旧决定为什么这样时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。

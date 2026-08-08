@@ -1,0 +1,96 @@
+import type { Block, ControlState, SeqPlayback } from "../types";
+import { ArmView3D } from "../components/ArmView3D";
+import { blockIndexAt, sequenceDuration } from "../timeline/model";
+import type { PreviewApi } from "../preview/usePreview";
+
+interface Props {
+  state: ControlState | null;
+  playback: SeqPlayback | null;
+  preview: PreviewApi;
+  /** Blocks of the sequence on the bench, for the current-block line. */
+  blocks: Block[];
+  poseName: (id: string) => string;
+  sequenceName: string | null;
+}
+
+function blockLabel(block: Block | undefined, poseName: (id: string) => string): string {
+  if (!block) return "—";
+  return block.type === "hold" ? `保持「${poseName(block.pose_id)}」` : "过渡";
+}
+
+const EASING_LABEL: Record<string, string> = {
+  linear: "线性",
+  ease_in: "缓入",
+  ease_out: "缓出",
+  ease_in_out: "缓入缓出",
+};
+
+/**
+ * The monitor: one full-size 3D view, two mutually exclusive feeds.
+ *
+ * Preview and live are never on screen together — the whole panel flips as
+ * one. During a preview it plays the simulated plan pose (grey, bannered
+ * 预演中·臂未动, and labelled a simulation: the plan path is a joint-space
+ * interpolation, close to but not guaranteed to be the arm's real path);
+ * executing or idle it shows the arm's live pose. "Is this the simulation or
+ * is it real" needs no tag — position is the semantics.
+ */
+export function MonitorPanel({ state, playback, preview, blocks, poseName, sequenceName }: Props) {
+  const latched = state?.estop.latched ?? false;
+  const executing = state?.mode === "playback" && !latched;
+
+  const bannerState = latched ? "estop" : executing ? "exec" : preview.active ? "preview" : "idle";
+
+  let banner: string;
+  let status: string;
+  let sub: string;
+  if (latched) {
+    banner = "已急停";
+    status = "已急停 · 臂钉在原地";
+    sub = "解除急停后原地待命，不会自动继续";
+  } else if (executing) {
+    banner = "执行中 · 臂在动";
+    status = "实况 · 臂在动";
+    if (playback?.phase === "wait") {
+      sub = "等待标记 · 执行暂停，点「继续」";
+    } else if (playback) {
+      const index = Math.min(playback.block_index, blocks.length - 1);
+      const block = blocks[index];
+      const label =
+        block?.type === "transition" ? `过渡 · ${EASING_LABEL[block.easing]}` : blockLabel(block, poseName);
+      sub = `${playback.sequence_name} · 当前：${label}（真实进度）`;
+    } else {
+      sub = "（真实进度）";
+    }
+  } else if (preview.active) {
+    banner = "预演中 · 臂未动";
+    status = "预演回放 · 模拟姿态";
+    if (preview.waiting) {
+      sub = "等待标记 · 预演暂停，点「继续」";
+    } else if (preview.playing) {
+      const block = blocks[blockIndexAt(blocks, preview.t)];
+      const label =
+        block?.type === "transition" ? `过渡 · ${EASING_LABEL[block.easing]}` : blockLabel(block, poseName);
+      sub = `当前：${label}（模拟 · 计划路径，真臂路径以实际执行为准）`;
+    } else {
+      sub = "预演已暂停 · 模拟姿态";
+    }
+  } else {
+    banner = "";
+    status = "实况 · 臂静止";
+    sub = sequenceName
+      ? `${sequenceName} · 预估全长 ${sequenceDuration(blocks).toFixed(1)}s`
+      : "没有序列";
+  }
+
+  return (
+    <section className="monitor" data-state={bannerState} aria-label="监视器">
+      {banner ? <div className="monitor__banner">{banner}</div> : null}
+      <div className="monitor__status">{status}</div>
+      <div className="monitor__sub">{sub}</div>
+      <div className="monitor__view">
+        <ArmView3D positions={state?.positions ?? {}} preview={preview.pose} />
+      </div>
+    </section>
+  );
+}

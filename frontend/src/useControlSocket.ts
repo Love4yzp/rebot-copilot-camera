@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ControlState, PlaybackProgress, SocketMessage } from "./types";
+import type { ControlState, SeqPlayback, SocketMessage } from "./types";
 
 const RECONNECT_MS = 1000;
 
@@ -13,7 +13,7 @@ const RECONNECT_MS = 1000;
  */
 export function useControlSocket() {
   const [state, setState] = useState<ControlState | null>(null);
-  const [playback, setPlayback] = useState<PlaybackProgress | null>(null);
+  const [playback, setPlayback] = useState<SeqPlayback | null>(null);
   const [connected, setConnected] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 

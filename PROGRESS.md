@@ -33,11 +33,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | 软件侧无待办；硬件实测见 [#2](https://github.com/Love4yzp/rebot-copilot-camera/issues/2) / [#3](https://github.com/Love4yzp/rebot-copilot-camera/issues/3) |
-| **状态** | `BLOCKED` — 等真臂 |
-| **Phase** | Phase 1 — 硬件对表（**唯一剩下的**） |
-| **上一个完成的** | `#86` fix: 自检假红（`disconnected` 不再报「没配对」）+ `shutter_count` 改 `action_count` |
-| **备注** | **84/86 完成，326 个测试绿，ruff 干净，前端 TypeScript 编译通过。** 软件侧全部完成（自检假红修了、`action_count` 改名了、`check.py` 决定记了）。只剩 #6/#7 两个硬件实测 —— 没有臂就是做不了，不是没做。**上机第一件事**：`./manage.sh setup && ./manage.sh push`，然后看 `./manage.sh status` 报的是真臂还是模拟器；接着按 `docs/HARDWARE_NOTES.md` 的「待实测」段逐条填。挂相机后重点重调 `FloatLockConfig` 的速度阈值和 `ArmSession` 的 MIT 增益。 |
+| **当前 commit** | `#89` feat: 后端模型迁移 —— 位姿库 + 块/标记序列（**下一个**） |
+| **状态** | `WIP` — 时间轴 v1 前端已落地并全量跑在重写 mock 上；v2 后端按 mock 契约迁移模型。硬件实测 #6/#7 仍 `BLOCKED` 等真臂（与软件新线不冲突） |
+| **Phase** | 时间轴编辑器（三期路线，见 [`docs/TIMELINE.md`](./docs/TIMELINE.md)） |
+| **上一个完成的** | `#88` feat: 时间轴编辑器 v1 —— 纯前端三区界面 + 重写 mock，直接替换卡片板，零后端改动 |
+| **备注** | v1 前端整体替换完成：三区（素材库/监视器/时间轴）+ 预演/执行两个动词 + 过渡块归一化自动生成 + 位姿链接式复用（删前 GET links 弹确认）。新 REST 形状（poses/sequences/templates/execute）即 v2 后端契约，行为经 curl + WS 冒烟全过（等待标记 t=8s 挂起、estop 409、resume、goto、归一化重接）。`model.ts` 被 src 与 mock 共享成功（单一实现）。**已知过渡态**：构建产物发到真后端时序列接口 404，UI 容错不白屏（监视器/急停/日志可用）。注意：工作区里有一份**与本线无关的未提交后端 WIP**（`pair_smart`），它让 `test_motion_gate` 红着 —— 接手 v2 前先决定它的去留。**上机第一件事**（与 #6/#7 相关）：`./manage.sh setup && ./manage.sh push`，按 `docs/HARDWARE_NOTES.md`「待实测」段逐条填。 |
 
 ---
 
@@ -231,6 +231,10 @@
 | 84 | E | fix: 固件第一次真正编译过，三个只有编译/读源码才看得见的 bug | DONE | 固件此前**从未编译过**，`pio run` 一跑就现三件事。① **`platform` 没钉版本**：解析到 55.x（Arduino core 3.3.9），而佳能库 `pair()` 里两处 `BLEDevice::setEncryptionLevel` 在 core 3.x 已搬去 `BLESecurity` —— 编译错误报在库自己的源码里。钉 `espressif32@6.11.0`（2.0.x core 那条线的最后一版），库依赖的 tag 也钉成 `#1.0.2`。② **`isConnected()` 当 `SHOOT` 的闸门是死锁**：`CanonBLERemote::init()` 只从 NVS 读回相机地址、不建立连接，连接由 `trigger()` / `focus()` **惰性**发起 —— 用它挡，等于把唯一能建立连接的那次调用挡在门外，开机后板子**永远**连不上，每帧都回 `ERR camera not connected`。改成挡「有没有配对过」（`getPairedAddressString()`），连接交给 `trigger()`。③ **`reply(id, camera.pair(...) ? "OK" : "ERR", camera.isConnected() ? ... )`**：C++ 不规定函数实参求值顺序，编译器可以在 `pair()` 之前读连接状态，于是报出来的理由是一次扫描之前的事实；拆成局部变量。顺带：成功也带 detail（`#7 OK focus rejected by camera`）改成只在 ERR 带；失败文案 `rejected by camera` 是这条链路**观测不到**的状态（库写完特征值就返回真，不等机身回话），改成 `camera unreachable`；`STATUS` 改三态（`connected` / `disconnected` / `unpaired`，主机侧 `CAMERA_CONNECTED` 比较不变），因为「要人拿着相机走菜单」和「下一帧自己会好」不是一回事；扫描秒数 30 → 20，扫满 30 秒会让成功回执正好落在主机 `PAIR_TIMEOUT_S` 放弃之后。**实测编译通过**：RAM 13.5%、Flash 27.0%。**已知未修**：板子刚重启时 `/api/shutter/test` 会把 `disconnected` 报成红且文案写「没配对相机」—— 修法是自检读到 `disconnected` 时补一条 `FOCUS`（不烧帧但强制建链）再复读，需要 `SimShutter` 也分清「配对过」与「连着」，记在 `firmware/esp32-shutter/README.md` |
 | 85 | L | chore: `start.sh` 本机启动脚本，构建步骤收归一个所有者 | DONE | 新增 `./start.sh {prod\|mock\|build}` —— 本机起服务此前只有裸命令，而「构建前端 + 起后端 + 无硬件加 `--sim`」是每天要打的三件事。**两个脚本的分界不是「做什么」而是代码在哪台机器上执行**：`start.sh` 全在本机，`manage.sh` 每条命令都经 ssh 落到设备上。所以 `manage.sh` 里的 `build_frontend()` 是越界的（本机工作埋在 ssh 编排里），`start.sh` 写出来之后更是**两个调用方零个所有者** —— 下次改构建步骤只会改到一个，而漂移掉的那份照样产出一个能跑的 bundle，只是不是你要发的那个。收成 `start.sh build`，`manage.sh push` 调它。**没有拆 manage.sh**：七个子命令里五个是「ssh 过去一行」（共 31 行），它们是同一个职能的七个动词；按动词拆会把 `HOST`/`REMOTE_DIR`/`step()` 样板抄三遍，再换来三个更长的名字要记。顺带修了自己引入的一个 bug：banner 从 `REBOT_PORT` 打印地址，`--port` 在命令行覆盖时会**打印一个服务并没有绑的端口**，改成从参数里读回（两种写法都认）。**已知未改**：`manage.sh run`（在 r2x 前台跑，会先 `systemctl stop`）与 `start.sh prod`（本机）行为接近而名字不提示机器，改名会打断刻意保护的肌肉记忆，单独决定 |
 | 86 | L+E | fix: 自检假红（`disconnected` 不再报「没配对」）+ `shutter_count` 改 `action_count` | DONE | **自检假红**：#84 的已知未修，现在修了。`SimShutter` 分清 `_paired` 和 `_camera`（三个状态：connected / disconnected / unpaired），`ShutterDriver` 协议加 `camera_status()` 方法。自检端点（`/api/shutter/test`）读到 `disconnected` 时补发一条 `FOCUS`（不让相机 b 烧帧，半按强制建链），然后重读 `STATUS`；`unpaired` 直接判红。`camera_connected()` 在 `Esp32Shutter` 上改为委托 `camera_status()`，`CAMERA_CONNECTED` 常量从 `protocol.py` 迁入 `base.py` 并拆成三态常量。`pair()` 在 Sim 上重置 `_unreachable` 标志。**`action_count` 重命名**：`RoutineSummary.shutter_count` 只数 `ShutterAction` 实例数，插件驱动的相机拍了多少帧都记 0 —— 改名 `action_count` 并计所有动作（`len(w.actions)`），对 API 消费者诚实。**`check.py` 决定**：`backend/actions/check.py` 直接构造 `ShutterProvider` 是正确行为（镜像宿主，注释已有说明），唯一改动的必要是宿主构造模式变化时同步更新，记在此处不必再改。+3 测试（326），firmware README 已知未修段更新为已修。 |
+| 87 | L | docs: 时间轴编辑器设计定稿（`docs/TIMELINE.md` + ARCHITECTURE 概念模型改写 + 删 `docs/INTERACTION.md`） | DONE | **方向转向**：从「锚点卡片板」到「时间轴编辑器」——这台机器剪的是物理时间。概念换代：位姿（链接式复用 + 先告知再动手）/保持块/过渡块（自动生成不可删）/事件标记（块内钉点，脱钩结构上不可能）/序列/模板（结构配方，复印脱钩）。预演与执行两个动词分家（预演全灰阶播计划路径，执行亮琥珀走真实进度）；监视器单视图全尺寸翻转，模拟与实况永不同屏；执行中时间轴锁定；时间尺=计划尺，动作时长=预估。布局=剪辑三区，卡片板化作位姿卡进素材库。插件体系原样继承（动作的家从 waypoint.actions 搬到块内标记）。决策过程可视化稿留在 `docs/` 两个 HTML |
+| 88 | L | feat: 时间轴编辑器 v1 —— 纯前端三区界面 + 重写 mock，直接替换现有前端（删卡片板组件），零后端改动 | DONE | 前端整体替换落地：素材库（位姿卡 + 链接 chip + 模板卡 + 录位姿 TeachBar）/ 监视器（单视图翻转，四态横幅）/ 时间轴（刻度尺 + 骨架块 + 块内标记 + 播放头 + 执行锁定罩）三区 + 走带条两个动词。`timeline/model.ts` 纯逻辑（normalize/easing/poseAtTime/markerSchedule）**被 src 与 mock 共享成功**（vite 插件直接 import，无框架依赖，tsc 单项目通过），是 v2 后端 Python 移植蓝本。「过渡块不可删」落地为 normalize 归一化（同位姿相邻消失、删中间保持块自动重接并继承参数）；「先告知再动手」落地为删位姿前 GET links 弹受影响序列名。预演全灰阶用 `.previewing` 覆盖三个非 stop 状态 token 强制（--stop 例外）。mock 重写为块遍历引擎（hold 计时 / transition 缓动 lerp / wait 挂起等 resume / estop 冻结，clear 后报 aborted）。验收：build 绿；curl 冒烟（poses/sequences/templates/execute/control/estop/goto/links + 归一化 + 实例化 + 互斥 409）全过；WS 冒烟（hold→transition 关节在动→t=8s wait 挂起→resume→done）全过；model 逻辑 19 项断言全过。偏离计划两处：TeachBar 独立成文件（LibraryPanel 已偏大）；新增 `timeline/markers.ts` 小模块放标记图标/文案/默认参数（TimelineView 与 Inspector 共用，避免抄两份）。**注意**：`uv run pytest` 有一条 `test_motion_gate` 红 —— 来自工作区里**先于本任务存在的未提交后端 WIP**（`POST /api/shutter/pair_smart` 未挂运动闸门），与本任务零改动后端无关，留给 v2 接手时决定 |
+| 89 | L | feat: 后端模型迁移 —— 位姿库独立实体，Routine 进化为块+标记序列模型，goto/播放对接，旧 JSON 迁移 | TODO | 内核（臂层/安全/插件/executor 语义）不动；无历史负担可破存储格式 |
+| 90 | L+H | feat: 执行对接 + 模板向导 + 真机验证 | TODO | 含 `docs/HARDWARE_NOTES.md` 待实测项回填 |
 
 ---
 
@@ -250,5 +254,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 24 | **24** | 23 |
-| **合计** | **86** | **84** | **74** |
+| 后续新增 | 28 | **26** | 27 |
+| **合计** | **90** | **86** | **78** |

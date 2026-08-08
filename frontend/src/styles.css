@@ -31,6 +31,11 @@
  * 4. Numbers are tabular and monospaced. Joint angles and counts are read
  *    comparatively, and digits that shift position while streaming are
  *    unreadable.
+ *
+ * 5. PREVIEW IS NOT A MACHINE STATE. While the `previewing` class is on the
+ *    root, the three non-stop channels are pressed back onto the grey ramp
+ *    (see the .previewing block at the bottom). The stop stays red in every
+ *    state, simulated or not.
  */
 
 /* Latin-subset only (U+0000-00FF, ~12 KB each). Self-hosted rather than
@@ -69,10 +74,6 @@
   --motion: #ffa51e;
   --ready: #35d07f;
   --expose: #ffffff;
-
-  /* Config mode is a different physical surface, not a different border. */
-  --bench: #22222a;
-  --bench-line: #2d2d37;
 
   --radius: 5px;
   --rail-h: 4px;
@@ -199,7 +200,8 @@ select:focus {
   border-color: var(--mark-dim);
 }
 
-/* ── layout ──────────────────────────────────────────────────────────────── */
+/* ── layout: editor three zones ──────────────────────────────────────────── */
+/* tally / estop / sequence bar / library+monitor / transport+timeline / log */
 
 .app {
   display: grid;
@@ -209,10 +211,29 @@ select:focus {
 }
 
 /* Grid and flex items default to min-width:auto, so one un-shrinkable child —
- * a nowrap status line, a long collection name — silently widens the whole
- * page and gives the board a horizontal scrollbar. */
+ * a nowrap status line, a long sequence name — silently widens the whole
+ * page. */
 .app > * {
   min-width: 0;
+}
+
+.main {
+  display: flex;
+  gap: 12px;
+  min-height: 0;
+  padding: 10px 16px;
+  background: var(--ink);
+}
+
+.foot {
+  background: var(--body);
+  border-top: 1px solid var(--edge);
+}
+.foot__timeline {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  padding: 0 16px 12px;
 }
 
 /* ── tally rail ──────────────────────────────────────────────────────────── */
@@ -433,466 +454,268 @@ select:focus {
   }
 }
 
-/* ── collection bar ──────────────────────────────────────────────────────── */
+/* ── sequence bar ────────────────────────────────────────────────────────── */
 
-.collection-bar {
-  display: grid;
+.seq-bar {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--edge-soft);
   background: var(--ink);
 }
-
-.collection-chips {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.collection-chip {
+.seq-bar__tag {
+  color: var(--mark-dim);
   flex: none;
-  min-height: 44px;
-  padding: 8px 18px;
-  border-radius: 100px;
-  background: var(--body);
-  white-space: nowrap;
 }
-.collection-chip .count {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--mark-dim);
-  margin-left: 8px;
+.seq-bar select {
+  max-width: 240px;
 }
-.collection-chip.selected {
-  background: var(--mark);
-  border-color: var(--mark);
-  color: var(--ink);
-  font-weight: 600;
-}
-.collection-chip.selected .count {
-  color: rgba(10, 10, 11, 0.65);
-}
-.collection-chip.add {
-  background: transparent;
-  border-style: dashed;
-  color: var(--mark-dim);
-}
-
-.collection-create {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.collection-create button {
-  display: grid;
-  gap: 3px;
-  text-align: left;
-  padding: 10px 14px;
-  min-height: 44px;
-}
-.collection-create .hint {
-  font-size: 12px;
-}
-.collection-create .primary .hint {
-  color: rgba(10, 10, 11, 0.7);
-}
-
-.collection-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.inline-form {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.inline-form input {
-  min-width: 12em;
-}
-
-/* ── board ───────────────────────────────────────────────────────────────── */
-
-.board {
-  position: relative;
-  overflow-y: auto;
-  min-height: 0;
-  padding: 14px;
-  background: var(--ink);
-}
-
-/* Config mode is a different physical surface, not a dashed border. A glance
- * from across the room says "the arm will not move if I touch this". */
-.board.config {
-  background-color: var(--bench);
-  background-image: linear-gradient(var(--bench-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--bench-line) 1px, transparent 1px);
-  background-size: 28px 28px;
-}
-
-.board-banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 9px 12px;
-  border: 1px dashed var(--edge);
-  border-radius: var(--radius);
-  background: rgba(10, 10, 11, 0.45);
+.seq-bar__meta {
   color: var(--mark-dim);
   font-size: 13px;
+  white-space: nowrap;
 }
-.board-banner .engrave {
-  color: var(--mark);
+.seq-bar__spacer {
+  flex: 1;
+}
+.seq-bar .ghost {
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+/* ── library ─────────────────────────────────────────────────────────────── */
+/* Always on screen: dragging a pose onto the ruler is the most frequent
+ * edit gesture there is, so the shelf cannot live in a drawer. */
+
+.lib {
+  width: 300px;
   flex: none;
-}
-.board-banner .spacer {
-  flex: 1;
-}
-
-.anchor-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  /* Cards grow with the screen rather than sitting at a fixed tile size —
-   * they are the primary control, not dashboard widgets — but they stop at
-   * 30vh, because a four-anchor collection on a desktop monitor should not
-   * produce four 900 px slabs. Past that the pane scrolls. */
-  grid-auto-rows: minmax(170px, 30vh);
-  gap: 12px;
-}
-.board.config .anchor-grid {
-  grid-auto-rows: minmax(170px, auto);
-}
-
-.anchor-slot {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   min-height: 0;
-}
-
-/* ── anchor card ─────────────────────────────────────────────────────────── */
-/* One tap is the whole product: the arm goes there, settles, fires, holds.
- * So the card reports on itself — travel progress fills the card you touched
- * rather than a progress bar at the far edge of the screen. */
-
-.anchor-card {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 6px;
-  min-height: 140px;
-  padding: 16px 18px;
-  overflow: hidden;
-  text-align: left;
-  touch-action: manipulation;
   background: var(--body);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
+  overflow: hidden;
 }
-.anchor-card:active {
-  transform: translateY(1px);
-}
-
-/* Travel fill: the card fills with colour as the arm crosses the room. Paced
- * by the waypoint's own commanded duration, passed in as --travel. It stops at
- * 96% rather than 100% — the executor rate-limits the first segment, so the
- * move can outlast its nominal duration, and a bar that sits full while the
- * arm is still moving would be one more thing on screen telling a small lie.
- * Settling and firing hold it at 100%. */
-.anchor-card__fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 100%;
-  background: linear-gradient(90deg, rgba(255, 165, 30, 0.04), rgba(255, 165, 30, 0.24));
-  border-right: 2px solid var(--motion);
-  pointer-events: none;
-}
-.anchor-card--moving .anchor-card__fill {
-  animation: card-travel var(--travel, 2.5s) linear forwards;
-}
-@keyframes card-travel {
-  from {
-    width: 0;
-  }
-  to {
-    width: 96%;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* No creeping bar; the border colour and the word carry the state. */
-  .anchor-card--moving .anchor-card__fill {
-    display: none;
-  }
-}
-
-/* Shutter: light. One white frame, because that is what a shutter is. */
-.anchor-card__flash {
-  position: absolute;
-  inset: 0;
-  background: var(--expose);
-  opacity: 0;
-  pointer-events: none;
-  animation: card-flash 0.42s ease-out;
-}
-@keyframes card-flash {
-  0% {
-    opacity: 0.85;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
-.anchor-card__key {
-  position: absolute;
-  top: 10px;
-  left: 18px;
-  font-family: var(--engrave);
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.1em;
-  color: var(--mark-dim);
-}
-.anchor-card__name {
-  position: relative;
-  font-size: clamp(26px, 2vw + 16px, 40px);
-  font-weight: 600;
-  line-height: 1.1;
-  overflow-wrap: anywhere;
-}
-.anchor-card__meta {
-  position: relative;
+.lib__tabs {
+  flex: none;
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-height: 18px;
+  border-bottom: 1px solid var(--edge);
 }
-.anchor-card__trigger {
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--mark-dim);
-}
-.anchor-card__state {
-  font-family: var(--engrave);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  color: var(--mark-dim);
-}
-
-/* State treatments. Each one is the machine's colour plus a word — never the
- * colour alone, and settling never looks like acting. */
-.anchor-card--pending,
-.anchor-card--moving,
-.anchor-card--settling {
-  border-color: var(--motion);
-}
-.anchor-card--pending .anchor-card__state,
-.anchor-card--moving .anchor-card__state,
-.anchor-card--settling .anchor-card__state {
-  color: var(--motion);
-}
-.anchor-card--settling {
-  animation: card-settle 0.9s ease-in-out infinite;
-}
-@keyframes card-settle {
-  0%,
-  100% {
-    box-shadow: inset 0 0 0 1px rgba(255, 165, 30, 0);
-  }
-  50% {
-    box-shadow: inset 0 0 0 1px rgba(255, 165, 30, 0.65);
-  }
-}
-.anchor-card--acting {
-  border-color: var(--expose);
-}
-.anchor-card--acting .anchor-card__state {
-  color: var(--expose);
-}
-.anchor-card--arrived {
-  border-color: var(--ready);
-  box-shadow: inset 3px 0 0 var(--ready);
-  background: rgba(53, 208, 127, 0.12);
-}
-.anchor-card--arrived .anchor-card__state {
-  color: var(--ready);
-}
-
-/* The card the operator just touched is never the dimmest thing on screen.
- * Only the cards that are genuinely unavailable go quiet. */
-.anchor-card--unavailable {
-  opacity: 0.45;
-}
-
-.board.config .anchor-card {
-  background: rgba(10, 10, 11, 0.55);
-  border-style: dashed;
-}
-
-.anchor-slot__tools {
-  display: flex;
-  gap: 6px;
-}
-.anchor-slot__tools button {
+.lib__tab {
   flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--mark-dim);
+  font-size: 14px;
   min-height: 44px;
-  padding: 6px;
 }
-.anchor-slot__tools .try {
-  flex: 1.6;
-  font-family: var(--engrave);
-  letter-spacing: 0.1em;
-}
-
-/* Recording is the one action config mode exists for, so it is not buried in
- * a toolbar row that would otherwise cost the board a whole strip of height. */
-.record-fab {
-  position: fixed;
-  right: 18px;
-  bottom: 96px;
-  z-index: 25;
-  min-height: 52px;
-  padding: 12px 22px;
-  border-radius: 100px;
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55);
-}
-
-/* ── empty states ────────────────────────────────────────────────────────── */
-/* An empty screen is an invitation, so it carries the action rather than
- * pointing at one somewhere else. */
-
-.empty {
-  display: grid;
-  justify-items: center;
-  gap: 14px;
-  padding: 48px 20px;
-  text-align: center;
-  color: var(--mark-dim);
-  line-height: 1.6;
-}
-.empty h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+.lib__tab.active {
   color: var(--mark);
+  border-bottom-color: var(--mark-dim);
 }
-.empty p {
-  margin: 0;
-  max-width: 34em;
-}
-
-/* ── control bar ─────────────────────────────────────────────────────────── */
-
-.control-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--edge);
-  background: var(--body);
-}
-
-.progress-track {
+.lib__pane {
   flex: 1;
-  min-width: 60px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--ink);
-  overflow: hidden;
-  border: 1px solid var(--edge-soft);
-}
-.progress-fill {
-  height: 100%;
-  background: var(--motion);
-  transition: width 0.25s ease-out;
-}
-.progress-fill.aborted {
-  background: var(--stop);
-}
-.progress-fill.done {
-  background: var(--ready);
-}
-
-.control-status {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--mark-dim);
-  font-size: 13px;
-  white-space: nowrap;
-}
-/* On a phone the bar has room for the controls or the coaching line, not
- * both. The controls win; the line is a first-run teaching aid. */
-@media (max-width: 700px) {
-  .control-bar .control-status:not(.num) {
-    display: none;
-  }
-}
-.control-error {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 30vw;
-  color: var(--stop);
-  font-size: 13px;
-}
-.control-spacer {
-  flex: 1;
-}
-
-/* ── viewer drawer ───────────────────────────────────────────────────────── */
-/* The 3D view used to hold a permanent 380 px column, which squeezed the cards
- * into one cramped file on an iPad in portrait. It is a reference, not a
- * control, so it became a drawer and the cards took the screen back. */
-
-/* The board and the drawer share one positioned row, so the drawer slides over
- * the cards and nothing else. Pinning it to the viewport instead put it on top
- * of the emergency stop bar and the right end of the run controls. */
-.board-row {
-  position: relative;
-  display: grid;
   min-height: 0;
-  min-width: 0;
-}
-
-.viewer-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 5;
-  width: min(430px, 92vw);
+  overflow-y: auto;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  background: var(--body);
-  border-left: 1px solid var(--edge);
-  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.5);
-  transform: translateX(100%);
-  transition: transform 0.2s ease-out;
-}
-.viewer-drawer.open {
-  transform: translateX(0);
-}
-.viewer-drawer__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px 10px 16px;
-  border-bottom: 1px solid var(--edge-soft);
 }
-.viewer-drawer__head .engrave {
+.lib__note {
+  margin: 0;
+  font-size: 12px;
   color: var(--mark-dim);
+  line-height: 1.55;
+  padding: 0 2px 4px;
+}
+.lib__note b {
+  color: var(--mark);
+  font-weight: 600;
 }
 
+.lib__pose {
+  background: var(--body-lift);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: grab;
+}
+.lib__pose-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lib__pose-name {
+  min-height: 0;
+  padding: 2px 4px;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib__pose-top input {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+}
+.lib__chip {
+  margin-left: auto;
+  flex: none;
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--mark-dim);
+  background: var(--ink);
+  border: 1px solid var(--edge-soft);
+  border-radius: 12px;
+  white-space: nowrap;
+}
+.lib__links {
+  display: grid;
+  gap: 4px;
+  padding: 6px 2px 2px;
+}
+.lib__link {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  text-align: left;
+  background: transparent;
+}
+.lib__pose-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.lib__pose-actions button {
+  min-height: 36px;
+  padding: 4px 14px;
+  font-size: 12.5px;
+}
+.lib__record {
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--edge);
+  color: var(--mark-dim);
+  min-height: 44px;
+}
+.lib__record:hover:not(:disabled) {
+  color: var(--mark);
+  border-color: #3a3a44;
+}
+.lib__affected {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+
+.lib__tpl {
+  background: var(--body-lift);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 9px 10px;
+}
+.lib__tpl-name {
+  font-weight: 600;
+  font-size: 14.5px;
+}
+.lib__tpl-desc {
+  font-size: 12px;
+  color: var(--mark-dim);
+  margin: 3px 0 4px;
+}
+
+/* ── monitor ─────────────────────────────────────────────────────────────── */
+/* One full-size view, two mutually exclusive feeds: the simulated plan during
+ * preview, the live arm executing or idle. Never both at once. */
+
+.monitor {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  background: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.monitor__banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  font-size: 12.5px;
+  padding: 4px 16px;
+  border-radius: var(--radius);
+  white-space: nowrap;
+  border: 1px solid var(--edge);
+  color: var(--mark);
+  background: rgba(22, 22, 26, 0.85);
+}
+.monitor[data-state="exec"] .monitor__banner {
+  border-color: var(--motion);
+  color: var(--motion);
+  background: rgba(51, 41, 26, 0.55);
+}
+.monitor[data-state="estop"] .monitor__banner {
+  border-color: var(--stop);
+  color: #ffd9d6;
+  background: rgba(255, 59, 48, 0.15);
+}
+.monitor__status {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 1px;
+  flex: none;
+}
+/* The banner is absolute at top:10px and horizontally centred — exactly
+ * where the status line sits. Reserve its height whenever one is showing,
+ * or the two print on top of each other. */
+.monitor[data-state="exec"],
+.monitor[data-state="estop"],
+.monitor[data-state="preview"] {
+  padding-top: 46px;
+}
+.monitor[data-state="estop"] .monitor__status {
+  color: #ffd9d6;
+}
+.monitor__sub {
+  font-size: 12.5px;
+  color: var(--mark-dim);
+  text-align: center;
+  max-width: 92%;
+  flex: none;
+}
+.monitor__view {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.monitor__view .viewer {
+  flex: 1;
+  aspect-ratio: auto;
+}
+
+/* The URDF viewer's own canvas host (see ArmView3D). */
 .viewer {
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -913,28 +736,373 @@ select:focus {
   color: var(--mark-dim);
   pointer-events: none;
 }
-.viewer .overlay.preview {
-  color: var(--mark);
+
+/* ── transport ───────────────────────────────────────────────────────────── */
+/* Two verbs, never one button: 预演 plays the plan, 执行 moves the arm. */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 6px;
+  background: var(--body);
+}
+.transport__exec {
+  border-color: #3a3a44;
+}
+/* The amber outline exists only while the arm is really running — a lit
+ * button that means nothing is a button that lies. */
+.exec .transport__exec {
+  border-color: var(--motion);
+  color: var(--motion);
+}
+.transport__continue {
+  background: var(--body-lift);
+  border-color: var(--mark-dim);
+}
+.transport__timecode {
+  margin-left: auto;
+  color: var(--mark-dim);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .transport__timecode {
+    font-size: 12px;
+  }
 }
 
-/* ── teach rail ──────────────────────────────────────────────────────────── */
-/* Teaching used to be a centred modal over a full-screen scrim, which covered
- * the arm view and the stop. During teach the operator's eyes are on the arm
- * and their hands are on it — the instruction belongs at the bottom edge, and
- * the stop belongs within reach. */
+/* ── timeline ────────────────────────────────────────────────────────────── */
 
-/* It takes the control bar's row rather than floating over it. Overlaying
- * would leave the buttons underneath visible but unclickable, which is the
- * same trap the old teach modal set with the emergency stop. */
-.teach-rail {
+.tl {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+}
+.tl-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--mark-dim);
+  margin-bottom: 6px;
+}
+.tl-meta .r {
+  margin-left: auto;
+  text-align: right;
+}
+.tl-inner {
+  position: relative;
+}
+.tl-ruler {
+  position: relative;
+  height: 18px;
+  border-bottom: 1px solid var(--edge);
+  touch-action: none;
+  cursor: col-resize;
+}
+.tl-tick {
+  position: absolute;
+  top: 8px;
+  bottom: 0;
+  width: 1px;
+  background: var(--edge);
+}
+.tl-tick span {
+  position: absolute;
+  bottom: 1px;
+  left: 3px;
+  font-size: 9.5px;
+  color: var(--mark-dim);
+}
+.tl-tick.end span {
+  left: auto;
+  right: 0;
+  color: var(--mark);
+}
+.tl-track {
+  position: relative;
+  height: 64px;
+  margin-top: 6px;
+  display: flex;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tl-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mark-dim);
+  font-size: 13px;
+}
+.blk {
+  position: relative;
+  height: 100%;
+  flex: none;
+  border-right: 1px solid var(--edge);
+}
+.blk:first-child {
+  border-top-left-radius: 7px;
+  border-bottom-left-radius: 7px;
+}
+.blk:last-child {
+  border-right: none;
+  border-top-right-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
+.blk.hold {
+  background: var(--body-lift);
+}
+.blk.trans {
+  background: repeating-linear-gradient(45deg, #141419 0 6px, var(--body-lift) 6px 12px);
+}
+/* The current block: grey outline while previewing (a plan), amber only while
+ * the arm is really walking it. */
+.blk.cur {
+  box-shadow: inset 0 0 0 1.5px var(--mark-dim);
+  z-index: 2;
+}
+.exec .blk.cur {
+  box-shadow: inset 0 0 0 1.5px var(--motion);
+}
+.blk.sel {
+  box-shadow: inset 0 0 0 1.5px var(--mark);
+  z-index: 2;
+}
+.blk.missing .blk__name {
+  color: var(--mark-dim);
+  text-decoration: line-through;
+}
+.blk__in {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+.blk__in .blk__dur {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--mark-dim);
+}
+.blk__in.trans {
+  left: 0;
+  right: 0;
+  top: 26px;
+  bottom: auto;
+  justify-content: center;
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: var(--mark-dim);
+}
+.blk__trim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -5px;
+  width: 10px;
+  z-index: 4;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.blk__trim:hover {
+  background: rgba(237, 237, 240, 0.12);
+}
+
+/* Markers: pinned inside the parent block, move and trim with it. */
+.mk {
+  position: absolute;
+  top: 6px;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 1.5px solid var(--mark-dim);
+  color: var(--mark);
+  font-size: 10.5px;
+  line-height: 17px;
+  text-align: center;
+  z-index: 3;
+  cursor: grab;
+  touch-action: none;
+}
+.mk.sel {
+  border-color: var(--mark);
+  box-shadow: 0 0 0 2px rgba(237, 237, 240, 0.25);
+}
+/* One flash on crossing: --expose, which the previewing rule presses back to
+ * grey — white only ever means the shutter really fired. */
+@keyframes mk-flash {
+  0% {
+    background: var(--expose);
+    border-color: var(--expose);
+    color: var(--ink);
+  }
+  100% {
+    background: var(--ink);
+    border-color: var(--mark-dim);
+    color: var(--mark);
+  }
+}
+.mk.fired {
+  animation: mk-flash 0.5s ease-out;
+}
+
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--mark);
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* TIMELINE rule 5: a live run owns the ruler. The overlay eats every gesture
+ * and says why. It stays inside the timeline — never over the stop. */
+.tl-lock {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  z-index: 8;
+  background: rgba(10, 10, 11, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--mark);
+  letter-spacing: 3px;
+}
+
+/* Estimate spans: translucent, dashed, labelled 预估 — the ruler is commanded
+ * time and these are not. */
+.tl-spans {
+  position: relative;
+  height: 16px;
+  margin-top: 4px;
+}
+.tl-span {
+  position: absolute;
+  top: 0;
+  height: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--mark-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  background: rgba(237, 237, 240, 0.07);
+  border-top: 1px dashed rgba(237, 237, 240, 0.35);
+  border-bottom: 1px dashed rgba(237, 237, 240, 0.35);
+}
+
+/* ── inspector ───────────────────────────────────────────────────────────── */
+
+.insp {
+  width: 300px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--body);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.insp__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--edge-soft);
+}
+.insp__title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp__close {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 4px 8px;
+  color: var(--mark-dim);
+}
+.insp__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  align-content: start;
+}
+.insp__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.insp__label {
+  flex: none;
+  min-width: 3.5em;
+  color: var(--mark-dim);
+  font-size: 14px;
+}
+.insp__pose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.insp__link {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mark-dim);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  padding: 1px 8px;
+}
+.insp__path {
+  opacity: 0.6;
+}
+.insp__danger {
+  display: flex;
+  padding-top: 12px;
+  border-top: 1px solid var(--edge-soft);
+}
+
+/* ── teach bar ───────────────────────────────────────────────────────────── */
+/* Teaching replaces the transport rather than covering it: the run controls
+ * mean nothing while a human is pushing the arm around, and leaving them
+ * visible-but-unclickable underneath an overlay is the same trap the old
+ * teach modal set with the emergency stop. */
+
+.teach-bar {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   background: var(--body);
   border-top: 2px solid var(--motion);
 }
-.teach-rail__estop {
+.teach-bar__estop {
   flex: none;
   min-height: 56px;
   min-width: 120px;
@@ -947,65 +1115,69 @@ select:focus {
   color: #fff;
   touch-action: manipulation;
 }
-.teach-rail__body {
+.teach-bar__body {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: 4px;
 }
-.teach-rail__step {
+.teach-bar__step {
   margin: 0;
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1.35;
 }
-.teach-rail__step b {
-  font-weight: 600;
-}
-.teach-rail__sub {
+.teach-bar__readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
   color: var(--mark-dim);
-  font-size: 13px;
 }
-.teach-rail__actions {
+.teach-bar__actions {
   display: flex;
   gap: 8px;
-  flex: none;
-}
-.teach-rail__actions button {
-  min-height: 48px;
-  min-width: 84px;
-}
-.teach-rail__dots {
-  display: flex;
-  gap: 5px;
   align-items: center;
   flex: none;
 }
-.teach-rail__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--edge);
+.teach-bar__actions input {
+  width: 13em;
 }
-.teach-rail__dot.current {
-  background: var(--motion);
-}
-.teach-rail__dot.done {
-  background: var(--ready);
+.teach-bar__actions button {
+  min-height: 44px;
+  white-space: nowrap;
 }
 
-@media (max-width: 780px) {
-  .teach-rail {
+@media (max-width: 900px) {
+  .main {
+    flex-direction: column;
+  }
+  .lib {
+    width: auto;
+    max-height: 42%;
+  }
+  .monitor {
+    min-height: 240px;
+  }
+  .foot__timeline {
+    flex-direction: column;
+  }
+  .insp {
+    width: auto;
+    max-height: 40vh;
+  }
+  .teach-bar {
     flex-wrap: wrap;
   }
-  .teach-rail__body {
+  .teach-bar__body {
     order: -1;
     flex-basis: 100%;
   }
-  .teach-rail__actions {
+  .teach-bar__actions {
     flex: 1;
   }
-  .teach-rail__actions button {
+  .teach-bar__actions input {
     flex: 1;
+    width: auto;
   }
 }
 
@@ -1105,81 +1277,13 @@ select:focus {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.sheet__check {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  color: var(--mark-dim);
-  font-size: 14px;
-}
-.sheet__check input {
-  width: 20px;
-  height: 20px;
-  min-height: 0;
-}
 .sheet__actions {
   display: flex;
+  gap: 8px;
 }
 .sheet__actions .primary {
   flex: 1;
   min-height: 48px;
-}
-.sheet__danger {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 12px;
-  border-top: 1px solid var(--edge-soft);
-}
-
-/* ── action list ─────────────────────────────────────────────────────────── */
-/* An anchor's actions run top to bottom, so the list *is* the order: putting a
- * relay above the shutter is how "do that first" is said. No colour is spent
- * here — the four colours each own a machine state, and a form is not one. */
-.sheet__actions-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.sheet__action {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  background: var(--body-lift);
-}
-/* Unavailable is dimmed, never hidden: the anchor really does carry this
- * action, and a row that vanished would read as lost configuration. */
-.sheet__action.down {
-  border-style: dashed;
-  opacity: 0.75;
-}
-.sheet__action-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.sheet__action-name {
-  font-weight: 600;
-  font-size: 15px;
-}
-.sheet__action-tools {
-  display: flex;
-  gap: 2px;
-}
-.sheet__action-tools .ghost {
-  min-width: 44px;
-  min-height: 44px;
-}
-.sheet__action-reason {
-  margin: 0;
-  font-size: 13px;
-  color: var(--mark-dim);
 }
 .sheet__add {
   display: flex;
@@ -1192,23 +1296,11 @@ select:focus {
   border: 1px dashed var(--edge);
   border-radius: 8px;
   background: none;
-  /* --ink is the deepest chrome *background*, not a text colour; using it here
-   * put near-black text on a near-black panel. --mark is the foreground. */
   color: var(--mark);
   font: inherit;
 }
 .sheet__add-btn:hover {
   border-style: solid;
-}
-/* Appears only while something is down, and sits apart from the add buttons:
- * it is not another thing to put on the anchor, it is how an accessory that
- * was just plugged in gets a second look. No colour of its own — the four
- * colours belong to machine states, and "an accessory is missing" is not one. */
-.sheet__probe {
-  min-height: 44px;
-  margin-left: auto;
-  padding: 0 14px;
-  font-size: 13px;
 }
 
 /* ── toasts ──────────────────────────────────────────────────────────────── */
@@ -1316,4 +1408,16 @@ select:focus {
   color: var(--mark-dim);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── preview greyness ────────────────────────────────────────────────────── */
+/* Preview is not a machine state: while it runs, the whole interface stays on
+ * the grey ramp. Overriding the tokens themselves (not every use site) is the
+ * enforcement — any future component that spends a status colour during
+ * preview gets grey for free. --stop is excepted on purpose: an emergency
+ * stop is red in every state, simulated or not. */
+.previewing {
+  --motion: #6f7681;
+  --ready: #6f7681;
+  --expose: #b9bec7;
 }

@@ -28,10 +28,18 @@ interface Props {
  * bubbles past React's root to window regardless. Stopping it on the panel
  * means: dialog open, Escape closes the dialog; no dialog, Escape stops the
  * arm. The focus trap guarantees the event really does originate inside.
+ *
+ * The onClose callback is stored in a ref so the effect never re-runs. If it
+ * were in the dependency array, any parent that passes an inline arrow would
+ * cause the effect to fire on every render — which moves focus back to the
+ * first focusable element, making it impossible to type into an input inside
+ * the dialog.
  */
 export function Dialog({ label, onClose, children }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const restore = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     restore.current = document.activeElement as HTMLElement | null;
@@ -47,7 +55,7 @@ export function Dialog({ label, onClose, children }: Props) {
       if (event.key === "Escape") {
         event.stopPropagation();
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -71,7 +79,7 @@ export function Dialog({ label, onClose, children }: Props) {
       node.removeEventListener("keydown", onKeyDown);
       restore.current?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
