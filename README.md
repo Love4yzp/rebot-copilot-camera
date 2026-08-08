@@ -82,7 +82,7 @@ curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
 
 1. Camera menu `Wireless communication settings > Bluetooth` → set to **Remote control** (not "Smartphone"). Pairing fails without this.
 2. Select "Pairing" on the camera; it waits.
-3. Press **配对相机** in the UI (config mode), or `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./firmware/esp32-shutter/README.md)).
+3. `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./firmware/esp32-shutter/README.md)).
 4. The pairing is stored on the board and reconnects automatically on power-up.
 
 Verify the whole chain — **this takes a real photo**:
@@ -93,38 +93,35 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 Without `?shoot=true` no frame is burned, but both links are still checked: `connected` in the reply is the USB half, `camera` is the BLE half. **Only the second one answers "will a frame actually be taken"** — a board answering perfectly while nothing is paired is this machine's most expensive kind of silent failure.
 
-### 3 · Teach the anchors
+### 3 · Record poses
 
-"＋ 新建" (New) in the top bar creates a collection — pick "空白集合" (blank) and record your own, or "四方位向导" (four-view wizard) to be walked through front / right 45° / side / top.
-
-Enter config mode ("编辑" in the bottom bar) and press "＋ 录锚点" (record anchor); a teach bar appears at the bottom:
+"＋ 录位姿" at the bottom of the library opens a teach bar:
 
 1. The arm **holds still first** — an arm that goes limp with nobody holding it will sag.
 2. **Give it a push** — it detects the motion and releases into zero-force float; drag it freely.
 3. Drag to the pose, **let go**. About 0.25 s after your hand stops, it locks in place.
-4. Press "保存" (Save). Repeat 2–4.
+4. Name it, press "保存位姿" (Save pose). Repeat 2–4 for the next one.
 
-The teach bar has its own estop button — in this mode your hands are on the arm, not the keyboard.
+Poses live in the library and are **linked** by any number of sequences — edit a pose and every reference changes with it. The daily "go there" verb sits on each pose card: "去这里". The teach bar has its own estop button — in this mode your hands are on the arm, not the keyboard.
 
-### 4 · Configure each anchor
+### 4 · Cut the timeline
 
-Click a card in config mode:
+**Drag a pose card onto the timeline** — that is one station (a hold block). A transition block is generated between two different poses automatically: the arm must physically get there, which is physics, not a setting — transitions cannot be deleted, only retimed and re-eased.
 
-| Field | What it does |
-|---|---|
-| 名称 Name | The label on the card, e.g. "front 45°" |
-| 速度 Speed | slow / standard / fast, mapped to the underlying move duration |
-| 触发 Trigger | On/off. When on: burst count, interval, whether to focus first |
+- Drag a hold's right edge to trim it; drag the whole block to reorder.
+- **Double-click a block** to pin an event marker: shutter, wait, or any installed plugin (e.g. a turntable). Markers are pinned to a time inside their parent block and move/trim with it.
+- Select a block or marker to edit its parameters in the inspector; `Delete` removes the selection.
 
-"试跑" (try run) under a card runs just that anchor — verify a recording without leaving config mode. `←` `→` reorder. Deleted anchors have an 8-second undo.
+"存为模板" (Save as template) snapshots the current sequence as a structural recipe — stations, durations, markers, transition parameters, **no joint angles**. "用它" (Use it) on a template card opens the **station-by-station wizard**: at each station, drag the arm and record a fresh pose, or bind an existing one (optionally "去这里" first to check the framing). The wizard generates a detached ordinary sequence — editing or deleting the template afterwards never touches it.
 
-Failure policy and settle time don't appear in the UI — pinned to sensible defaults. **A few hundred milliseconds separate "arm stopped" from "photo not blurry"**; settle is enforced uniformly by the backend.
+### 5 · Preview and execute
 
-### 5 · Use it
+Two verbs, never one button:
 
-Leave config mode. **Click a card — the arm goes there, settles, fires your configured count, and holds.** One click is one complete action; it's the only daily operation. Keyboard `1`–`9` maps to the card numbers, so a numeric foot pedal works too.
+- **▶ 预演 (Preview)**: the playhead walks the plan ruler and the monitor plays a greyscale simulation (transition easing is visible) — **the arm does not move**. Preview is not a machine state; none of the four status colours light up.
+- **执行（臂会动）(Execute — the arm will move)**: the arm runs for real. The playhead walks true progress, the monitor flips to the live view, amber lights up, and the timeline is locked until the run ends.
 
-"播放全部" (play all) in the bottom bar runs the whole collection in order. Before starting, the **entire sequence** is pre-checked for joint limits and self-collision, including the paths between adjacent points — two individually legal poses can have a straight-line path through the arm's own base. Illegal means refused, **the arm doesn't move at all**.
+A wait marker stops both: playback suspends there until "继续" (Continue). Before executing, the **entire sequence** is pre-checked for joint limits and self-collision, including the paths between adjacent poses — two individually legal poses can have a straight-line path through the arm's own base. Illegal means refused, **the arm doesn't move at all**.
 
 ### Reading the UI
 
@@ -139,7 +136,7 @@ The screen itself is grey. **Any colour means the machine is doing something** �
 | green | in place, arm holding |
 | red pulse | estopped |
 
-Cards carry text as well; colour and words always appear together. **A card that isn't green means the UI doesn't know where the arm is** — that's what an estop freeze or a manual push looks like, and it's not a bug.
+Colour and words always appear together. **No green means the UI doesn't know where the arm is** — that's what an estop freeze or a manual push looks like, and it's not a bug.
 
 ---
 
@@ -221,7 +218,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `manage.sh run` both set `LANG=zh_CN.UTF-8` |
 | Arm suddenly stopped on its own | watchdog-triggered estop | reason is on the estop bar. All three conditions require **sustained** failure — a jitter or a dropped frame won't trigger |
 | 3D blank in the frontend | URDF / meshes not loaded | the drawer says "load failed" / "mesh missing" / "3D failed to initialise" — follow that line. Most common: submodule not pulled, `git submodule update --init`. Self-check: `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` should return 200 — note meshes live at the **package root**, not under `urdf/` |
-| A card never lights "in place" | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — click a card again |
+| Never lights green (in place) | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — "去这里" any pose or run the sequence again |
 
 ---
 

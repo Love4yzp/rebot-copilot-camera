@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { Pose, PoseLinks, SeqTemplate, Sequence } from "../types";
+import type { Pose, PoseLinks, SeqTemplate } from "../types";
 import { sequenceDuration } from "../timeline/model";
 import { Dialog } from "../components/Dialog";
 import { useToast } from "../components/Toasts";
@@ -13,14 +13,17 @@ interface Props {
   executing: boolean;
   latched: boolean;
   teaching: boolean;
+  /** The template wizard owns the footer — no new flows while it runs. */
+  wizardOpen: boolean;
   /** True when the sequence/pose API is not there (real backend before v2). */
   sequencesUnavailable: boolean;
   onGoto: (pose: Pose) => void;
   /** Anything in the library changed — the parent refetches. */
   onChanged: () => void;
-  onSequenceCreated: (sequence: Sequence) => void;
   onSelectSequence: (id: string) => void;
   onTeach: () => void;
+  /** 用它 — the parent opens the station-by-station wizard for this template. */
+  onUseTemplate: (template: SeqTemplate) => void;
 }
 
 /**
@@ -37,12 +40,13 @@ export function LibraryPanel({
   executing,
   latched,
   teaching,
+  wizardOpen,
   sequencesUnavailable,
   onGoto,
   onChanged,
-  onSequenceCreated,
   onSelectSequence,
   onTeach,
+  onUseTemplate,
 }: Props) {
   const { attempt, show } = useToast();
   const [tab, setTab] = useState<"poses" | "templates">("poses");
@@ -52,7 +56,6 @@ export function LibraryPanel({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<{ pose: Pose; links: PoseLinks } | null>(null);
-  const [useTemplate, setUseTemplate] = useState<SeqTemplate | null>(null);
 
   const refreshLinks = useCallback(async () => {
     const entries = await Promise.all(
@@ -227,7 +230,7 @@ export function LibraryPanel({
           <button
             type="button"
             className="lib__record"
-            disabled={latched || executing || teaching}
+            disabled={latched || executing || teaching || wizardOpen}
             onClick={onTeach}
           >
             + 录位姿
@@ -237,7 +240,7 @@ export function LibraryPanel({
         <div className="lib__pane">
           <p className="lib__note">
             模板 = 结构配方（站位数 / 时长 / 标记配方 / 过渡参数），<b>不含关节角</b>。
-            「用它」生成一条脱钩的普通序列 —— 之后改模板、删模板，已生成的序列纹丝不动。
+            「用它」进逐站位向导：每站录一个新位姿或选已有的，生成一条脱钩的普通序列。
           </p>
           {templates.length === 0 ? (
             <p className="hint">还没有模板。在顶栏序列菜单里「存为模板」。</p>
@@ -250,7 +253,11 @@ export function LibraryPanel({
                   <span className="num">{sequenceDuration(template.recipe).toFixed(1)}s</span>
                 </div>
                 <div className="lib__pose-actions">
-                  <button type="button" onClick={() => setUseTemplate(template)}>
+                  <button
+                    type="button"
+                    disabled={executing || latched || teaching || wizardOpen}
+                    onClick={() => onUseTemplate(template)}
+                  >
                     用它
                   </button>
                   <button
@@ -297,80 +304,6 @@ export function LibraryPanel({
           </div>
         </Dialog>
       ) : null}
-
-      {useTemplate ? (
-        <InstantiateDialog
-          template={useTemplate}
-          poses={poses}
-          onClose={() => setUseTemplate(null)}
-          onCreated={(sequence) => {
-            setUseTemplate(null);
-            onSequenceCreated(sequence);
-          }}
-        />
-      ) : null}
     </aside>
-  );
-}
-
-/** Bind every slot of a recipe to a library pose, generating a detached sequence. */
-function InstantiateDialog({
-  template,
-  poses,
-  onClose,
-  onCreated,
-}: {
-  template: SeqTemplate;
-  poses: Pose[];
-  onClose: () => void;
-  onCreated: (sequence: Sequence) => void;
-}) {
-  const { attempt } = useToast();
-  const [name, setName] = useState(`${template.name} · 副本`);
-  const [slots, setSlots] = useState<string[]>(
-    Array.from({ length: template.station_count }, (_, i) => poses[i % Math.max(poses.length, 1)]?.id ?? ""),
-  );
-  const ready = name.trim().length > 0 && slots.every((id) => id !== "");
-
-  const create = async () => {
-    const sequence = await attempt(() =>
-      api.templates.instantiate(template.id, { name: name.trim(), pose_ids: slots }),
-    );
-    if (sequence) onCreated(sequence);
-  };
-
-  return (
-    <Dialog label="用模板" onClose={onClose}>
-      <div className="sheet__head">
-        <h2 className="sheet__title">用它：{template.name}</h2>
-      </div>
-      <p className="hint">逐槽位选一个已有位姿。复印即脱钩：生成的是普通序列，与模板两不相干。</p>
-      <div className="sheet__field">
-        <span className="sheet__label">序列名</span>
-        <input value={name} onChange={(event) => setName(event.target.value)} />
-      </div>
-      {slots.map((poseId, i) => (
-        <div className="sheet__field" key={i}>
-          <span className="sheet__label">站位 {i + 1}</span>
-          <select
-            value={poseId}
-            onChange={(event) =>
-              setSlots((current) => current.map((v, j) => (j === i ? event.target.value : v)))
-            }
-          >
-            {poses.map((pose) => (
-              <option key={pose.id} value={pose.id}>
-                {pose.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      ))}
-      <div className="sheet__actions">
-        <button type="button" className="primary" disabled={!ready} onClick={() => void create()}>
-          生成序列
-        </button>
-      </div>
-    </Dialog>
   );
 }

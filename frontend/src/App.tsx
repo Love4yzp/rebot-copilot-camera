@@ -12,6 +12,7 @@ import { Dialog } from "./components/Dialog";
 import { ToastProvider, useToast } from "./components/Toasts";
 import { LibraryPanel } from "./library/LibraryPanel";
 import { TeachBar } from "./library/TeachBar";
+import { TemplateWizard } from "./library/TemplateWizard";
 import { MonitorPanel } from "./monitor/MonitorPanel";
 import { TimelineView } from "./timeline/TimelineView";
 import type { Selection } from "./timeline/TimelineView";
@@ -37,6 +38,8 @@ function Workspace() {
   const [sequence, setSequence] = useState<Sequence | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
   const [teachOpen, setTeachOpen] = useState(false);
+  /** The template being instantiated through the station wizard, if any. */
+  const [wizardTemplate, setWizardTemplate] = useState<SeqTemplate | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [dialog, setDialog] = useState<"create" | "rename" | "delete" | "template" | null>(null);
   const [nameDraft, setNameDraft] = useState("");
@@ -361,15 +364,18 @@ function Workspace() {
           executing={executing}
           latched={latched}
           teaching={teaching}
+          wizardOpen={wizardTemplate !== null}
           sequencesUnavailable={sequencesUnavailable}
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}
-          onSequenceCreated={(created) => {
-            void refreshLibrary();
-            selectSequence(created.id);
-          }}
           onSelectSequence={selectSequence}
           onTeach={() => setTeachOpen(true)}
+          onUseTemplate={(template) => {
+            // The wizard teaches stations; a greyscale simulation on the
+            // monitor while hands are on the arm is the wrong picture.
+            preview.stop();
+            setWizardTemplate(template);
+          }}
         />
         <MonitorPanel
           state={state}
@@ -382,9 +388,26 @@ function Workspace() {
       </main>
 
       <footer className="foot">
-        {/* Teaching replaces the transport rather than covering it — the run
-          * controls mean nothing while a human is pushing the arm around. */}
-        {teachOpen ? (
+        {/* The wizard and teaching both replace the transport rather than
+          * covering it — the run controls mean nothing while a human is
+          * pushing the arm around. The wizard wins: it contains teaching. */}
+        {wizardTemplate ? (
+          <TemplateWizard
+            template={wizardTemplate}
+            poses={poses}
+            providers={providers}
+            positions={state?.positions ?? {}}
+            latched={latched}
+            executing={executing}
+            onPosesChanged={() => void refreshLibrary()}
+            onClose={() => setWizardTemplate(null)}
+            onCreated={(created) => {
+              setWizardTemplate(null);
+              void refreshLibrary();
+              selectSequence(created.id);
+            }}
+          />
+        ) : teachOpen ? (
           <TeachBar positions={state?.positions ?? {}} onDone={() => setTeachOpen(false)} />
         ) : (
           <TransportBar
