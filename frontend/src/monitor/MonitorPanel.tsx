@@ -11,6 +11,8 @@ interface Props {
   blocks: Block[];
   poseName: (id: string) => string;
   sequenceName: string | null;
+  /** The open sequence is the thing running — only then is a block "current". */
+  runningSequence: boolean;
 }
 
 function blockLabel(block: Block | undefined, poseName: (id: string) => string): string {
@@ -35,11 +37,28 @@ const EASING_LABEL: Record<string, string> = {
  * executing or idle it shows the arm's live pose. "Is this the simulation or
  * is it real" needs no tag — position is the semantics.
  */
-export function MonitorPanel({ state, playback, preview, blocks, poseName, sequenceName }: Props) {
+export function MonitorPanel({
+  state,
+  playback,
+  preview,
+  blocks,
+  poseName,
+  sequenceName,
+  runningSequence,
+}: Props) {
   const latched = state?.estop.latched ?? false;
   const executing = state?.mode === "playback" && !latched;
+  const teaching = state?.mode === "teach";
 
-  const bannerState = latched ? "estop" : executing ? "exec" : preview.active ? "preview" : "idle";
+  const bannerState = latched
+    ? "estop"
+    : executing
+      ? "exec"
+      : teaching
+        ? "teach"
+        : preview.active
+          ? "preview"
+          : "idle";
 
   let banner: string;
   let status: string;
@@ -48,17 +67,25 @@ export function MonitorPanel({ state, playback, preview, blocks, poseName, seque
     banner = "已急停";
     status = "已急停 · 臂钉在原地";
     sub = "解除急停后原地待命，不会自动继续";
+  } else if (teaching) {
+    banner = "示教中 · 臂可推动";
+    status = "实况 · 臂已卸力";
+    sub = "把臂拖到位，命名并保存";
   } else if (executing) {
     banner = "执行中 · 臂在动";
     status = "实况 · 臂在动";
     if (playback?.phase === "wait") {
       sub = "等待标记 · 执行暂停，点「继续」";
-    } else if (playback) {
+    } else if (playback && runningSequence) {
       const index = Math.min(playback.block_index, blocks.length - 1);
       const block = blocks[index];
       const label =
         block?.type === "transition" ? `过渡 · ${EASING_LABEL[block.easing]}` : blockLabel(block, poseName);
       sub = `${playback.sequence_name} · 当前：${label}（真实进度）`;
+    } else if (playback) {
+      // A single-pose goto: the run belongs to a pose, not to this sequence —
+      // there is no block on this ruler to call current.
+      sub = `${playback.sequence_name} · 移动中（真实进度）`;
     } else {
       sub = "（真实进度）";
     }

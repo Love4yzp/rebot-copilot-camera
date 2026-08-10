@@ -254,7 +254,9 @@ def test_shutter_test_pings_without_burning_a_frame(rig):
         "connected": True,
         "camera": True,
         "fired": False,
-        "firmware_version": None,
+        # The sim carries a banner like the real board's VERSION line, so the
+        # endpoint's response keeps the same shape on both.
+        "firmware_version": "sim-1.0.0",
         "error": None,
     }
     assert controller.shutter.pings == 1

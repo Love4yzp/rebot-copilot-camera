@@ -1,0 +1,58 @@
+{
+  "name": "02-sequences-flow",
+  "kind": "rest",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "A",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"a": "id"}
+    },
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "B",
+        "joints": {"joint1": 0.8, "joint2": 0.45, "joint3": 0.5, "joint4": 0.0, "joint5": 0.25, "joint6": 0.2, "gripper": 0.02}
+      },
+      "save": {"b": "id"}
+    },
+    {"method": "POST", "path": "/api/sequences", "body": {"name": "双机位"}, "save": {"seq": "id"}},
+    {"method": "POST", "path": "/api/sequences", "body": {"name": ""}},
+    {"method": "GET", "path": "/api/sequences/${seq}"},
+    {"method": "POST", "path": "/api/sequences/${seq}/execute"},
+    {
+      "method": "PATCH",
+      "path": "/api/sequences/${seq}",
+      "body": {
+        "blocks": [
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3.0,
+            "markers": [
+              {"id": "ee1100000001", "kind": "shutter", "params": {"count": 1, "interval_s": 1, "focus_first": true}, "at": 2.0, "estimate_s": 0.3}
+            ]
+          },
+          {"type": "hold", "id": "aaaa00000002", "pose_id": "${b}", "duration_s": 5.0, "markers": []}
+        ]
+      }
+    },
+    {"method": "GET", "path": "/api/sequences"},
+    {"method": "POST", "path": "/api/sequences/${seq}/execute"},
+    {"method": "POST", "path": "/api/sequences/${seq}/execute"},
+    {
+      "method": "PATCH",
+      "path": "/api/sequences/${seq}",
+      "body": {"blocks": [{"type": "hold", "id": "aaaa00000003", "pose_id": "${a}", "duration_s": 1.0, "markers": []}]}
+    },
+    {"method": "DELETE", "path": "/api/sequences/${seq}"},
+    {"method": "POST", "path": "/api/execute/stop"},
+    {"method": "DELETE", "path": "/api/sequences/${seq}"},
+    {"method": "GET", "path": "/api/sequences/${seq}"}
+  ]
+}

@@ -88,7 +88,10 @@ class FieldSpec:
     max: int | None = None
     #: ``tiers`` choices, in display order.
     values: list[float] | None = None
-    unit: str = ""
+    #: Display suffix for ``tiers``/``stepper`` ("秒", "°"). None, not "":
+    #: on the wire "no unit" is an absent key, which is what the mock — the
+    #: contract — has always sent.
+    unit: str | None = None
     #: Show only when another field is at least this large, e.g.
     #: ``{"key": "count", "min": 2}``. A dict rather than an expression string:
     #: a front end that evaluates arbitrary expressions is the start of a bad

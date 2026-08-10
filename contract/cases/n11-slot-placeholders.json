@@ -1,0 +1,13 @@
+{
+  "name": "n11-slot-placeholders",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "slot:1", "duration_s": 3.0, "markers": [
+      {"id": "ee1100000001", "kind": "shutter", "params": {"count": 1, "interval_s": 1, "focus_first": true}, "at": 2.0, "estimate_s": 0.3}
+    ]},
+    {"type": "transition", "id": "bbbb00000001", "duration_s": 2.0, "easing": "ease_in_out", "markers": []},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "slot:2", "duration_s": 3.0, "markers": [
+      {"id": "ee1100000002", "kind": "shutter", "params": {"count": 1, "interval_s": 1, "focus_first": true}, "at": 2.0, "estimate_s": 0.3}
+    ]}
+  ]
+}

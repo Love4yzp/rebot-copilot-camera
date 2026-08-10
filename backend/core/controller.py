@@ -242,11 +242,17 @@ class Controller:
         final "done" keeps broadcasting (see __init__).
         """
         with self._lock:
-            if self._executor is None or self._executor.is_finished:
+            if self._executor is None:
                 return False
-            self._executor.abort(reason)
+            running = not self._executor.is_finished
+            if running:
+                self._executor.abort(reason)
+            # Dropped even when the run had already finished: an explicit stop
+            # clears the progress (the docstring below, and the mock's
+            # semantics). Only a run that finished *on its own* keeps
+            # broadcasting its final "done".
             self._executor = None
-            return True
+            return running
 
     # ── teaching ─────────────────────────────────────────────────────────────
 

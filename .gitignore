@@ -28,3 +28,8 @@ backend/static/
 
 # typescript incremental build cache
 *.tsbuildinfo
+
+# AI
+.kimi/
+.multica/
+.agent_context/

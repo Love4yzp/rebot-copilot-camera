@@ -1,0 +1,35 @@
+{
+  "name": "08-plugins-shutter",
+  "kind": "rest",
+  "steps": [
+    {"method": "GET", "path": "/api/plugins"},
+    {"method": "POST", "path": "/api/plugins/probe"},
+    {"method": "POST", "path": "/api/shutter/test"},
+    {"method": "POST", "path": "/api/shutter/test?shoot=true"},
+    {"method": "POST", "path": "/api/shutter/pair"},
+    {"method": "POST", "path": "/api/shutter/pair_smart"},
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "A",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"a": "id"}
+    },
+    {"method": "POST", "path": "/api/sequences", "body": {"name": "占用"}, "save": {"seq": "id"}},
+    {
+      "method": "PATCH",
+      "path": "/api/sequences/${seq}",
+      "body": {
+        "blocks": [
+          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []}
+        ]
+      }
+    },
+    {"method": "POST", "path": "/api/sequences/${seq}/execute"},
+    {"method": "POST", "path": "/api/shutter/pair"},
+    {"method": "POST", "path": "/api/shutter/pair_smart"},
+    {"method": "POST", "path": "/api/execute/stop"}
+  ]
+}

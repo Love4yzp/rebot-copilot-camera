@@ -16,9 +16,19 @@ export const DEFAULT_EASING: Easing = "ease_in_out";
 /** Minimum hold duration — shorter than this is a mis-tap, not a station. */
 export const MIN_HOLD_S = 0.5;
 
-/** Pseudo-random 12-hex id, same length as the backend's uuid4().hex[:12]. */
+/**
+ * 12-hex id, same length as the backend's uuid4().hex[:12].
+ *
+ * Real entropy from crypto, not Math.random().toString(16): that drops the
+ * trailing zero hex digits of small values, so slice+padEnd mapped many
+ * distinct values onto the same id — the mock seed data actually hit it on a
+ * normal boot, and two blocks/markers with one id make React drop or duplicate
+ * children silently.
+ */
 export function newId(): string {
-  return Math.random().toString(16).slice(2, 14).padEnd(12, "0");
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export function makeMarker(
@@ -100,18 +110,33 @@ export function normalize(blocks: Block[]): Block[] {
 
   // Pass 2: lay holds down and fill the gaps from memory.
   const out: Block[] = [];
+  const used = new Set<string>();
   for (let i = 0; i < holds.length; i++) {
     out.push(holds[i]);
     if (i >= holds.length - 1) continue;
     const a = holds[i];
     const b = holds[i + 1];
     if (a.pose_id === b.pose_id) continue; // same pose adjacent: no transition
-    const remembered = memory.get(pairKey(a.pose_id, b.pose_id));
-    out.push(
-      remembered
-        ? { ...remembered, markers: remembered.markers.map((m) => ({ ...m })) }
-        : makeTransition(),
-    );
+    const key = pairKey(a.pose_id, b.pose_id);
+    const remembered = memory.get(key);
+    if (!remembered) {
+      out.push(makeTransition());
+    } else if (used.has(key)) {
+      // The same pose pair can occur more than once in one sequence
+      // (A→B→A→B): every rebuilt block needs its own identity. The first
+      // occurrence keeps the remembered ids — a no-op normalize must not
+      // move the inspector's selection — but later ones must be fresh, or
+      // two blocks (and their markers) share a key and React silently drops
+      // or duplicates timeline children.
+      out.push({
+        ...remembered,
+        id: newId(),
+        markers: remembered.markers.map((m) => ({ ...m, id: newId() })),
+      });
+    } else {
+      used.add(key);
+      out.push({ ...remembered, markers: remembered.markers.map((m) => ({ ...m })) });
+    }
   }
   return out;
 }

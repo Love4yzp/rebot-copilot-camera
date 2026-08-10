@@ -1,0 +1,55 @@
+{
+  "name": "04-templates",
+  "kind": "rest",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "A",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"a": "id"}
+    },
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "B",
+        "joints": {"joint1": 0.8, "joint2": 0.45, "joint3": 0.5, "joint4": 0.0, "joint5": 0.25, "joint6": 0.2, "gripper": 0.02}
+      },
+      "save": {"b": "id"}
+    },
+    {"method": "POST", "path": "/api/sequences", "body": {"name": "模板源"}, "save": {"seq": "id"}},
+    {
+      "method": "PATCH",
+      "path": "/api/sequences/${seq}",
+      "body": {
+        "blocks": [
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3.0,
+            "markers": [
+              {"id": "ee1100000001", "kind": "shutter", "params": {"count": 1, "interval_s": 1, "focus_first": true}, "at": 2.0, "estimate_s": 0.3}
+            ]
+          },
+          {"type": "hold", "id": "aaaa00000002", "pose_id": "${b}", "duration_s": 5.0, "markers": []}
+        ]
+      }
+    },
+    {"method": "POST", "path": "/api/sequences", "body": {"name": "空壳"}, "save": {"empty": "id"}},
+    {"method": "POST", "path": "/api/templates", "body": {"sequence_id": "${empty}"}},
+    {"method": "POST", "path": "/api/templates", "body": {"sequence_id": "doesnotexist"}},
+    {"method": "POST", "path": "/api/templates", "body": {"sequence_id": "${seq}", "name": "双方位"}, "save": {"tpl": "id"}},
+    {"method": "POST", "path": "/api/templates/${tpl}/instantiate", "body": {"name": "  ", "pose_ids": ["${a}", "${b}"]}},
+    {"method": "POST", "path": "/api/templates/${tpl}/instantiate", "body": {"name": "实例", "pose_ids": ["${a}"]}},
+    {"method": "POST", "path": "/api/templates/${tpl}/instantiate", "body": {"name": "实例", "pose_ids": ["${a}", "doesnotexist"]}},
+    {"method": "POST", "path": "/api/templates/${tpl}/instantiate", "body": {"name": "实例", "pose_ids": ["${a}", "${b}"]}, "save": {"inst": "id"}},
+    {"method": "GET", "path": "/api/templates"},
+    {"method": "GET", "path": "/api/poses/${a}/links"},
+    {"method": "DELETE", "path": "/api/templates/${tpl}"},
+    {"method": "DELETE", "path": "/api/templates/${tpl}"}
+  ]
+}

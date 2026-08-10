@@ -1,0 +1,16 @@
+{
+  "name": "n10-marker-order-preserved",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 5.0, "markers": [
+      {"id": "ee1100000001", "kind": "shutter", "params": {"count": 1, "interval_s": 1, "focus_first": true}, "at": 4.0, "estimate_s": 0.3},
+      {"id": "ee1100000002", "kind": "wait", "params": {}, "at": 3.0, "estimate_s": 0.0},
+      {"id": "ee1100000003", "kind": "shutter", "params": {"count": 2, "interval_s": 1, "focus_first": false}, "at": 2.0, "estimate_s": 0.3}
+    ]},
+    {"type": "transition", "id": "bbbb00000001", "duration_s": 1.5, "easing": "linear", "markers": [
+      {"id": "ee1100000004", "kind": "record_start", "params": {}, "at": 0.0, "estimate_s": 1.5},
+      {"id": "ee1100000005", "kind": "record_stop", "params": {}, "at": 1.0, "estimate_s": 0.3}
+    ]},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "aaaa0000000b", "duration_s": 3.0, "markers": []}
+  ]
+}

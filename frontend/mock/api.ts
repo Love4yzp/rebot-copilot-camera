@@ -55,7 +55,7 @@ function estopConflict(state: MockState): MockResponse {
   });
 }
 
-/** `{mode, playing, teaching, rate_hz, playback}` — the PlaybackState shape. */
+/** `{mode, playing, teaching, rate_hz, playback, source}` — the PlaybackState shape. */
 function playbackState(state: MockState): Record<string, unknown> {
   return {
     mode: state.mode,
@@ -63,6 +63,9 @@ function playbackState(state: MockState): Record<string, unknown> {
     teaching: state.mode === "teach",
     rate_hz: 20,
     playback: state.playback,
+    // Retained while the run's record is: an aborted run still says who
+    // started it; an explicit stop cleared both.
+    source: state.playback !== null ? state.playback_source : null,
   };
 }
 
@@ -162,10 +165,12 @@ export function handleApi(
       typeof reqBody.reason === "string" && reqBody.reason
         ? reqBody.reason
         : "operator engaged emergency stop";
+    // The backend's EngageRequest defaults to "api"; the UI always passes
+    // "ui" explicitly, so an absent source here means a script, not a finger.
     const source =
       reqBody.source === "ui" || reqBody.source === "api" || reqBody.source === "watchdog"
         ? reqBody.source
-        : "ui";
+        : "api";
     if (state.estop.latched) {
       // Always 200, never 409: an emergency stop that argues is broken.
       return json(200, estopStatus(state.estop, false));
@@ -179,11 +184,12 @@ export function handleApi(
     // The real control loop calls executor.abort() the moment it sees the
     // latch: a frozen run is over, not paused. Abort at engage — not at
     // clear — so the UI stops offering "继续" for a wait that can never
-    // resume while the arm is pinned.
+    // resume while the arm is pinned. The reason string is the control
+    // loop's own, so an operator sees the same words on both sides.
     if (state.playback && !state.playback.finished) {
       state.playback.phase = "aborted";
       state.playback.finished = true;
-      state.playback.error = "执行中被急停中止";
+      state.playback.error = "emergency stop engaged";
     }
     return json(200, estopStatus(state.estop, true));
   }
@@ -300,6 +306,7 @@ export function handleApi(
       to: { ...pose.joints },
       duration_s: 2,
     };
+    state.playback_source = typeof reqBody.source === "string" && reqBody.source ? reqBody.source : "ui";
     state.playback = {
       sequence_id: pose.id,
       sequence_name: `位姿 · ${pose.name}`,
@@ -376,6 +383,7 @@ export function handleApi(
     if (state.mode === "teach") return conflict("cannot execute while teaching");
     state.mode = "playback";
     state.goto = null;
+    state.playback_source = typeof reqBody.source === "string" && reqBody.source ? reqBody.source : "ui";
     state.playback = {
       sequence_id: sequence.id,
       sequence_name: sequence.name,
@@ -393,10 +401,14 @@ export function handleApi(
   if (pathname === "/api/execute/stop" && method === "POST") {
     if (state.mode === "playback") state.mode = "idle";
     state.playback = null;
+    state.playback_source = null;
     state.goto = null;
     return json(200, playbackState(state));
   }
   if (pathname === "/api/execute/resume" && method === "POST") {
+    // The gate runs before the endpoint on the real machine, so it runs first
+    // here too.
+    if (state.estop.latched) return estopConflict(state);
     const pb = state.playback;
     if (!pb || pb.finished || pb.phase !== "wait") {
       return conflict("no wait marker to resume from");
@@ -489,7 +501,8 @@ export function handleApi(
 
   // ── teach ─────────────────────────────────────────────────────────────────
   if (pathname === "/api/teach" && method === "POST") {
-    if (state.mode === "estop") return conflict("arm unavailable while emergency stop is engaged");
+    // Gated on the real machine: the structured 409, not a plain string.
+    if (state.estop.latched) return estopConflict(state);
     if (reqBody.enabled && state.mode === "playback") {
       return conflict("cannot teach while a sequence is executing");
     }
@@ -550,6 +563,23 @@ export function handleApi(
   }
 
   if (pathname === "/api/shutter/pair" && method === "POST") {
+    if (state.mode === "playback") {
+      return json(409, { detail: "cannot pair the camera while a sequence is executing" });
+    }
+    state.camera = true;
+    return json(200, {
+      ok: true,
+      connected: true,
+      camera: true,
+      fired: false,
+      firmware_version: "esp32-mock-1.0.0",
+      error: null,
+    });
+  }
+
+  // Smartphone-mode pairing: same wire shape as /pair, same refusal while a
+  // run is in flight. The preview's imaginary board succeeds either way.
+  if (pathname === "/api/shutter/pair_smart" && method === "POST") {
     if (state.mode === "playback") {
       return json(409, { detail: "cannot pair the camera while a sequence is executing" });
     }

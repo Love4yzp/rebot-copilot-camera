@@ -1,0 +1,10 @@
+{
+  "name": "n08-stacked-collapse-first-wins",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []},
+    {"type": "transition", "id": "bbbb00000001", "duration_s": 1.0, "easing": "linear", "markers": []},
+    {"type": "transition", "id": "bbbb00000002", "duration_s": 5.0, "easing": "ease_in", "markers": []},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "aaaa0000000b", "duration_s": 2.0, "markers": []}
+  ]
+}

@@ -109,8 +109,28 @@ def test_inherited_markers_are_copies_not_aliases():
     marker = EventMarker(kind="fill_light", params={}, at=0.5)
     out = normalize([hold("a"), trans(2.0, markers=[marker]), hold("b"), hold("a")])
     inherited = out[3].markers[0]
-    assert inherited.id == marker.id
     assert inherited is not marker
+    # The way back is the same road — parameters carry over — but it is a
+    # separate instance: two blocks sharing one id would collide in the
+    # frontend's key space and drop or duplicate timeline children.
+    assert inherited.kind == marker.kind
+    assert inherited.params == marker.params
+    assert inherited.id != marker.id
+
+
+def test_repeated_pairs_get_distinct_ids():
+    """A→B→A→B puts the same pose pair on the ruler more than once; every
+    rebuilt transition (and its markers) must carry its own id."""
+    marker = EventMarker(kind="fill_light", params={}, at=0.4)
+    out = normalize([hold("a"), trans(3.0, markers=[marker]), hold("b"), hold("a"), hold("b")])
+    transitions = [b for b in out if isinstance(b, TransitionBlock)]
+    assert len(transitions) == 3
+    ids = {t.id for t in transitions}
+    assert len(ids) == 3, "three transitions of one pose pair, three distinct ids"
+    marker_ids = {m.id for t in transitions for m in t.markers}
+    assert len(marker_ids) == 3, "inherited markers are distinct instances too"
+    # Parameters still inherit from the remembered transition everywhere.
+    assert all(t.duration_s == 3.0 for t in transitions)
 
 
 def test_sequence_duration_is_the_plan_ruler():

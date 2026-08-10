@@ -1,0 +1,49 @@
+{
+  "name": "06-estop-aborts-run",
+  "kind": "rest",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "A",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"a": "id"}
+    },
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "B",
+        "joints": {"joint1": 0.8, "joint2": 0.45, "joint3": 0.5, "joint4": 0.0, "joint5": 0.25, "joint6": 0.2, "gripper": 0.02}
+      },
+      "save": {"b": "id"}
+    },
+    {"method": "POST", "path": "/api/sequences", "body": {"name": "打断"}, "save": {"seq": "id"}},
+    {
+      "method": "PATCH",
+      "path": "/api/sequences/${seq}",
+      "body": {
+        "blocks": [
+          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []},
+          {"type": "hold", "id": "aaaa00000002", "pose_id": "${b}", "duration_s": 5.0, "markers": []}
+        ]
+      }
+    },
+    {"method": "POST", "path": "/api/sequences/${seq}/execute", "body": {"source": "脚本"}},
+    {"method": "GET", "path": "/api/control"},
+    {"method": "POST", "path": "/api/estop", "body": {}, "ignore": ["freeze_pose"]},
+    {"method": "GET", "path": "/api/control"},
+    {"method": "POST", "path": "/api/sequences/${seq}/execute"},
+    {"method": "POST", "path": "/api/poses/${a}/goto"},
+    {"method": "POST", "path": "/api/teach", "body": {"enabled": true}},
+    {"method": "POST", "path": "/api/execute/resume"},
+    {"method": "PATCH", "path": "/api/poses/${a}", "body": {"name": "急停中仍可改"}},
+    {"method": "POST", "path": "/api/poses/capture", "body": {"name": "急停中录"}},
+    {"method": "POST", "path": "/api/estop/clear"},
+    {"method": "GET", "path": "/api/control"},
+    {"method": "POST", "path": "/api/execute/stop"},
+    {"method": "POST", "path": "/api/execute/resume"}
+  ]
+}

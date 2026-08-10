@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    # Includes the golden contract suite (tests/test_contract.py): each case
+    # in contract/cases/ runs on the FastAPI TestClient *and* on the frontend
+    # mock in Node, and the two transcripts are diffed — a drift on either
+    # side fails here.
+    runs-on: ubuntu-latest
+    steps:
+      # The arm layer is a submodule; the URDF in it feeds limit/collision
+      # validation, which the contract cases exercise for real.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      # The contract runner shells out to node + the frontend's esbuild.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: frontend
+      - run: uv sync --frozen
+      - run: uv run pytest
+      - run: uvx ruff check backend tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: frontend
+      # tsc (project build) also type-checks contract/mock-driver.ts.
+      - run: npm run build
+        working-directory: frontend

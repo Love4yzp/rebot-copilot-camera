@@ -51,6 +51,10 @@ class SimShutter:
         self._camera = camera
         self._pair_fails = False
         self._unreachable = False
+        #: The banner the self-test endpoint reports. Esp32Shutter fills this
+        #: from the firmware's VERSION line; the sim has one from the start so
+        #: the endpoint's response has the same shape on both.
+        self.firmware_version: str | None = "sim-1.0.0"
         #: Scripted outcomes, consumed one per shoot(). None means success.
         self._scripted: deque[ShutterError | None] = deque()
         self.shots = 0

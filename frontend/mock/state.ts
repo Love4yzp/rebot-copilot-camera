@@ -76,6 +76,12 @@ export interface MockState {
   mode: MockMode;
   estop: MockEstop;
   playback: MockSeqPlayback | null;
+  /**
+   * Who asked for the running sequence (PlaybackState.source). Retained while
+   * the run's record is retained — an aborted run still reports who started it;
+   * an explicit stop clears both. Mirrors the backend's PlaybackState.
+   */
+  playback_source: string | null;
   poses: MockPose[];
   sequences: MockSequence[];
   templates: MockTemplate[];
@@ -173,9 +179,10 @@ function seedTemplate(now: number): MockTemplate {
   };
 }
 
-export function createState(): MockState {
+export function createState(options: { seed?: boolean } = {}): MockState {
+  const seed = options.seed ?? true;
   const now = Date.now() / 1000;
-  const poses = seedPoses(now);
+  const poses = seed ? seedPoses(now) : [];
   return {
     started_at: now,
     positions: zeroPose(),
@@ -186,19 +193,22 @@ export function createState(): MockState {
     camera: true,
     estop: { latched: false, reason: null, source: null, engaged_at: null, freeze_pose: null },
     playback: null,
+    playback_source: null,
     poses,
-    sequences: [
-      seedDemoSequence(poses, now),
-      {
-        schema_version: 2,
-        id: "mockempty00002",
-        name: "空序列",
-        created_at: now - 1200,
-        updated_at: now - 1200,
-        blocks: [],
-      },
-    ],
-    templates: [seedTemplate(now)],
+    sequences: seed
+      ? [
+          seedDemoSequence(poses, now),
+          {
+            schema_version: 2,
+            id: "mockempty00002",
+            name: "空序列",
+            created_at: now - 1200,
+            updated_at: now - 1200,
+            blocks: [],
+          },
+        ]
+      : [],
+    templates: seed ? [seedTemplate(now)] : [],
     goto: null,
   };
 }

@@ -18,6 +18,7 @@ from .models import (
     Block,
     HoldBlock,
     TransitionBlock,
+    _new_id,
 )
 
 
@@ -51,6 +52,7 @@ def normalize(blocks: list[Block]) -> list[Block]:
 
     # Pass 2: lay holds down and fill the gaps from memory.
     out: list[Block] = []
+    used: set[str] = set()
     for i, hold in enumerate(holds):
         out.append(hold)
         if i >= len(holds) - 1:
@@ -58,16 +60,30 @@ def normalize(blocks: list[Block]) -> list[Block]:
         a, b = holds[i], holds[i + 1]
         if a.pose_id == b.pose_id:
             continue  # same pose adjacent: no transition
-        remembered = memory.get(pair_key(a.pose_id, b.pose_id))
-        # The TS side shallow-copies the block and each marker, keeping ids.
-        out.append(
-            remembered.model_copy(deep=True)
-            if remembered is not None
-            else TransitionBlock(
-                duration_s=DEFAULT_TRANSITION_S,
-                easing=DEFAULT_EASING,  # type: ignore[arg-type]
+        key = pair_key(a.pose_id, b.pose_id)
+        remembered = memory.get(key)
+        if remembered is None:
+            out.append(
+                TransitionBlock(
+                    duration_s=DEFAULT_TRANSITION_S,
+                    easing=DEFAULT_EASING,  # type: ignore[arg-type]
+                )
             )
-        )
+        elif key in used:
+            # The same pose pair can occur more than once in one sequence
+            # (A→B→A→B): every rebuilt block needs its own identity. The first
+            # occurrence keeps the remembered ids — a no-op normalize must not
+            # move the inspector's selection — but later ones must be fresh, or
+            # two blocks (and their markers) share an id and the timeline
+            # silently drops or duplicates children.
+            fresh = remembered.model_copy(deep=True)
+            fresh.id = _new_id()
+            for marker in fresh.markers:
+                marker.id = _new_id()
+            out.append(fresh)
+        else:
+            used.add(key)
+            out.append(remembered.model_copy(deep=True))
     return out
 
 

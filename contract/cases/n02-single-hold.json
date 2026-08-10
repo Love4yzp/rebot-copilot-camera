@@ -1,0 +1,7 @@
+{
+  "name": "n02-single-hold",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []}
+  ]
+}

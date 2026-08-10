@@ -1,0 +1,19 @@
+{
+  "name": "05-estop",
+  "kind": "rest",
+  "steps": [
+    {"method": "GET", "path": "/api/estop"},
+    {"method": "POST", "path": "/api/estop/clear"},
+    {
+      "method": "POST",
+      "path": "/api/estop",
+      "body": {},
+      "ignore": ["freeze_pose"]
+    },
+    {"method": "POST", "path": "/api/estop", "body": {"reason": "又一次", "source": "ui"}},
+    {"method": "GET", "path": "/api/control"},
+    {"method": "POST", "path": "/api/estop/clear"},
+    {"method": "POST", "path": "/api/estop/clear"},
+    {"method": "GET", "path": "/api/control"}
+  ]
+}

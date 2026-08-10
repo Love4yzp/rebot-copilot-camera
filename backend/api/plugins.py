@@ -28,7 +28,7 @@ class ProviderField(BaseModel):
     min: int | None = None
     max: int | None = None
     values: list[float] | None = None
-    unit: str = ""
+    unit: str | None = None
     #: Show only once another field reaches a threshold, e.g.
     #: ``{"key": "count", "min": 2}``.
     when: dict | None = None

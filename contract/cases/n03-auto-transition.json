@@ -1,0 +1,8 @@
+{
+  "name": "n03-auto-transition",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "aaaa0000000b", "duration_s": 5.0, "markers": []}
+  ]
+}

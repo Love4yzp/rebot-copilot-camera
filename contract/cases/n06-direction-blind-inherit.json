@@ -1,0 +1,12 @@
+{
+  "name": "n06-direction-blind-inherit",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []},
+    {"type": "transition", "id": "bbbb00000001", "duration_s": 6.0, "easing": "ease_out", "markers": [
+      {"id": "ee1100000001", "kind": "fill_light", "params": {}, "at": 0.4, "estimate_s": 0.3}
+    ]},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "aaaa0000000b", "duration_s": 5.0, "markers": []},
+    {"type": "hold", "id": "aaaa00000003", "pose_id": "aaaa0000000a", "duration_s": 2.0, "markers": []}
+  ]
+}

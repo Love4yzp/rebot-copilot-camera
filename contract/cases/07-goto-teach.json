@@ -1,0 +1,24 @@
+{
+  "name": "07-goto-teach",
+  "kind": "rest",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "正面",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"a": "id"}
+    },
+    {"method": "POST", "path": "/api/poses/doesnotexist/goto"},
+    {"method": "POST", "path": "/api/poses/${a}/goto"},
+    {"method": "POST", "path": "/api/poses/${a}/goto"},
+    {"method": "POST", "path": "/api/teach", "body": {"enabled": true}},
+    {"method": "POST", "path": "/api/execute/stop"},
+    {"method": "POST", "path": "/api/teach", "body": {"enabled": true}},
+    {"method": "POST", "path": "/api/poses/${a}/goto"},
+    {"method": "POST", "path": "/api/teach", "body": {"enabled": false}},
+    {"method": "GET", "path": "/api/control"}
+  ]
+}

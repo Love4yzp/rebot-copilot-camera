@@ -1,0 +1,8 @@
+{
+  "name": "n04-same-pose-no-transition",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []},
+    {"type": "hold", "id": "aaaa00000002", "pose_id": "aaaa0000000a", "duration_s": 1.0, "markers": []}
+  ]
+}

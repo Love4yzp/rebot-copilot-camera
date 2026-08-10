@@ -23,8 +23,12 @@ interface Props {
   sequence: Sequence | null;
   poses: Pose[];
   playback: SeqPlayback | null;
-  /** Executing for real: the ruler is locked (TIMELINE rule 5). */
-  executing: boolean;
+  /**
+   * The *open sequence* is the one being executed — its ruler is locked and
+   * shows the truth (TIMELINE rule 5). A single-pose goto does not lock it:
+   * the arm transits, but nothing here is being consumed.
+   */
+  locked: boolean;
   latched: boolean;
   preview: PreviewApi;
   selection: Selection;
@@ -63,7 +67,7 @@ export function TimelineView({
   sequence,
   poses,
   playback,
-  executing,
+  locked,
   latched,
   preview,
   selection,
@@ -105,8 +109,8 @@ export function TimelineView({
   const poseById = useMemo(() => new Map(poses.map((p) => [p.id, p])), [poses]);
 
   // The playhead walks the plan ruler in preview, the truth in execution.
-  const playheadT = executing && playback ? playbackAbsTime(blocks, playback) : preview.t;
-  const playheadVisible = !latched && (executing || preview.active) && total > 0;
+  const playheadT = locked && playback ? playbackAbsTime(blocks, playback) : preview.t;
+  const playheadVisible = !latched && (locked || preview.active) && total > 0;
 
   const patch = (next: Block[]) => {
     setDraftDurations({});
@@ -131,7 +135,7 @@ export function TimelineView({
   };
 
   const onDragOver = (event: DragEvent) => {
-    if (executing) return;
+    if (locked) return;
     if (event.dataTransfer.types.includes(POSE_MIME) || event.dataTransfer.types.includes(HOLD_MIME)) {
       event.preventDefault();
       event.dataTransfer.dropEffect = event.dataTransfer.types.includes(POSE_MIME) ? "copy" : "move";
@@ -139,7 +143,7 @@ export function TimelineView({
   };
 
   const onDrop = (event: DragEvent) => {
-    if (executing) return;
+    if (locked) return;
     const poseId = event.dataTransfer.getData(POSE_MIME);
     if (poseId) {
       event.preventDefault();
@@ -187,7 +191,7 @@ export function TimelineView({
   // ── trim a hold's right edge ──────────────────────────────────────────────
 
   const trimStart = (event: ReactPointerEvent, block: Block) => {
-    if (executing || block.type !== "hold") return;
+    if (locked || block.type !== "hold") return;
     event.preventDefault();
     event.stopPropagation();
     noDragRef.current = true;
@@ -226,7 +230,7 @@ export function TimelineView({
   // ── drag a marker inside its block ────────────────────────────────────────
 
   const markerDragStart = (event: ReactPointerEvent, block: Block, marker: EventMarker) => {
-    if (executing) return;
+    if (locked) return;
     event.preventDefault();
     event.stopPropagation();
     noDragRef.current = true;
@@ -265,7 +269,7 @@ export function TimelineView({
   // ── scrub on the ruler ────────────────────────────────────────────────────
 
   const scrubStart = (event: ReactPointerEvent) => {
-    if (executing || total === 0) return;
+    if (locked || total === 0) return;
     event.preventDefault();
     preview.seek(timeAtClientX(event.clientX));
     const onMove = (move: PointerEvent) => preview.seek(timeAtClientX(move.clientX));
@@ -280,7 +284,7 @@ export function TimelineView({
   // ── double-click a block to pin a marker ──────────────────────────────────
 
   const blockDoubleClick = (event: ReactPointerEvent | React.MouseEvent, block: Block) => {
-    if (executing) return;
+    if (locked) return;
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     if (rect.width === 0) return;
     const fraction = clamp((event.clientX - rect.left) / rect.width, 0, 1);
@@ -304,7 +308,7 @@ export function TimelineView({
   // ── Delete key: remove the selected marker / hold block ───────────────────
 
   useEffect(() => {
-    if (executing || !selection) return;
+    if (locked || !selection) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Delete" && event.key !== "Backspace") return;
       const node = event.target as HTMLElement | null;
@@ -403,7 +407,7 @@ export function TimelineView({
                     block.type === "hold" && !pose ? "missing" : "",
                   ].join(" ")}
                   style={{ width }}
-                  draggable={!executing && block.type === "hold"}
+                  draggable={!locked && block.type === "hold"}
                   onDragStart={(event) => {
                     // A trim/marker pointer gesture passing through must not
                     // pick the whole block up.
@@ -455,7 +459,7 @@ export function TimelineView({
                     );
                   })}
 
-                  {block.type === "hold" && !executing ? (
+                  {block.type === "hold" && !locked ? (
                     <span
                       className="blk__trim"
                       title="拖拽修剪时长"
@@ -471,7 +475,7 @@ export function TimelineView({
             <div className="tl-playhead" style={{ left: `${(playheadT / total) * 100}%` }} />
           ) : null}
 
-          {executing ? <div className="tl-lock">执行中 · 已锁定</div> : null}
+          {locked ? <div className="tl-lock">执行中 · 已锁定</div> : null}
         </div>
 
         {spans.length > 0 ? (

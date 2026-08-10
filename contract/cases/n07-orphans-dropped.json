@@ -1,0 +1,9 @@
+{
+  "name": "n07-orphans-dropped",
+  "kind": "normalize",
+  "blocks": [
+    {"type": "transition", "id": "bbbb00000001", "duration_s": 2.0, "easing": "ease_in_out", "markers": []},
+    {"type": "hold", "id": "aaaa00000001", "pose_id": "aaaa0000000a", "duration_s": 3.0, "markers": []},
+    {"type": "transition", "id": "bbbb00000002", "duration_s": 4.0, "easing": "linear", "markers": []}
+  ]
+}

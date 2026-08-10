@@ -1,0 +1,28 @@
+{
+  "name": "01-poses-crud",
+  "kind": "rest",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/poses",
+      "body": {
+        "name": "正面",
+        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+      },
+      "save": {"p": "id"}
+    },
+    {"method": "POST", "path": "/api/poses", "body": {"name": "   ", "joints": {"joint1": 0.0}}},
+    {"method": "POST", "path": "/api/poses", "body": {"name": "缺关节"}},
+    {"method": "GET", "path": "/api/poses"},
+    {"method": "PATCH", "path": "/api/poses/${p}", "body": {"name": "正面特写"}},
+    {
+      "method": "PATCH",
+      "path": "/api/poses/${p}",
+      "body": {"joints": {"joint1": 0.8, "joint2": 0.45, "joint3": 0.5, "joint4": 0.0, "joint5": 0.25, "joint6": 0.2, "gripper": 0.02}}
+    },
+    {"method": "PATCH", "path": "/api/poses/doesnotexist", "body": {"name": "x"}},
+    {"method": "GET", "path": "/api/poses/${p}/links"},
+    {"method": "DELETE", "path": "/api/poses/${p}"},
+    {"method": "DELETE", "path": "/api/poses/${p}"}
+  ]
+}

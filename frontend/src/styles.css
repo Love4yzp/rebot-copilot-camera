@@ -670,7 +670,8 @@ select:focus {
   color: var(--mark);
   background: rgba(22, 22, 26, 0.85);
 }
-.monitor[data-state="exec"] .monitor__banner {
+.monitor[data-state="exec"] .monitor__banner,
+.monitor[data-state="teach"] .monitor__banner {
   border-color: var(--motion);
   color: var(--motion);
   background: rgba(51, 41, 26, 0.55);
@@ -691,7 +692,8 @@ select:focus {
  * or the two print on top of each other. */
 .monitor[data-state="exec"],
 .monitor[data-state="estop"],
-.monitor[data-state="preview"] {
+.monitor[data-state="preview"],
+.monitor[data-state="teach"] {
   padding-top: 46px;
 }
 .monitor[data-state="estop"] .monitor__status {

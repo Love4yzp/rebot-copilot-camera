@@ -60,7 +60,34 @@ function Workspace() {
   const latched = state?.estop.latched ?? false;
   const executing = mode === "playback" && !latched;
   const teaching = mode === "teach";
+  /**
+   * Whether the *open* sequence is the thing running. A single-pose goto also
+   * puts the arm in "playback" with the pose's id as the run's sequence_id, so
+   * it never collides here — the ruler and the lock belong to the sequence the
+   * operator is looking at, not to every transit the arm takes.
+   */
+  const runningSequence = executing && playback?.sequence_id === sequence?.id;
   const total = sequenceDuration(blocks);
+
+  /**
+   * The green 到位 claim is per-run, not a property of the last broadcast
+   * frame: the controller keeps a finished executor and the socket replays its
+   * "done" forever, so a stale done would keep the bar green after the arm was
+   * pushed away in teach, frozen by the estop, or stopped mid-flight of the
+   * next run. Claimed on the done transition, revoked by teach / estop / any
+   * new run (executing covers both sequence runs and gotos).
+   */
+  const [arrived, setArrived] = useState(false);
+  const prevDone = useRef(false);
+  useEffect(() => {
+    const doneNow = !!playback && playback.finished && playback.phase === "done";
+    if (teaching || latched || executing) {
+      setArrived(false);
+    } else if (doneNow && !prevDone.current) {
+      setArrived(true);
+    }
+    prevDone.current = doneNow;
+  }, [playback, teaching, latched, executing]);
 
   // ── data loading ──────────────────────────────────────────────────────────
 
@@ -210,7 +237,7 @@ function Workspace() {
         await api.poses.goto(pose.id);
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) {
-          show("info", executing ? "执行中 — 等当前序列完成" : "臂正忙 — 等当前动作完成");
+          show("info", runningSequence ? "执行中 — 等当前序列完成" : "臂正忙 — 等当前动作完成");
         } else {
           show("error", error instanceof Error ? error.message : String(error));
         }
@@ -288,7 +315,7 @@ function Workspace() {
 
   // ── display state ─────────────────────────────────────────────────────────
 
-  const clockT = executing && playback ? playbackAbsTime(blocks, playback) : preview.active ? preview.t : 0;
+  const clockT = runningSequence && playback ? playbackAbsTime(blocks, playback) : preview.active ? preview.t : 0;
 
   // A shutter marker crossed in the last half-second reads as one white frame.
   const shutterJustFired = useMemo(() => {
@@ -307,7 +334,7 @@ function Workspace() {
         ? shutterJustFired
           ? "acting"
           : "moving"
-        : playback?.finished && playback.phase === "done"
+        : arrived
           ? "arrived"
           : "idle";
 
@@ -384,6 +411,7 @@ function Workspace() {
           blocks={blocks}
           poseName={poseName}
           sequenceName={sequence?.name ?? null}
+          runningSequence={runningSequence}
         />
       </main>
 
@@ -408,7 +436,15 @@ function Workspace() {
             }}
           />
         ) : teachOpen ? (
-          <TeachBar positions={state?.positions ?? {}} onDone={() => setTeachOpen(false)} />
+          <TeachBar
+            positions={state?.positions ?? {}}
+            onDone={() => {
+              setTeachOpen(false);
+              // A freshly captured pose must appear in the library immediately —
+              // "save a pose" ending with an invisible pose is a dead end.
+              void refreshLibrary();
+            }}
+          />
         ) : (
           <TransportBar
             preview={preview}
@@ -428,7 +464,7 @@ function Workspace() {
             sequence={sequence}
             poses={poses}
             playback={playback}
-            executing={executing}
+            locked={runningSequence}
             latched={latched}
             preview={preview}
             selection={selection}
