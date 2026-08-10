@@ -33,11 +33,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `#90` feat: 执行对接 + 模板向导 + 真机验证（**下一个**） |
-| **状态** | `WIP` — v2 后端已落地（366 测试绿、契约终验过）；模板向导已实施（纯前端，零后端改动，mock 与 `--sim` 双环境走查过）。#90 只剩真机验证。硬件实测 #6/#7 仍 `BLOCKED` 等真臂 |
+| **当前 commit** | `7943964` feat: golden 契约测试上线（mock ↔ FastAPI 双跑 + normalize 双语言）+ CI + mock 交互定稿（LOV-4 / LOV-5） |
+| **状态** | `DONE` — 契约测试 19 用例双跑全绿、normalize 双语言等价、CI 进仓库；mock 交互定稿经 44 项自动化全流程走查全绿（示教→编排→预演→执行→急停）。真机验证 #90/#6/#7 仍 `BLOCKED` 等真臂 |
 | **Phase** | 时间轴编辑器（三期路线，见 [`docs/TIMELINE.md`](./docs/TIMELINE.md)） |
 | **上一个完成的** | `#89` feat: 后端模型迁移 —— 位姿库独立实体 + Routine 进化为块/标记序列 + 旧 JSON 迁移 |
-| **备注** | v2 后端按 mock 契约落地：`backend/sequences/`（models/normalize/store/migrate）+ `api/poses|sequences|templates`；executor 重写为块遍历（easing 只管前端预演，真臂走上游 move_to profile）；事件改名 `sequence.*` / `pose.arrived`；v1 routines 在 `main()` 起服前自动迁移（sequences/ 为空且 routines/ 有文件时），原文件不删。前端契约（端点 + WS SeqPlayback 形状）经 curl + WS 冒烟逐条核过。**上机第一件事**（与 #6/#7 相关）：`./manage.sh setup && ./manage.sh push`，按 `docs/HARDWARE_NOTES.md`「待实测」段逐条填。 |
+| **备注** | mock 交互定稿修的四类问题：① `newId()` 对小随机值碰撞（`toString(16)` 丢尾零 + padEnd 撞号，种子数据实测中招）→ 换 crypto 熵源；② `normalize` 同位姿对多间隙复用同一 id（A→B→A→B 两块共 key，React 静默丢/重子元素）→ 首次复用保 id（noop 归一化不动检查器选中）、重复复用发新 id，TS/Python 双端同步修 + 测试；③ 陈旧「到位」绿在示教/急停解除后残留（controller 重播 done）→ 改为 done 转移时声明、被示教/急停/新运行撤销；④ 示教保存后素材库不刷新 → onDone 触发 refresh。另：监视器新增示教态（不再谎报「臂静止」）、单点 goto 不再锁当前序列时间轴（goto 的 run id 是位姿 id，永不与序列碰撞）。验证：playwright 全流程走查（44 项，临时脚本未入库）。v2 后端按 mock 契约落地见 #89 备注；**上机第一件事**（与 #6/#7 相关）：`./manage.sh setup && ./manage.sh push`，按 `docs/HARDWARE_NOTES.md`「待实测」段逐条填。 |
 
 ---
 
