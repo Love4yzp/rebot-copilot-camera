@@ -15,7 +15,9 @@
 
 set -euo pipefail
 
-HOST="${REBOT_HOST_SSH:-recomputer@r2x}"
+# No default for HOST: this is a public repo, and a baked-in SSH alias only
+# resolves on one machine.
+HOST="${REBOT_HOST_SSH:-}"
 REMOTE_DIR="${REBOT_REMOTE_DIR:-/opt/rebot-copilot-camera}"
 PORT="${REBOT_PORT:-18790}"
 SERVICE=rebot-copilot-camera
@@ -139,6 +141,19 @@ cmd_run() {
 }
 
 case "${1:-}" in
+help | -h | --help)
+	usage
+	exit 0
+	;;
+"")
+	usage >&2
+	exit 1
+	;;
+esac
+
+[[ -n "$HOST" ]] || die "REBOT_HOST_SSH is not set — point it at your device (e.g. export REBOT_HOST_SSH=recomputer@192.168.1.10)"
+
+case "$1" in
 setup) cmd_setup ;;
 push) cmd_push ;;
 enable) cmd_enable ;;
@@ -149,7 +164,6 @@ run)
 	shift
 	cmd_run "$@"
 	;;
-help | -h | --help) usage ;;
 *)
 	usage >&2
 	exit 1

@@ -33,11 +33,11 @@
 
 | 字段 | 值 |
 |---|---|
-| **当前 commit** | `7943964` feat: golden 契约测试上线（mock ↔ FastAPI 双跑 + normalize 双语言）+ CI + mock 交互定稿（LOV-4 / LOV-5） |
-| **状态** | `DONE` — 契约测试 19 用例双跑全绿、normalize 双语言等价、CI 进仓库；mock 交互定稿经 44 项自动化全流程走查全绿（示教→编排→预演→执行→急停）。真机验证 #90/#6/#7 仍 `BLOCKED` 等真臂 |
+| **当前 commit** | `035b5fb` fix: strip personal defaults from deployment scripts |
+| **状态** | `DONE` — 部署默认值去个人化：manage.sh 不再内置 `recomputer@r2x`，`REBOT_HOST_SSH` 变为必填；README×2 与 AGENTS.md 同步更新 |
 | **Phase** | 时间轴编辑器（三期路线，见 [`docs/TIMELINE.md`](./docs/TIMELINE.md)） |
-| **上一个完成的** | `#89` feat: 后端模型迁移 —— 位姿库独立实体 + Routine 进化为块/标记序列 + 旧 JSON 迁移 |
-| **备注** | mock 交互定稿修的四类问题：① `newId()` 对小随机值碰撞（`toString(16)` 丢尾零 + padEnd 撞号，种子数据实测中招）→ 换 crypto 熵源；② `normalize` 同位姿对多间隙复用同一 id（A→B→A→B 两块共 key，React 静默丢/重子元素）→ 首次复用保 id（noop 归一化不动检查器选中）、重复复用发新 id，TS/Python 双端同步修 + 测试；③ 陈旧「到位」绿在示教/急停解除后残留（controller 重播 done）→ 改为 done 转移时声明、被示教/急停/新运行撤销；④ 示教保存后素材库不刷新 → onDone 触发 refresh。另：监视器新增示教态（不再谎报「臂静止」）、单点 goto 不再锁当前序列时间轴（goto 的 run id 是位姿 id，永不与序列碰撞）。验证：playwright 全流程走查（44 项，临时脚本未入库）。v2 后端按 mock 契约落地见 #89 备注；**上机第一件事**（与 #6/#7 相关）：`./manage.sh setup && ./manage.sh push`，按 `docs/HARDWARE_NOTES.md`「待实测」段逐条填。 |
+| **上一个完成的** | `#91` feat: golden 契约测试上线 —— mock ↔ FastAPI 双跑 + normalize 双语言 + CI |
+| **备注** |  |
 
 ---
 
@@ -237,6 +237,8 @@
 | 90 | L+H | feat: 执行对接 + 模板向导 + 真机验证 | WIP | **模板向导已落地**：底部向导条取代逐槽位下拉框 InstantiateDialog —— 形状沿用 TeachRail→TeachBar 的定论（示教不配弹窗），teach 按站进出不全程浮动（向导混有选位姿/goto 等非示教动作），Esc 不绑（那是急停的键，向导不是弹层），急停只退录制不关条（进度不丢）。零后端改动，mock + `--sim` 双环境走查。README×2 使用流程段从卡片板改写为时间轴编辑器（#88 欠的文档债，含界面怎么读段）。**发现回归待补**：配对相机 / 测快门 / 重新检测配件的 UI 在 #88 前端替换时掉了（api.ts 里还在，组件无调用），配件区入口待设计。剩：真机验证 + `docs/HARDWARE_NOTES.md` 待实测项回填 |
 | 91 | L | test: golden 契约测试上线 —— mock ↔ FastAPI 双跑 + normalize 双语言 + CI | DONE | 前后端契约从手工对齐升级为机器校验（Multica LOV-4）。`contract/cases/` 19 个用例（8 REST 会话 + 11 normalize）是唯一事实源；`tests/test_contract.py` 在 TestClient 上跑，`frontend/contract/` 在 node 里对 `handleApi`/TS `normalize` 跑，逐字段比对。归一化规则四则：null≈缺字段、12-hex 即 id（编号映射保一致性检查）、≥1e9 即时间戳、volatile 键（rate_hz/firmware_version/uptime_s）；两侧各一份实现是刻意的（两种语言）。**双跑当天就逮到并修掉的漂移**：mock 缺 `PlaybackState.source` 与 `pair_smart` 端点、急停 abort 文案与后端不一致、teach/resume 没走闸门结构化 409、estop 默认 source 是 ui 而后端是 api、`FieldSpec.unit` 默认 `""` 而 mock 从不发这个键（改 `None`）、`stop_playback` 对已结束的 executor 提前 return 与它自己的 docstring 和 mock 语义矛盾（显式 stop 现在总会清 playback）、`SimShutter` 没有 `firmware_version` 导致自检响应形状与真板不同。变异验证过：改 mock 文案或 TS 的 `DEFAULT_TRANSITION_S` 都会红。CI 是新起的（此前仓库没有）：`.github/workflows/ci.yml` 双 job（backend 含 pytest+ruff+契约，frontend 含 tsc build），submodule 检出。+19 测试（386） |
 
+| 92 | L | fix: 部署默认值去个人化 —— `manage.sh` 不再内置 `recomputer@r2x`，`REBOT_HOST_SSH` 变为必填 | DONE | 开源仓库里不应有只在作者机器上能解析的默认值。`recomputer@r2x` 是作者本机 `~/.ssh/config` 的别名，对别人是死主机名。改为：`HOST` 无默认，未设 `REBOT_HOST_SSH` 时所有子命令报清楚的错（help/空参不受影响，dispatch 拆成两段 case 实现）。**保留** `recomputer` 用户名 —— 那是 reComputer 出厂默认用户，属目标硬件的通用值，service unit 加注释说明。README×2 配置表与部署节同步（部署节开头加 `export REBOT_HOST_SSH=...`），AGENTS.md 措辞「部署到 r2x」→「部署到设备」。PROGRESS.md 里历史条目中的 r2x 提及是项目自身的实测上下文，不回改。验证：`bash -n` 过；无 env 时 `status` 报 `error: REBOT_HOST_SSH is not set ...` 退出 1；`help` 正常 |
+
 ---
 
 ## 统计
@@ -255,5 +257,5 @@
 | 9 前端 | 7 | **7** | 7 |
 | 10 部署 | 4 | **4** | 1 |
 | 11 Agent API | 1 | **1** | 1 |
-| 后续新增 | 29 | **28** | 28 |
-| **合计** | **91** | **88** | **79** |
+| 后续新增 | 30 | **29** | 29 |
+| **合计** | **92** | **89** | **80** |

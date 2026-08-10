@@ -163,7 +163,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 
 命令行：`--sim` / `--host` / `--port`。
-`manage.sh` 另认 `REBOT_HOST_SSH`（默认 `recomputer@r2x`）、`REBOT_REMOTE_DIR`。
+`manage.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
 
 **挂上相机后要重调的**（都在代码里，有测试兜着）：
 
@@ -177,7 +177,11 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 ## 部署到 R2x
 
+先把 `manage.sh` 指向你的设备 —— 仓库不含任何内置目标：
+
 ```bash
+export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出厂默认用户
+
 ./manage.sh setup     # 一次性：uv + systemd + CAN + udev + 权限组
 ./manage.sh push      # 改完代码：build 前端 + rsync + 重启
 ./manage.sh enable    # 开机自启

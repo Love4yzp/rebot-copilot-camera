@@ -163,7 +163,7 @@ Besides the human button, a watchdog triggers automatically: the control loop pe
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
 
 CLI: `--sim` / `--host` / `--port`.
-`manage.sh` additionally reads `REBOT_HOST_SSH` (default `recomputer@r2x`) and `REBOT_REMOTE_DIR`.
+`manage.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
 
 **Retune after mounting the camera** (in code, covered by tests):
 
@@ -177,7 +177,11 @@ CLI: `--sim` / `--host` / `--port`.
 
 ## Deploy to the R2x
 
+Point `manage.sh` at your device first — no target is baked in:
+
 ```bash
+export REBOT_HOST_SSH=recomputer@<device-ip>   # `recomputer` is the reComputer factory-default user
+
 ./manage.sh setup     # once: uv + systemd + CAN + udev + groups
 ./manage.sh push      # after changes: build frontend + rsync + restart
 ./manage.sh enable    # start on boot

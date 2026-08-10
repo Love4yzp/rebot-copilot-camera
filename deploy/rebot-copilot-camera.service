@@ -9,6 +9,8 @@ Wants=rebot-can.service
 
 [Service]
 Type=simple
+# `recomputer` is the factory-default user on reComputer devices — adjust
+# User/Group and the ExecStart path if yours differs.
 User=recomputer
 Group=recomputer
 WorkingDirectory=/opt/rebot-copilot-camera
