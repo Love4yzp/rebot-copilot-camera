@@ -58,10 +58,11 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * offer a delete affordance: they are not data the user owns, they are the
  * physics between two stations, rebuilt by `normalize` after every edit.
  *
- * Gestures: drag a pose in from the library (insert a hold), drag holds to
- * reorder, drag a hold's right edge to trim, double-click a block to pin a
- * marker, drag a marker to move it, Delete removes the selected marker or
- * hold block (the pose in the library is untouched either way).
+ * Gestures: drag a pose in from the library (insert a hold) or tap the
+ * library card's 「＋追加」, drag holds to reorder, drag a hold's right edge
+ * to trim, pin a marker via the selected block's 「＋ 动作」 button (or
+ * double-click), drag a marker to move it, Delete removes the selected
+ * marker or hold block (the pose in the library is untouched either way).
  */
 export function TimelineView({
   sequence,
@@ -363,7 +364,7 @@ export function TimelineView({
     <div className="tl">
       <div className="tl-meta">
         <span>
-          时间轴 · 骨架块 {blocks.length} · 块内标记 {markerCount}（过渡块自动生成、不可删）
+          时间轴 · {blocks.length} 块 · {markerCount} 个动作（过渡自动生成、不可删）
         </span>
         <span className="r">
           适配宽度 · 全长 <span className="num">{total.toFixed(1)}s</span>（指令时长，动作时长为预估）
@@ -466,6 +467,39 @@ export function TimelineView({
                       onPointerDown={(event) => trimStart(event, block)}
                     />
                   ) : null}
+
+                  {selected && !locked ? (
+                    <button
+                      type="button"
+                      className="blk__add"
+                      title="在此块添加动作（快门 / 等待…）"
+                      onPointerDown={(event) => {
+                        // The button sits inside a draggable hold: swallow the
+                        // gesture so a press never picks the whole block up.
+                        event.stopPropagation();
+                        noDragRef.current = true;
+                        window.addEventListener(
+                          "pointerup",
+                          () => {
+                            noDragRef.current = false;
+                          },
+                          { once: true },
+                        );
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setAddMarker({
+                          blockId: block.id,
+                          at:
+                            block.type === "hold"
+                              ? snap(clamp(block.duration_s / 2, 0, block.duration_s), 0.1)
+                              : 0.5,
+                        });
+                      }}
+                    >
+                      ＋ 动作
+                    </button>
+                  ) : null}
                 </div>
               );
             })
@@ -494,9 +528,9 @@ export function TimelineView({
       </div>
 
       {addMarker ? (
-        <Dialog label="添加标记" onClose={() => setAddMarker(null)}>
+        <Dialog label="添加动作" onClose={() => setAddMarker(null)}>
           <div className="sheet__head">
-            <h2 className="sheet__title">添加标记</h2>
+            <h2 className="sheet__title">添加动作</h2>
           </div>
           <p className="hint">
             钉在块内{" "}

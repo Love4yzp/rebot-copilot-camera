@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import type { Pose } from "../types";
 import { useToast } from "../components/Toasts";
 
 interface Props {
   /** Live joint angles from the control loop. */
   positions: Record<string, number>;
+  /**
+   * When a sequence is open, the bar offers 「保存为站位」: capture and append
+   * in one tap — the teach → assemble chain never leaves this bar.
+   */
+  onCaptureAppend?: (pose: Pose) => void;
   /** Finished (a pose was saved) or cancelled — the parent closes the bar. */
   onDone: () => void;
 }
@@ -21,7 +27,7 @@ interface Props {
  * cleanup, which exits teach — dragging against a latched arm is the one
  * combination that must be impossible to leave on screen.
  */
-export function TeachBar({ positions, onDone }: Props) {
+export function TeachBar({ positions, onCaptureAppend, onDone }: Props) {
   const { attempt } = useToast();
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -33,12 +39,24 @@ export function TeachBar({ positions, onDone }: Props) {
     };
   }, [attempt]);
 
-  const save = async () => {
+  const capture = async () => {
     const trimmed = name.trim() || `位姿 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
     setSaving(true);
     const pose = await attempt(() => api.poses.capture(trimmed), `已录位姿「${trimmed}」`);
     setSaving(false);
+    return pose;
+  };
+
+  const save = async () => {
+    const pose = await capture();
     if (pose) onDone();
+  };
+
+  const saveAsStation = async () => {
+    const pose = await capture();
+    if (!pose) return;
+    onCaptureAppend?.(pose);
+    onDone();
   };
 
   const joints = Object.entries(positions);
@@ -77,6 +95,17 @@ export function TeachBar({ positions, onDone }: Props) {
         <button type="button" className="primary" disabled={saving} onClick={() => void save()}>
           {saving ? "保存中…" : "保存位姿"}
         </button>
+        {onCaptureAppend ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={saving}
+            title="录下当前姿态并排到序列末尾，成为一个新站位"
+            onClick={() => void saveAsStation()}
+          >
+            {saving ? "保存中…" : "保存为站位"}
+          </button>
+        ) : null}
         <button type="button" className="ghost" disabled={saving} onClick={onDone}>
           退出示教
         </button>

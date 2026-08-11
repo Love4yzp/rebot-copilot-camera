@@ -3,7 +3,7 @@ import { api, ApiError } from "./api";
 import type { AppMode, Block, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
 import { useControlSocket } from "./useControlSocket";
 import { usePreview } from "./preview/usePreview";
-import { markerSchedule, playbackAbsTime, sequenceDuration } from "./timeline/model";
+import { makeHold, markerSchedule, playbackAbsTime, sequenceDuration } from "./timeline/model";
 import { EstopBar } from "./components/EstopBar";
 import { LogDrawer } from "./components/LogDrawer";
 import { TallyRail } from "./components/TallyRail";
@@ -234,20 +234,36 @@ function Workspace() {
 
   const patchBlocks = useCallback(
     async (next: Block[]) => {
-      if (!selectedId) return;
+      if (!selectedId) return undefined;
       const updated = await attempt(() => api.sequences.patch(selectedId, { blocks: next }));
       if (updated) {
         setSequence(updated);
         void refreshLibrary();
       }
+      return updated;
     },
     [selectedId, attempt, refreshLibrary],
+  );
+
+  /**
+   * One-tap assembly: append a pose as a new station (hold block) at the tail
+   * and select it — the inspector opens with the 「＋ 动作」 affordance right
+   * there, which is the next step in the flow.
+   */
+  const appendPoseToSequence = useCallback(
+    async (pose: Pose) => {
+      if (!sequence) return;
+      const hold = makeHold(pose.id);
+      const updated = await patchBlocks([...blocks, hold]);
+      if (updated) setSelection({ kind: "block", id: hold.id });
+    },
+    [sequence, blocks, patchBlocks],
   );
 
   const execute = useCallback(async () => {
     if (!sequence) return;
     if (sequence.blocks.length === 0) {
-      show("info", "空序列 — 先从素材库拖位姿上轴");
+      show("info", "空序列 — 点素材库位姿卡上的「＋追加」，或把位姿拖上轴");
       return;
     }
     // 点执行 = 停预演进执行。
@@ -439,6 +455,8 @@ function Workspace() {
           teaching={teaching}
           wizardOpen={wizardTemplate !== null}
           sequencesUnavailable={sequencesUnavailable}
+          canAppend={canEditSequences && sequence !== null && !runningSequence}
+          onAppendPose={(pose) => void appendPoseToSequence(pose)}
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}
           onSelectSequence={selectSequence}
@@ -484,6 +502,11 @@ function Workspace() {
         ) : teachOpen ? (
           <TeachBar
             positions={state?.positions ?? {}}
+            onCaptureAppend={
+              canEditSequences && sequence !== null && !runningSequence
+                ? (pose) => void appendPoseToSequence(pose)
+                : undefined
+            }
             onDone={() => {
               setTeachOpen(false);
               // A freshly captured pose must appear in the library immediately —

@@ -17,6 +17,10 @@ interface Props {
   wizardOpen: boolean;
   /** True when the sequence/pose API is not there (real backend before v2). */
   sequencesUnavailable: boolean;
+  /** A sequence is open and not running — pose cards may offer 「＋追加」. */
+  canAppend: boolean;
+  /** Append the pose as a new station at the open sequence's tail. */
+  onAppendPose: (pose: Pose) => void;
   onGoto: (pose: Pose) => void;
   /** Anything in the library changed — the parent refetches. */
   onChanged: () => void;
@@ -42,6 +46,8 @@ export function LibraryPanel({
   teaching,
   wizardOpen,
   sequencesUnavailable,
+  canAppend,
+  onAppendPose,
   onGoto,
   onChanged,
   onSelectSequence,
@@ -145,7 +151,7 @@ export function LibraryPanel({
       {tab === "poses" ? (
         <div className="lib__pane">
           <p className="lib__note">
-            位姿被序列<b>链接</b>：保持块只存位姿名，不存关节角。拖到时间轴上排出站位；数字键 1–9 直达前九个位姿。
+            位姿被序列<b>链接</b>：序列只存位姿名，不存关节角。点「＋追加」排到序列末尾成站位，也可拖上时间轴；数字键 1–9 直达前九个位姿。
           </p>
           {poses.map((pose) => {
             const info = links[pose.id];
@@ -214,6 +220,14 @@ export function LibraryPanel({
                 <div className="lib__pose-actions">
                   <button type="button" onClick={() => onGoto(pose)}>
                     去这里
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canAppend || executing || teaching || wizardOpen}
+                    title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
+                    onClick={() => onAppendPose(pose)}
+                  >
+                    ＋追加
                   </button>
                   <button
                     type="button"

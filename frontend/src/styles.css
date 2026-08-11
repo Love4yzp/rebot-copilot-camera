@@ -230,6 +230,7 @@ select:focus {
   border-top: 1px solid var(--edge);
 }
 .foot__timeline {
+  position: relative; /* the inspector floats above the track's right end */
   display: flex;
   gap: 10px;
   align-items: stretch;
@@ -1025,6 +1026,28 @@ select:focus {
   background: rgba(237, 237, 240, 0.12);
 }
 
+/* The explicit add-action affordance on the selected block — double-click
+ * stays as the shortcut, but nothing in the UI should be gesture-only. */
+.blk__add {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 5;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--mark);
+  background: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  touch-action: manipulation;
+}
+.blk__add:hover {
+  border-color: var(--mark-dim);
+}
+
 /* Markers: pinned inside the parent block, move and trim with it. */
 .mk {
   position: absolute;
@@ -1120,9 +1143,16 @@ select:focus {
 
 /* ── inspector ───────────────────────────────────────────────────────────── */
 
+/* The inspector floats over the track's right end instead of sitting in the
+ * flex row: opening it must never reflow the timeline under the user's eyes. */
+
 .insp {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  bottom: 12px;
+  z-index: 30; /* below dialogs (40) and the estop bar (60) */
   width: 300px;
-  flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1130,6 +1160,7 @@ select:focus {
   border: 1px solid var(--edge);
   border-radius: var(--radius);
   overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 .insp__head {
   flex: none;

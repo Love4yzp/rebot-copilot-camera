@@ -139,7 +139,9 @@ export function ArmView3D({ positions, preview }: Props) {
     const onMove = (e: PointerEvent) => {
       if (!dragging) return;
       theta -= (e.clientX - lastX) * 0.008;
-      phi = Math.min(Math.PI - 0.15, Math.max(0.15, phi - (e.clientY - lastY) * 0.008));
+      // The arm sits on a bench in the physical world: level or top-down only,
+      // never a worm's-eye view — phi (from +Y) stops at the horizon (π/2).
+      phi = Math.min(Math.PI / 2, Math.max(0.15, phi - (e.clientY - lastY) * 0.008));
       lastX = e.clientX;
       lastY = e.clientY;
       place();
