@@ -235,7 +235,7 @@ def test_websocket_streams_seq_playback_progress(rig):
     assert seen_playback is not None
     assert set(seen_playback) == {
         "sequence_id", "sequence_name", "block_index", "block_total",
-        "phase", "t_in_block", "error", "finished",
+        "phase", "t_in_block", "error", "finished", "approaching",
     }
     assert seen_playback["phase"] == "done"
     assert seen_playback["block_index"] == seen_playback["block_total"]

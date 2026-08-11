@@ -69,7 +69,14 @@ DEFAULT_ARRIVAL_EPS = 0.01
 #: Every later pose is reached from the one before it, so its duration was
 #: chosen against a known starting pose. The first has no such guarantee: the
 #: arm is wherever teaching left it, which may be most of the workspace away.
-FIRST_APPROACH_MAX_SPEED = 0.5
+#:
+#: Set to 0.25 rad/s ≈ 14.3°/s, based on docs/rebot-policy.md §1.3: the demo's
+#: safe synchronisation speed is 15°/s ≈ 0.26 rad/s (high-temperature homing is
+#: even slower at 8°/s).  The previous value of 0.5 rad/s ≈ 29°/s was nearly
+#: double the demo's safe limit.  **This value is not yet calibrated on the real
+#: arm with a camera mounted** — the rebot-policy speeds are bare-arm experience
+#: values; the mounted-camera limit must be measured.
+FIRST_APPROACH_MAX_SPEED = 0.25
 #: Base duration for the approach to the first block's pose (and for a goto).
 DEFAULT_APPROACH_S = 2.0
 #: How much longer than a move's own duration to wait before calling it stuck.
@@ -115,7 +122,14 @@ class Phase(str, Enum):
 @dataclass(frozen=True)
 class Progress:
     """The SeqPlayback shape. ``block_index`` sits one past the last block once
-    finished (the advance step increments before it notices it is done)."""
+    finished (the advance step increments before it notices it is done).
+
+    ``approaching`` is ``True`` when the current block is a :class:`HoldBlock`
+    and the arm is still flying toward its pose — the hold's clock has not yet
+    started.  Once the arm arrives and :meth:`_begin_hold_timing` is called,
+    ``approaching`` flips to ``False`` for the rest of the block.  Every other
+    phase (transition, wait, done, aborted) always reports ``False``.
+    """
 
     phase: Phase
     block_index: int
@@ -124,6 +138,7 @@ class Progress:
     sequence_id: str
     sequence_name: str
     error: str | None = None
+    approaching: bool = False
 
     @property
     def is_finished(self) -> bool:
@@ -216,6 +231,10 @@ class SequenceExecutor:
         return self._error
 
     def progress(self) -> Progress:
+        approaching = (
+            self._phase is Phase.HOLD
+            and self._timing_started_at is None
+        )
         return Progress(
             phase=self._phase or Phase.DONE,
             block_index=self._block_index,
@@ -224,6 +243,7 @@ class SequenceExecutor:
             sequence_id=self._sequence.id,
             sequence_name=self._sequence.name,
             error=self._error,
+            approaching=approaching,
         )
 
     def _t_in_block(self) -> float:

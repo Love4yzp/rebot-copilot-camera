@@ -577,6 +577,87 @@ def test_phases_pass_through_hold_and_transition():
     assert seen[-1] is Phase.DONE
 
 
+# ── approaching flag ──────────────────────────────────────────────────────────
+
+
+def test_approaching_is_true_during_first_hold_approach():
+    """The first hold block's approach: arm not at the pose yet."""
+    target = pose(0.6)
+    sequence, poses = make(hold(target, 0.5))
+    poses[target.id] = target
+    h = Harness(sequence, poses)
+    h.executor.start()
+
+    p = h.executor.progress()
+    assert p.phase is Phase.HOLD
+    assert p.approaching is True
+
+    # Tick until the arm arrives or the sequence finishes.
+    while not h.executor.is_finished and h.executor.progress().approaching:
+        h.step()
+
+    p = h.executor.progress()
+    if p.phase is Phase.HOLD:
+        assert p.approaching is False
+
+
+def test_approaching_is_false_when_arm_already_at_pose():
+    """Arm already at the hold's pose at start — no approach needed."""
+    target = pose(0.0)
+    sequence, poses = make(hold(target, 0.5))
+    poses[target.id] = target
+    h = Harness(sequence, poses)
+    h.executor.start()
+
+    p = h.executor.progress()
+    assert p.phase is Phase.HOLD
+    assert p.approaching is False
+
+
+def test_approaching_is_false_for_transition_blocks():
+    """Transition blocks never approach — they start their clock immediately."""
+    a, b = pose(0.0), pose(0.6)
+    sequence, poses = make(hold(a, 0.2), transition(1.0), hold(b, 0.2))
+    poses[a.id] = a
+    poses[b.id] = b
+    h = Harness(sequence, poses)
+    h.run()
+
+    for e in h.events:
+        if e.phase is Phase.TRANSITION:
+            assert e.approaching is False, f"transition at {e.block_index} has approaching=True"
+
+
+def test_approaching_is_false_when_done():
+    """Finished sequence — approaching is False."""
+    target = pose(0.0)
+    sequence, poses = make(hold(target, 0.2))
+    poses[target.id] = target
+    h = Harness(sequence, poses)
+    h.run()
+
+    assert h.executor.progress().approaching is False
+
+
+def test_approaching_is_false_for_aborted_run():
+    """Aborted sequence — approaching is False."""
+    a = pose(1.0)
+    sequence, poses = make(hold(a, 0.5))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.executor.start()
+
+    # Arm never moves — the arrival deadline will trigger an abort.
+    for _ in range(2000):
+        h.clock.now += DT
+        h.executor.tick()
+        if h.executor.is_finished:
+            break
+
+    assert h.executor.phase is Phase.ABORTED
+    assert h.executor.progress().approaching is False
+
+
 # ── first-pose approach ──────────────────────────────────────────────────────
 
 

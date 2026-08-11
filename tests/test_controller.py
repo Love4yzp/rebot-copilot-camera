@@ -405,7 +405,7 @@ def test_the_progress_payload_is_the_seq_playback_shape(rig: Rig):
     last = [m for m in rig.published if m["type"] == "playback"][-1]["data"]
     assert set(last) == {
         "sequence_id", "sequence_name", "block_index", "block_total",
-        "phase", "t_in_block", "error", "finished",
+        "phase", "t_in_block", "error", "finished", "approaching",
     }
     assert last["sequence_id"] == sequence.id
     assert last["sequence_name"] == "wire check"

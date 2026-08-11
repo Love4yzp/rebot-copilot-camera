@@ -221,10 +221,15 @@ function advancePlayback(state: MockState, sim: SimContext): void {
     const target = poseJoints(state, block.pose_id);
     if (target) {
       const rate = Math.min(1, TICK_S * 4);
+      let allSettled = true;
       for (const joint of JOINTS) {
         const delta = (target[joint] ?? 0) - state.positions[joint];
-        state.positions[joint] = Math.abs(delta) < 1e-4 ? target[joint] : state.positions[joint] + delta * rate;
+        const settled = Math.abs(delta) < 1e-4;
+        state.positions[joint] = settled ? target[joint] : state.positions[joint] + delta * rate;
+        if (!settled) allSettled = false;
       }
+      // The arm is no longer approaching once every joint has settled.
+      if (allSettled) pb.approaching = false;
     }
     if (pb.t_in_block >= block.duration_s) nextBlock(state, sim);
     return;
@@ -267,6 +272,8 @@ function nextBlock(state: MockState, sim: SimContext): void {
     return;
   }
   pb.phase = block.type;
+  // A new hold block starts approaching until the arm settles at the pose.
+  pb.approaching = block.type === "hold";
 }
 
 /**

@@ -169,12 +169,15 @@ def execute_sequence(
 
     poses = _resolve_poses(request, sequence)
 
-    # Pre-flight the whole sequence, including the straight lines between
-    # consecutive poses. Two legal poses can have an illegal path between
-    # them, and discovering that by watching the arm reach it is the expensive
-    # way to find out. Nothing has moved yet at this point.
+    controller = _controller(request)
+
+    # Pre-flight the whole sequence, including the approach from wherever the
+    # arm is now. Two legal poses can have an illegal path between them, and
+    # discovering that by watching the arm reach it is the expensive way to
+    # find out. Nothing has moved yet at this point.
+    current = dict(controller.arm.read_state().positions)
     joints_in_order = [poses[b.pose_id].joints for b in sequence.blocks if isinstance(b, HoldBlock)]
-    unsafe = validate_sequence(joints_in_order)
+    unsafe = validate_sequence([current, *joints_in_order])
     if unsafe:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": unsafe}
@@ -190,7 +193,6 @@ def execute_sequence(
             status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
         )
 
-    controller = _controller(request)
     try:
         controller.play(sequence, poses, source=(body or TriggerRequest()).source)
     except RuntimeError as exc:

@@ -183,6 +183,13 @@ export interface SeqPlayback {
   t_in_block: number;
   error: string | null;
   finished: boolean;
+  /**
+   * True while the current block is a hold and the arm is still flying toward
+   * its pose — the hold's clock has not yet started. Once the arm reaches the
+   * pose this flips to false for the rest of the block. Transition, wait, done,
+   * and aborted phases always report false.
+   */
+  approaching: boolean;
 }
 
 /** What the motion endpoints (execute / goto / teach / stop) return. */

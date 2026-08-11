@@ -148,3 +148,4 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 - 七个关节的读数符号与零位是否和 URDF 一致（上游说 rest pose = 伸直 = q=0，未实测）。
 - 夹爪 `0x07` 的行程与 URDF 里 `joint_left`/`joint_right` 的米制限位如何对应。
+- 进站限速 `FIRST_APPROACH_MAX_SPEED = 0.25 rad/s`（`backend/core/executor.py`）是按 demo 安全同步速度 15°/s 取的（`docs/rebot-policy.md` §1.3），挂相机后的安全值未实测。execute 与 goto 的进站段都走它；真机上观察进站是否过冲/共振，必要时再降。

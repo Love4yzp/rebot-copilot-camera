@@ -191,6 +191,7 @@ export function handleApi(
       state.playback.phase = "aborted";
       state.playback.finished = true;
       state.playback.error = "emergency stop engaged";
+      state.playback.approaching = false;
     }
     return json(200, estopStatus(state.estop, true));
   }
@@ -317,6 +318,7 @@ export function handleApi(
       t_in_block: 0,
       error: null,
       finished: false,
+      approaching: false,
     };
     return json(200, playbackState(state));
   }
@@ -394,6 +396,7 @@ export function handleApi(
       t_in_block: 0,
       error: null,
       finished: false,
+      approaching: sequence.blocks[0].type === "hold",
     };
     return json(200, playbackState(state));
   }

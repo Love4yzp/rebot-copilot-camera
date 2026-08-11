@@ -313,8 +313,50 @@ def test_execute_preflights_the_path_between_legal_poses(client: TestClient):
     r = client.post(f"/api/sequences/{sid}/execute")
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "unsafe_sequence"
-    assert any("path 0->1" in reason for reason in r.json()["detail"]["reasons"])
+    assert any("path 1->2" in reason for reason in r.json()["detail"]["reasons"])
     assert client.get("/api/control").json()["playing"] is False
+
+
+def test_execute_refuses_when_arm_is_at_a_self_colliding_pose(rig):
+    """The arm's current position is self-colliding — the pre-flight check
+    catches it before anything moves, even if the sequence's poses are all
+    safe. Same logic as goto_pose reading the arm where it stands: two legal
+    poses can have an illegal path between them, and the arm's position right
+    now is only known at runtime."""
+    client, controller, arm, clock = rig
+
+    # Drag the arm to a self-colliding configuration (link3 folded into base).
+    arm.drag({"joint1": 2.394, "joint2": 3.039})
+
+    # A sequence with a single safe pose at rest.
+    rest = {n: 0.0 for n in ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")}
+    pa = client.post("/api/poses", json={"name": "rest", "joints": rest})
+    assert pa.status_code == 201
+    sid = make_sequence(client)
+    set_blocks(client, sid, [hold(pa.json()["id"])])
+
+    before = dict(arm.read_state().positions)
+    r = client.post(f"/api/sequences/{sid}/execute")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "unsafe_sequence"
+    assert any("waypoint 0" in reason for reason in r.json()["detail"]["reasons"])
+    assert arm.read_state().positions == before
+
+
+def test_execute_allows_safe_path_when_arm_is_at_rest(rig):
+    """The arm is at rest and the sequence is safe — execute proceeds.
+    This is the baseline: with the current position prepended, a safe arm
+    must not be rejected."""
+    client, controller, arm, clock = rig
+    a, b = make_pose(client, 0.2, "a"), make_pose(client, 0.5, "b")
+    sid = make_sequence(client)
+    set_blocks(client, sid, [hold(a, 0.3), hold(b, 0.3)])
+
+    r = client.post(f"/api/sequences/{sid}/execute")
+    assert r.status_code == 200
+    run_loop(controller, arm, clock)
+    assert controller.executor.phase.value == "done"
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.5, abs=0.02)
 
 
 # ── the execution lockout (TIMELINE rule 5) ──────────────────────────────────

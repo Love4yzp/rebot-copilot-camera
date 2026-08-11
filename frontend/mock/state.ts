@@ -46,6 +46,7 @@ export interface MockSeqPlayback {
   t_in_block: number;
   error: string | null;
   finished: boolean;
+  approaching: boolean;
 }
 
 export interface MockEstop {

@@ -500,4 +500,5 @@ def _progress_payload(progress) -> dict:
         "t_in_block": progress.t_in_block,
         "error": progress.error,
         "finished": progress.is_finished,
+        "approaching": progress.approaching,
     }
