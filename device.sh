@@ -100,7 +100,6 @@ cmd_push() {
 
 	step "[r2x] 重启服务"
 	ssh "$HOST" "sudo systemctl restart $SERVICE"
-	sleep 2
 	cmd_status
 }
 
@@ -120,12 +119,29 @@ cmd_status() {
 	step "[r2x] 健康检查"
 	# Reports whether the real arm was found. A service happily running on the
 	# simulator is the failure this exists to catch.
-	ssh "$HOST" "curl -s http://127.0.0.1:$PORT/api/health" | python3 -m json.tool 2>/dev/null || echo "(no response)"
+	#
+	# Poll until the service answers, with a hard timeout: right after a
+	# restart the backend can take longer than any fixed sleep to come up, and
+	# a "no response" that is really "not up yet" is a false alarm.
+	local deadline=$((SECONDS + 30))
+	local body=""
+	while ((SECONDS < deadline)); do
+		body="$(ssh "$HOST" "curl -s http://127.0.0.1:$PORT/api/health" 2>/dev/null || true)"
+		if [[ -n "$body" ]]; then
+			echo "$body" | python3 -m json.tool 2>/dev/null && return 0
+		fi
+		sleep 1
+	done
+	echo "(no response after 30s)"
+	return 1
 }
 
 cmd_open() {
 	step "[r2x] 建隧道 $PORT 并打开浏览器"
-	ssh -f -N -L "$PORT:127.0.0.1:$PORT" "$HOST"
+	# ExitOnForwardFailure: if the local port is already taken the tunnel dies
+	# immediately and ssh exits non-zero, instead of silently failing the
+	# forward and leaving the browser staring at a dead page.
+	ssh -f -N -o ExitOnForwardFailure=yes -L "$PORT:127.0.0.1:$PORT" "$HOST"
 	sleep 1
 	case "$(uname)" in
 	Darwin) open "http://127.0.0.1:$PORT" ;;
