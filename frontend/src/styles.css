@@ -489,6 +489,15 @@ select:focus {
 .mode-badge--prod .mode-badge__dot {
   background: var(--mark-dim);
 }
+.mode-badge__tick {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  flex: none;
+}
+.mode-badge__tick--moving {
+  color: var(--motion);
+}
 
 /* arm moving: borrow amber — the one allowed colour crossover */
 .mode-badge--moving {
@@ -1459,6 +1468,43 @@ select:focus {
 }
 .sheet__add-btn:hover {
   border-style: solid;
+}
+
+/* ── mode warning (full-screen prod transition) ──────────────────────────── */
+/* Blocking overlay, z-55: above sheets (40) and toasts (50), below the estop
+ * bar (60). The stop stays reachable and Escape keeps meaning "stop the arm". */
+.mode-warning {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(4, 4, 6, 0.78);
+}
+.mode-warning__panel {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px 24px;
+  background: var(--body);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.6);
+}
+.mode-warning__title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+}
+.mode-warning__body {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--mark-dim);
+}
+.mode-warning__panel .primary {
+  min-height: 48px;
 }
 
 /* ── toasts ──────────────────────────────────────────────────────────────── */

@@ -39,12 +39,21 @@ export function ModeBadge({ mode, moving, connected }: Props) {
 
   const isMoving = moving && mode === "prod";
 
+  // prod gets a ✓ glyph (spec: grey-scale + bold + icon); sim keeps the dot.
+  const lead = mode === "prod" ? (
+    <span className={`mode-badge__tick ${isMoving ? "mode-badge__tick--moving" : ""}`} aria-hidden="true">
+      ✓
+    </span>
+  ) : (
+    <span className={`mode-badge__dot ${isMoving ? "mode-badge__dot--moving" : ""}`} />
+  );
+
   return (
     <span
       className={`mode-badge mode-badge--${mode} ${isMoving ? "mode-badge--moving" : ""}`}
       title={mode === "prod" ? "后端直连机械臂，操作将实际驱动" : "仅前端演示，机械臂不会动"}
     >
-      <span className={`mode-badge__dot ${isMoving ? "mode-badge__dot--moving" : ""}`} />
+      {lead}
       {MODE_LABEL[mode]}
     </span>
   );

@@ -141,6 +141,7 @@ export function handleApi(
       status: "ok",
       version: "0.0.0-mock",
       uptime_s: Math.round(now - state.started_at),
+      mode: "sim",
       estop: {
         latched: state.estop.latched,
         reason: state.estop.reason,

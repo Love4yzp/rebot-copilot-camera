@@ -9,6 +9,7 @@ import { LogDrawer } from "./components/LogDrawer";
 import { TallyRail } from "./components/TallyRail";
 import type { TallyState } from "./components/TallyRail";
 import { Dialog } from "./components/Dialog";
+import { ModeWarning } from "./components/ModeWarning";
 import { ToastProvider, useToast } from "./components/Toasts";
 import { LibraryPanel } from "./library/LibraryPanel";
 import { TeachBar } from "./library/TeachBar";
@@ -30,6 +31,10 @@ function Workspace() {
   const { attempt, show } = useToast();
 
   const [appMode, setAppMode] = useState<AppMode | null>(null);
+  /** True while the full-screen "you are in PROD mode" warning is up. */
+  const [prodWarning, setProdWarning] = useState(false);
+  /** Last mode observed by the health poll, for switch detection. */
+  const prevModeRef = useRef<AppMode | null>(null);
   const [poses, setPoses] = useState<Pose[]>([]);
   const [summaries, setSummaries] = useState<SequenceSummary[]>([]);
   const [templates, setTemplates] = useState<SeqTemplate[]>([]);
@@ -128,47 +133,45 @@ function Workspace() {
       .catch(() => setProviders([]));
   }, []);
 
-  // Poll health to detect sim/prod mode. Poll every 5s while disconnected,
-  // then stop polling once we know the mode (it won't change at runtime).
+  // Poll health continuously to detect sim/prod mode — including *switches*.
+  // A user may start in `dev.sh sim` and later bring up `dev.sh prod` without
+  // reloading; "still in the simulator" is exactly the misreading the mode
+  // badge and the prod warning exist to prevent. So unlike a one-shot boot
+  // probe, this keeps polling, but only while the mode is actually changing.
   useEffect(() => {
     let cancelled = false;
-    let prevMode: AppMode | null = null;
-    let done = false;
 
     const poll = async () => {
       try {
         const health = await api.health();
         if (cancelled) return;
         const mode = (health as { mode?: AppMode }).mode ?? null;
-        if (mode && mode !== prevMode) {
-          if (prevMode === "sim" && mode === "prod") {
-            show("info", "⚠️ 现在处于 PROD 模式，操作将直接驱动机械臂");
-          }
-          prevMode = mode;
-        }
-        if (mode) done = true;
         setAppMode(mode);
+        // A transition *into* prod — from sim or from unknown — is the moment
+        // an operator may still believe they are driving the simulator. Show
+        // the full-screen warning once per transition.
+        if (mode === "prod" && prevModeRef.current !== "prod") {
+          setProdWarning(true);
+        }
+        prevModeRef.current = mode;
       } catch {
         if (cancelled) return;
-        // Keep polling — the backend may not be up yet.
+        // Backend unreachable: sim (mock) frontend or backend not up yet.
+        setAppMode(null);
+        prevModeRef.current = null;
       }
     };
 
-    // Immediate first fetch, then poll every 5s until we have a mode.
+    // Immediate first fetch, then poll every 5s so a mode switch is caught
+    // within one interval.
     void poll();
-    const interval = setInterval(() => {
-      if (done || cancelled) {
-        clearInterval(interval);
-        return;
-      }
-      void poll();
-    }, 5000);
+    const interval = setInterval(() => void poll(), 5000);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [show]);
+  }, []);
 
   // Land on something usable: the sequence that was open last, else the first.
   useEffect(() => {
@@ -530,6 +533,11 @@ function Workspace() {
       </footer>
 
       <LogDrawer rateHz={state?.rate_hz ?? 0} />
+
+      {/* Blocking prod-mode warning. Rendered above sheets (55) but below the
+        * estop bar (60): the stop stays reachable while the warning is up, and
+        * Escape keeps its meaning as "stop the arm", not "dismiss this". */}
+      {prodWarning ? <ModeWarning onAcknowledge={() => setProdWarning(false)} /> : null}
 
       {dialog ? (
         <Dialog
