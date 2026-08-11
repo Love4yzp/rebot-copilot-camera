@@ -66,9 +66,16 @@ def check_shape(provider: object) -> None:
     accept third-party code is how a misspelled attribute becomes a service that
     will not start.
 
-    ``label`` and ``retryable`` are absent from this list on purpose — both have
-    a safe default, and refusing to load an otherwise working accessory over a
-    missing display name would be the host being precious about cosmetics.
+    ``label`` is absent from this list on purpose — it has a safe default, and
+    refusing to load an otherwise working accessory over a missing display name
+    would be the host being precious about cosmetics.
+
+    ``retryable`` is the opposite: there is no safe default. True means "the
+    host may re-run this after a failure", and for an action whose side effect
+    is not repeatable — a turntable whose rotation is relative — a silent retry
+    is not the same action again but a second, different pose. Forgetting to
+    declare it must fail here, at load time, in front of the author who can fix
+    it — not after the arm has already moved.
     """
     provider_id = getattr(provider, "id", None)
     if not isinstance(provider_id, str) or not _ID.match(provider_id):
@@ -79,6 +86,14 @@ def check_shape(provider: object) -> None:
     params_model = getattr(provider, "params_model", None)
     if not (isinstance(params_model, type) and issubclass(params_model, BaseModel)):
         raise ValueError(f"{provider_id}: params_model must be a pydantic BaseModel subclass")
+
+    retryable = getattr(provider, "retryable", None)
+    if not isinstance(retryable, bool):
+        raise ValueError(
+            f"{provider_id}: retryable must be declared explicitly (True or False); "
+            "there is no default — an undeclared retry policy used to mean a "
+            "non-repeatable side effect could be silently re-run"
+        )
 
     for name in ("fields", "probe", "run"):
         if not callable(getattr(provider, name, None)):

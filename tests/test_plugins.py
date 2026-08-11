@@ -236,6 +236,45 @@ def test_a_provider_missing_an_attribute_is_refused_rather_than_registered(rig, 
     assert registry.ensure_status("shutter").available is True
 
 
+def test_a_provider_that_does_not_declare_retryable_is_refused(rig, monkeypatch):
+    """retryable has no safe default: True tells the host it may re-run the
+    action after a failure, and for a side effect that is not repeatable — a
+    turntable whose rotation is relative — a silent retry is not the same
+    action again but a second, different pose. Forgetting to declare it must
+    fail at load time, in front of the author, not after the arm has moved."""
+    _, registry, *_ = rig
+
+    class Forgetful:
+        """Everything a provider needs except the one declaration the author forgot."""
+
+        id = "forgetful"
+        label = "健忘"
+        params_model = RelayParams
+
+        def fields(self):
+            return []
+
+        def probe(self) -> None: ...
+
+        def run(self, params, ctx) -> None: ...
+
+    class Entry:
+        name = "forgetful"
+
+        def load(self):
+            return Forgetful
+
+    monkeypatch.setattr("backend.actions.registry.entry_points", lambda group: [Entry()])
+    registry.discover()  # must not raise
+
+    entry = next(e for e in registry.manifest() if e["id"] == "forgetful")
+    assert entry["installed"] is False
+    assert "retryable" in entry["reason"]
+    assert registry.provider("forgetful") is None
+    # And the accessory that was already working is untouched.
+    assert registry.ensure_status("shutter").available is True
+
+
 def test_a_plugin_cannot_take_over_an_id_that_is_already_registered(rig, monkeypatch):
     """The most expensive failure this layer can have. Every ShutterAction is
     dispatched to the literal id ``shutter``, so a plugin claiming that id would
