@@ -435,11 +435,23 @@ select:focus {
   background: var(--mark-dim);
   flex: none;
 }
+/* A down link is not a machine state — grey pulse, not red (red = estop). */
 .link-state.down .link-dot {
-  background: var(--stop);
+  background: var(--mark-dim);
+  animation: mode-badge-pulse 1.5s ease-in-out infinite;
 }
 
 /* ── mode badge ──────────────────────────────────────────────────────────── */
+/* The mode badge and the connection state are independent dimensions. The
+ * badge-group keeps the mode chip and the optional disconnect mark side by
+ * side; a down websocket shows the grey pulse beside the mode, never instead
+ * of it. */
+.mode-badge-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
 .mode-badge {
   display: inline-flex;
   align-items: center;
@@ -509,10 +521,18 @@ select:focus {
   animation: mode-badge-pulse 1s ease-in-out infinite;
 }
 
-/* disconnected: grey pulse, no colour (red is reserved for estop) */
-.mode-badge--disconnected {
+/* disconnected: grey pulse beside the mode, no colour (red is reserved for
+ * the estop, amber for motion — a down link is not a machine state). */
+.mode-badge__disconnected {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--engrave);
+  font-size: 12px;
+  letter-spacing: 0.05em;
   color: var(--mark-dim);
-  border: 1px solid var(--edge);
+  white-space: nowrap;
+  flex: none;
 }
 
 /* unknown: no health yet */
@@ -1497,6 +1517,15 @@ select:focus {
   margin: 0;
   font-size: 19px;
   font-weight: 600;
+}
+/* Neutral grey icon, never amber: amber reads as "arm moving" in peripheral
+ * vision (four-colour discipline), and this warning is exactly the moment an
+ * operator might misread it. Emphasis comes from size and weight instead. */
+.mode-warning__icon {
+  color: var(--mark-dim);
+  font-variant-emoji: text;
+  font-size: 22px;
+  margin-right: 4px;
 }
 .mode-warning__body {
   margin: 0;
