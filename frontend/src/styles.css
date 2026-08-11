@@ -902,6 +902,41 @@ select:focus {
 .tl-inner {
   position: relative;
 }
+/* Zoom: the scale wrapper widens past the viewport and the scroll container
+ * scrolls. Gestures read element rects, so they never see any of this. */
+.tl-scroll {
+  overflow-x: auto;
+}
+.tl-scale {
+  min-width: 100%;
+}
+/* The drop preview: a dashed gap that pushes committed blocks apart. */
+.tl-ghost {
+  flex: none;
+  height: 100%;
+  border: 1.5px dashed var(--mark-dim);
+  border-radius: 7px;
+  background: rgba(237, 237, 240, 0.04);
+}
+.tl-zoom {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 10px;
+}
+.tl-zoom button {
+  min-width: 26px;
+  min-height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--mark-dim);
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+}
+.tl-zoom button:hover:not(:disabled) {
+  color: var(--mark);
+  border-color: var(--mark-dim);
+}
 .tl-ruler {
   position: relative;
   height: 18px;

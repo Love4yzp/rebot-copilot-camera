@@ -40,7 +40,9 @@ export function makeMarker(
   return { id: newId(), kind, params, at, estimate_s };
 }
 
-export function makeHold(pose_id: string, duration_s = 3): HoldBlock {
+export const DEFAULT_HOLD_S = 3;
+
+export function makeHold(pose_id: string, duration_s = DEFAULT_HOLD_S): HoldBlock {
   return { type: "hold", id: newId(), pose_id, duration_s, markers: [] };
 }
 

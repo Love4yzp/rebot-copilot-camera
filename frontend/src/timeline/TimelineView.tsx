@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { Block, EventMarker, Pose, ProviderInfo, SeqPlayback, Sequence } from "../types";
 import {
   blockStarts,
+  DEFAULT_HOLD_S,
   makeHold,
   markerAbsTime,
   MIN_HOLD_S,
@@ -44,6 +45,9 @@ interface Props {
 }
 
 const HOLD_MIME = "application/x-rebot-hold";
+
+/** Tick spacing candidates (seconds); the zoom picks the sparsest legible one. */
+const TICK_STEPS = [0.5, 1, 2, 5, 10, 30];
 
 const snap = (v: number, step: number) => Math.round(v / step) * step;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -97,6 +101,26 @@ export function TimelineView({
   const [draftMarkerAt, setDraftMarkerAt] = useState<Record<string, number>>({});
   const [addMarker, setAddMarker] = useState<{ blockId: string; at: number } | null>(null);
 
+  // ── timeline-density zoom ─────────────────────────────────────────────────
+  // Geometry rule: gestures only ever read element rects; `zoom` drives the
+  // scale wrapper's width and nothing else, so it can never corrupt them.
+
+  /** 1 = the whole sequence fits the viewport; larger = zoomed in. */
+  const [zoom, setZoom] = useState(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [viewportW, setViewportW] = useState(0);
+  /** scrollLeft to apply after a zoom render, keeping the anchor time put. */
+  const pendingScrollRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportW(el.clientWidth);
+    const ro = new ResizeObserver(() => setViewportW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [density]);
+
   const blocks = useMemo<Block[]>(() => {
     const base = sequence?.blocks ?? [];
     if (Object.keys(draftDurations).length === 0 && Object.keys(draftMarkerAt).length === 0) {
@@ -129,6 +153,44 @@ export function TimelineView({
   // The playhead walks the plan ruler in preview, the truth in execution.
   const playheadT = locked && playback ? playbackAbsTime(blocks, playback) : preview.t;
   const playheadVisible = !latched && (locked || preview.active) && total > 0;
+
+  const pxPerSec = total > 0 && viewportW > 0 ? (viewportW * zoom) / total : 0;
+  const zoomMax = total > 0 && viewportW > 0 ? Math.max(1, (400 * total) / viewportW) : 1;
+
+  const applyZoom = (next: number, anchorClientX: number | null) => {
+    const clamped = clamp(next, 1, zoomMax);
+    if (clamped === zoom) return;
+    const el = scrollRef.current;
+    if (el && total > 0) {
+      const rect = el.getBoundingClientRect();
+      const ax = anchorClientX ?? rect.left + el.clientWidth / 2;
+      // The time under the anchor before the zoom stays under it after.
+      const anchorT = ((el.scrollLeft + ax - rect.left) / (el.clientWidth * zoom)) * total;
+      pendingScrollRef.current = (anchorT / total) * (el.clientWidth * clamped) - (ax - rect.left);
+    }
+    setZoom(clamped);
+  };
+
+  useEffect(() => {
+    if (pendingScrollRef.current !== null && scrollRef.current) {
+      scrollRef.current.scrollLeft = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+    }
+  }, [zoom]);
+
+  // Ctrl/Cmd + wheel zooms (anchor = cursor). React attaches wheel listeners
+  // passively, so this one goes native to allow preventDefault.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (density !== "timeline" || !el) return;
+    const onWheel = (event: WheelEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || total === 0) return;
+      event.preventDefault();
+      applyZoom(zoom * (event.deltaY < 0 ? 1.25 : 0.8), event.clientX);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  });
 
   const patch = (next: Block[]) => {
     setDraftDurations({});
@@ -194,10 +256,21 @@ export function TimelineView({
 
   // ── pose drop from the library (timeline density) ─────────────────────────
 
+  /**
+   * Drop preview: a dashed gap opens where the pose would land, pushing the
+   * committed blocks apart. The insertion index is computed in data space —
+   * committed blocks plus the current hint — never from the shifted layout,
+   * so the gap cannot oscillate under the cursor.
+   */
+  const [dropHint, setDropHint] = useState<{ index: number } | null>(null);
+
+  /** Track content duration: the truth plus the preview gap while dragging. */
+  const contentTotal = total + (dropHint ? DEFAULT_HOLD_S : 0);
+
   const timeAtClientX = (clientX: number): number => {
     const rect = trackRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0 || total === 0) return 0;
-    return clamp(((clientX - rect.left) / rect.width) * total, 0, total);
+    if (!rect || rect.width === 0 || contentTotal === 0) return 0;
+    return clamp(((clientX - rect.left) / rect.width) * contentTotal, 0, contentTotal);
   };
 
   /** Index (in the blocks array) before which a hold dropped at time t goes. */
@@ -208,12 +281,33 @@ export function TimelineView({
     return blocks.length;
   };
 
+  /** Insertion index for the pose under the cursor, anti-oscillation included. */
+  const dropIndexAt = (clientX: number): number => {
+    const rawT = timeAtClientX(clientX); // content space (the gap is included)
+    if (!dropHint) return holdInsertIndex(rawT);
+    const h = starts[dropHint.index] ?? total; // the gap's start in committed space
+    if (rawT < h) return holdInsertIndex(rawT);
+    if (rawT <= h + DEFAULT_HOLD_S) return dropHint.index; // inside the gap: keep
+    return holdInsertIndex(rawT - DEFAULT_HOLD_S);
+  };
+
   const onDragOver = (event: DragEvent) => {
     if (locked) return;
     if (event.dataTransfer.types.includes(POSE_MIME) || event.dataTransfer.types.includes(HOLD_MIME)) {
       event.preventDefault();
       event.dataTransfer.dropEffect = event.dataTransfer.types.includes(POSE_MIME) ? "copy" : "move";
+      if (event.dataTransfer.types.includes(POSE_MIME)) {
+        const index = dropIndexAt(event.clientX);
+        if (index !== dropHint?.index) setDropHint({ index });
+      } else if (dropHint) {
+        // Hold reorders drop straight away — no preview gap for them.
+        setDropHint(null);
+      }
     }
+  };
+
+  const onDragLeaveTrack = (event: DragEvent) => {
+    if (!trackRef.current?.contains(event.relatedTarget as Node | null)) setDropHint(null);
   };
 
   const onDrop = (event: DragEvent) => {
@@ -221,14 +315,17 @@ export function TimelineView({
     const poseId = event.dataTransfer.getData(POSE_MIME);
     if (poseId) {
       event.preventDefault();
+      const index = dropHint?.index ?? holdInsertIndex(timeAtClientX(event.clientX));
+      setDropHint(null);
       const next = [...blocks];
-      next.splice(holdInsertIndex(timeAtClientX(event.clientX)), 0, makeHold(poseId));
+      next.splice(index, 0, makeHold(poseId));
       patch(next);
       return;
     }
     const holdId = event.dataTransfer.getData(HOLD_MIME);
     if (holdId) {
       event.preventDefault();
+      setDropHint(null);
       reorderHold(holdId, timeAtClientX(event.clientX));
     }
   };
@@ -431,9 +528,11 @@ export function TimelineView({
   // ── render ────────────────────────────────────────────────────────────────
 
   const markerCount = blocks.reduce((n, b) => n + b.markers.length, 0);
-  const tickStep = total > 60 ? 5 : 1;
+  // Tick density follows the zoom: ticks stay at least ~50px apart.
+  const tickStep = pxPerSec > 0 ? (TICK_STEPS.find((st) => st * pxPerSec >= 50) ?? 30) : 1;
+  const labelEvery = tickStep < 1 ? 1 : tickStep < 5 ? 5 : tickStep;
   const ticks: number[] = [];
-  for (let s = 0; s <= Math.floor(total); s += tickStep) ticks.push(s);
+  for (let s = 0; s <= Math.floor(total) + 1e-9; s += tickStep) ticks.push(s);
 
   const spans = useMemo(() => {
     const out: { left: number; width: number; label: string; key: string }[] = [];
@@ -442,15 +541,15 @@ export function TimelineView({
         if (marker.estimate_s < 1) continue;
         const absT = markerAbsTime(starts[i], block, marker);
         out.push({
-          left: (absT / total) * 100,
-          width: (Math.min(marker.estimate_s, total - absT) / total) * 100,
+          left: (absT / contentTotal) * 100,
+          width: (Math.min(marker.estimate_s, contentTotal - absT) / contentTotal) * 100,
           label: `${markerLabel(marker.kind, providers)}（预估）`,
           key: marker.id,
         });
       }
     });
     return out;
-  }, [blocks, starts, total, providers]);
+  }, [blocks, starts, contentTotal, providers]);
 
   const emptyState =
     sequence === null ? (
@@ -484,73 +583,130 @@ export function TimelineView({
         )}
         <span className="r">
           全长 <span className="num">{total.toFixed(1)}s</span>（指令时长，动作时长为预估）
+          {density === "timeline" && total > 0 ? (
+            <span className="tl-zoom">
+              <button
+                type="button"
+                title="缩小"
+                disabled={zoom <= 1}
+                onClick={() => applyZoom(zoom / 1.5, null)}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                title="适配宽度"
+                disabled={zoom === 1}
+                onClick={() => applyZoom(1, null)}
+              >
+                适配
+              </button>
+              <button
+                type="button"
+                title="放大（也可按住 Ctrl/⌘ 滚轮）"
+                disabled={zoom >= zoomMax}
+                onClick={() => applyZoom(zoom * 1.5, null)}
+              >
+                ＋
+              </button>
+            </span>
+          ) : null}
         </span>
       </div>
 
       {density === "timeline" ? (
         <div className="tl-inner">
-          <div className="tl-ruler" onPointerDown={scrubStart}>
-            {ticks.map((s) => (
-              <div key={s} className="tl-tick" style={{ left: `${(s / total) * 100}%` }}>
-                {s % 5 === 0 && total - s >= 2 ? <span className="num">{s}s</span> : null}
-              </div>
-            ))}
-            {total > 0 ? (
-              <div className="tl-tick end" style={{ left: "100%" }}>
-                <span className="num">{total.toFixed(1)}s</span>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="tl-track" ref={trackRef} onDragOver={onDragOver} onDrop={onDrop}>
-            {blocks.length === 0
-              ? emptyState
-              : blocks.map((block, i) => (
-                  <TrackBlock
-                    key={block.id}
-                    block={block}
-                    start={starts[i]}
-                    widthPct={(block.duration_s / total) * 100}
-                    isCurrent={isCurrentBlock(i)}
-                    locked={locked}
-                    playheadVisible={playheadVisible}
-                    playheadT={playheadT}
-                    pose={block.type === "hold" ? poseById.get(block.pose_id) : undefined}
-                    selection={selection}
-                    providers={providers}
-                    noDragRef={noDragRef}
-                    onSelectBlock={(id) => onSelect({ kind: "block", id })}
-                    onSelectMarker={(blockId, markerId) =>
-                      onSelect({ kind: "marker", blockId, markerId })
-                    }
-                    onBlockDragStart={onBlockDragStart}
-                    onBlockDoubleClick={blockDoubleClick}
-                    onTrimStart={trimStart}
-                    onMarkerDragStart={markerDragStart}
-                    onAddMarker={addMarkerOn}
-                  />
+          <div className="tl-scroll" ref={scrollRef}>
+            <div className="tl-scale" style={{ width: zoom > 1 ? `${zoom * 100}%` : "100%" }}>
+              <div className="tl-ruler" onPointerDown={scrubStart}>
+                {ticks.map((s) => (
+                  <div key={s} className="tl-tick" style={{ left: `${(s / contentTotal) * 100}%` }}>
+                    {s % labelEvery < 1e-9 && total - s >= 2 ? (
+                      <span className="num">{s}s</span>
+                    ) : null}
+                  </div>
                 ))}
+                {total > 0 ? (
+                  <div className="tl-tick end" style={{ left: "100%" }}>
+                    <span className="num">{total.toFixed(1)}s</span>
+                  </div>
+                ) : null}
+              </div>
 
-            {playheadVisible ? (
-              <div className="tl-playhead" style={{ left: `${(playheadT / total) * 100}%` }} />
-            ) : null}
+              <div
+                className="tl-track"
+                ref={trackRef}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onDragLeave={onDragLeaveTrack}
+              >
+                {blocks.length === 0 && !dropHint ? (
+                  emptyState
+                ) : (
+                  <>
+                    {blocks.map((block, i) => (
+                      <Fragment key={block.id}>
+                        {dropHint?.index === i ? (
+                          <div
+                            className="tl-ghost"
+                            style={{ width: `${(DEFAULT_HOLD_S / contentTotal) * 100}%` }}
+                          />
+                        ) : null}
+                        <TrackBlock
+                          block={block}
+                          start={starts[i]}
+                          widthPct={(block.duration_s / contentTotal) * 100}
+                          isCurrent={isCurrentBlock(i)}
+                          locked={locked}
+                          playheadVisible={playheadVisible}
+                          playheadT={playheadT}
+                          pose={block.type === "hold" ? poseById.get(block.pose_id) : undefined}
+                          selection={selection}
+                          providers={providers}
+                          noDragRef={noDragRef}
+                          onSelectBlock={(id) => onSelect({ kind: "block", id })}
+                          onSelectMarker={(blockId, markerId) =>
+                            onSelect({ kind: "marker", blockId, markerId })
+                          }
+                          onBlockDragStart={onBlockDragStart}
+                          onBlockDoubleClick={blockDoubleClick}
+                          onTrimStart={trimStart}
+                          onMarkerDragStart={markerDragStart}
+                          onAddMarker={addMarkerOn}
+                        />
+                      </Fragment>
+                    ))}
+                    {dropHint && dropHint.index >= blocks.length ? (
+                      <div
+                        className="tl-ghost"
+                        style={{ width: `${(DEFAULT_HOLD_S / contentTotal) * 100}%` }}
+                      />
+                    ) : null}
+                  </>
+                )}
 
-            {locked ? <div className="tl-lock">执行中 · 已锁定</div> : null}
-          </div>
+                {playheadVisible ? (
+                  <div className="tl-playhead" style={{ left: `${(playheadT / contentTotal) * 100}%` }} />
+                ) : null}
 
-          {spans.length > 0 ? (
-            <div className="tl-spans">
-              {spans.map((span) => (
-                <span
-                  key={span.key}
-                  className="tl-span"
-                  style={{ left: `${span.left}%`, width: `${span.width}%` }}
-                >
-                  {span.label}
-                </span>
-              ))}
+                {locked ? <div className="tl-lock">执行中 · 已锁定</div> : null}
+              </div>
+
+              {spans.length > 0 ? (
+                <div className="tl-spans">
+                  {spans.map((span) => (
+                    <span
+                      key={span.key}
+                      className="tl-span"
+                      style={{ left: `${span.left}%`, width: `${span.width}%` }}
+                    >
+                      {span.label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </div>
         </div>
       ) : (
         <div className="stn-wrap">
