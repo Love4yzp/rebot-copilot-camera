@@ -32,8 +32,8 @@
 |---|---|
 | **Phase** | 时间轴编辑器（三期路线见 [`docs/TIMELINE.md`](./docs/TIMELINE.md)）：v1 前端 / v2 后端迁移已落地；v3 模板向导已落地，剩真机验证 |
 | **进行中** | ① 配件区 UI 回归：配对相机 / 测快门 / 重新检测配件的按钮在前端替换时掉了（API 端点还在，组件无调用），配件区入口待设计。② 真机验证 + `docs/HARDWARE_NOTES.md` 待实测项回填（见 🚧） |
-| **上一个完成的** | `035b5fb` 部署默认值去个人化 —— `REBOT_HOST_SSH` 变为必填 |
-| **备注** | 工作区未提交：脚本更名（`start.sh`/`manage.sh` → `dev.sh`/`device.sh`）与全仓引用同步、AGENTS.md 清理（删过期缓存与日志腔、补代码地图）、TIMELINE.md 失效路径修正、README×2 同步。**追加（2026-08-11，未提交）**：`dev.sh` 收敛为两种模式 `sim`（仅前端，旧名 `mock` 保留为带警告的别名）/ `prod`（完整启动，名字沿用），README×2 与 AGENTS.md 同步；API 联调写法 `prod --no-build` 已写入 README；安全措施与启动模式无关的说明已写入 README。交互规格（模式徽标配色定稿：sim=蓝 / prod=灰阶加粗 / 臂动扫琥珀 / 断连灰阶脉冲，红绿独占不动）见 #rebot-arm thread fdf6a140，徽标实现是 task #2 |
+| **上一个完成的** | `4913802` 模式徽标（task #2）+ `7f2660e` 插件 retryable 强制显式声明（task #3）+ `9488d2a` 启动脚本更名与 sim/prod 收敛 |
+| **备注** | `dev.sh` 两种模式：`sim`（仅前端，旧名 `mock` 保留为带警告的别名）/ `prod`（完整启动）；API 联调写法 `prod --no-build`；安全措施与启动模式无关。模式徽标：sim=蓝 / prod=灰阶加粗 / 臂动扫琥珀 / 断连灰阶脉冲，红绿独占不动（规格见 #rebot-arm thread fdf6a140）。插件 `retryable` 无默认值，`check_shape` 注册前拒绝未声明的插件 |
 
 ---
 
