@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# manage.sh —— 部署脚本：每条命令都经 ssh 落到 R2x 设备上执行。
-# 在你坐着的这台机器上起服务是 ./start.sh —— 两个脚本的分界不是「做什么」，
+# device.sh —— 部署脚本：每条命令都经 ssh 落到设备上执行。
+# 在你坐着的这台机器上起服务是 ./dev.sh —— 两个脚本的分界不是「做什么」，
 # 而是代码在哪台机器上执行。
 #
 # 子命令沿用上一代服务的名字：肌肉记忆比更整齐的词汇表值钱。
 #
-#   ./manage.sh setup    一次性：uv、systemd、CAN、udev、权限组
-#   ./manage.sh enable   开机自启
-#   ./manage.sh push     构建前端 + rsync + 重启
-#   ./manage.sh logs     tail journalctl
-#   ./manage.sh open     SSH 隧道 + 开浏览器
-#   ./manage.sh run      设备上前台跑，调 print/breakpoint 用
-#   ./manage.sh status   在不在跑，跑在真臂还是模拟器上
+#   ./device.sh setup    一次性：uv、systemd、CAN、udev、权限组
+#   ./device.sh enable   开机自启
+#   ./device.sh push     构建前端 + rsync + 重启
+#   ./device.sh logs     tail journalctl
+#   ./device.sh open     SSH 隧道 + 开浏览器
+#   ./device.sh run      设备上前台跑，调 print/breakpoint 用
+#   ./device.sh status   在不在跑，跑在真臂还是模拟器上
 
 set -euo pipefail
 
@@ -58,14 +58,14 @@ cmd_setup() {
 
 	echo
 	echo "完成。权限组要退出重新登录才生效，然后："
-	echo "  ./manage.sh push && ./manage.sh enable"
+	echo "  ./device.sh push && ./device.sh enable"
 }
 
 cmd_push() {
 	# Building is local work, so it belongs to the local launcher. Keeping a
 	# second copy here would drift from it, and a drifted build step still
 	# produces a working bundle — just not the one you meant to deploy.
-	"$HERE/start.sh" build
+	"$HERE/dev.sh" build
 
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
 	# --delete keeps the remote clean, but the data directories are operator

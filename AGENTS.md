@@ -11,23 +11,24 @@
 ```bash
 git submodule update --init                  # 臂层是 submodule，漏了 import 就失败
 uv sync
-uv run pytest                                # 366 个测试
+uv run pytest
 uv run -m backend.app --sim                  # 无硬件启动，127.0.0.1:18790
 uvx ruff check backend tests
 
 cd frontend && npm install && npm run build  # 产物进 backend/static/
 cd frontend && npm run dev                   # 热更新，proxy 到 18790
 
-./start.sh prod [--sim]                      # 本机：构建前端 + 起后端，同一个源
-./start.sh mock                              # 本机：只起前端，内存 mock，无后端
-./start.sh build                             # 只构建前端（唯一所有者）
+./dev.sh prod [--sim]                        # 本机：构建前端 + 起后端，同一个源
+./dev.sh sim                                 # 本机：只起前端，内存 mock，无后端
+./dev.sh build                               # 只构建前端（唯一所有者）
+# API 联调不起前端：./dev.sh prod --no-build，/docs 即控制台。旧名 mock 是 sim 的别名，过渡期后移除。
 
-./manage.sh push                             # build + rsync + 重启（部署到设备，需先设 REBOT_HOST_SSH）
-./manage.sh status                           # 跑在真臂还是模拟器上
+./device.sh push                             # build + rsync + 重启（部署到设备，需先设 REBOT_HOST_SSH）
+./device.sh status                           # 跑在真臂还是模拟器上
 ```
 
-**区分两个脚本的是代码在哪台机器上执行**：`start.sh` 全在本机，`manage.sh` 每条命令都经 ssh 落到设备上。
-构建是本机工作，所以归 `start.sh build`，`manage.sh push` 调它 —— 抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是你要发的那个。
+**区分两个脚本的是代码在哪台机器上执行**：`dev.sh` 全在本机，`device.sh` 每条命令都经 ssh 落到设备上。
+构建是本机工作，所以归 `dev.sh build`，`device.sh push` 调它 —— 抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是你要发的那个。
 
 运动学、动力学、碰撞检查在开发机上就能跑和测（`pin` 和 `motorbridge` 在 macOS arm64 上可用），**只有 CAN 传输层需要真机**。
 
@@ -89,6 +90,7 @@ backend/
     registry.py     entry_points 发现 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
     validate.py     写入时与播放前两道校验，让错误离开 ACTING 阶段
     shutter.py      ShutterProvider —— 第一个 provider
+    check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
 
   core/
     controller.py   控制循环。闩锁在任何东西能命令臂之前检查
@@ -99,14 +101,15 @@ backend/
 
   sequences/
     models.py       Pose / EventMarker / Hold+Transition 块（判别式联合）/ Sequence / SeqTemplate
-    normalize.py    normalize 的 Python 移植（蓝本 frontend/src/timeline/model.ts），写入前必跑
+    normalize.py    normalize 的 Python 实现（TS 端是 frontend/src/timeline/model.ts），写入前必跑
     store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
-    migrate.py      v1 routines/ → v2 迁移；不删原文件（留作备份）
+    migrate.py      v1 routines/ → v2 一次性迁移，幂等；不删原文件
 
   shutter/
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
     protocol.py     行协议编解码 + LineReader
     esp32.py        串口客户端。单条在途，id 防迟到回包
+    factory.py      真板 / 模拟选择。**快门永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到；只有 --sim 拿到模拟快门
     sim.py          SimShutter，可脚本化失败
 
   api/
@@ -120,10 +123,10 @@ backend/
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
     logs.py         journalctl 包装
 
-frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，是 v2 后端移植蓝本
-frontend/mock/      `npm run dev:mock` 的内存后端。v1 起它的数据形状（poses/sequences/templates/execute）就是 v2 后端的契约
+frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 backend/sequences/normalize.py 互为双语言端
+frontend/mock/      `npm run dev:mock` 的内存后端。数据形状与后端逐字段对齐，由 golden 契约测试守卫
 frontend/contract/  golden 契约的 mock 侧 runner（esbuild 打包，node 直跑）
-contract/cases/     golden 用例文件（两批人并行开发的交接面）：REST 会话 + normalize 输入，两侧各跑一遍逐字段比对，见 tests/test_contract.py
+contract/cases/     golden 用例文件：REST 会话 + normalize 输入，两侧各跑一遍逐字段比对，见 tests/test_contract.py
 frontend/public/    自托管字体（离线设备，不能挂 CDN）
 firmware/esp32-shutter/  PlatformIO 工程
 deploy/             systemd unit ×2 + udev 规则
@@ -142,7 +145,7 @@ vendor/reBotArm_control_py/  git submodule，锁 d540405
 - `SafetyLatch` 是横切闩锁，**不是模式机里的模式**（做成模式的话每加一个模式都要重审所有切换是否会绕过它）
 
 **动作绝不跑在控制循环上**
-provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒）。executor **投递 + 每 tick 轮询**，实际执行在 `backend/actions/runner.py` 的 worker 线程上。曾经不是这样：一条慢快门把 tick 间隔拉到 619ms，越过 watchdog 的 0.5s 宽限 → **急停触发，整轮拍摄中止**。一台仅仅是慢的相机，看起来和丢了臂一模一样。
+provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒），而控制循环正是撑住臂的东西。executor **投递 + 每 tick 轮询**，实际执行在 `backend/actions/runner.py` 的 worker 线程上。一条慢快门曾把 tick 间隔拖过 watchdog 宽限触发急停 —— 一台仅仅是慢的相机，看起来和丢了臂一模一样。
 
 **插件够不到臂**
 `ActionContext` 只给只读姿态，没有 arm 句柄。这和「闩锁不进 executor」是同一手法 —— 让错的事**够不到**，而不只是禁止。要加运动能力给插件之前，先读 `docs/PLUGINS.md` 里「为什么触发源不是插件」。
@@ -150,13 +153,13 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 **运动闸门**
 任何会让臂动的端点必须挂 `dependencies=[Depends(require_arm_available)]`。`tests/test_motion_gate.py` 遍历路由表，未挂闸门又没在 `NON_MOTION_ROUTES` 里写明理由的端点会让测试失败。**这是设计**：新增运动端点必须做一个显式决定。
 
-那条测试还有一层守卫 —— FastAPI 0.141 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍历一个端点都看不见，测试会永远空转通过。所以另有一条 OpenAPI 交叉校验，下次 FastAPI 改内部结构会大声失败而不是静默失效。**别删那条。**
+FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍历一个端点都看不见，测试会永远空转通过 —— 所以那条测试有递归候选加 OpenAPI 交叉校验两层守卫，下次 FastAPI 改内部结构会大声失败而不是静默失效。**别删交叉校验。**
 
 **时间**
 任何测试里不出现 `time.sleep`。时钟统一走可注入接口。执行器、闩锁、看门狗、浮动/锁定、串口客户端全部接受 `clock` 参数。
 
 **`0.0` 是假值**
-时间戳、角度、下标做判空一律用 `is None`，不要用真值判断。Agent 租约就栽在 `or now` 上 —— 时间戳恰好为 0 时所有间隔算成零、租约永不过期，而真实时钟极少读到 0，这种 bug 会潜伏很久。
+时间戳、角度、下标做判空一律用 `is None`，不要用真值判断。Agent 租约就栽在 `or now` 上：时间戳恰好为 0 时所有间隔算成零、租约永不过期。
 
 **界面的颜色是状态通道，不是调色板**
 底盘全灰阶。整套界面只有四个彩色，各自独占一个机器状态，**任何一个都不许拿去做强调、选中、品牌或装饰**：
@@ -168,13 +171,13 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 | `--ready` 绿 | 到位、保持 |
 | `--expose` 白 | 快门触发 |
 
-看起来最顺手的那件事 —— 给主按钮一个品牌蓝、给选中态一个 accent —— 正是要避免的：颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。需要强调时用灰阶层级、字重、尺寸。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
+需要强调时用灰阶层级、字重、尺寸 —— 颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
 
 **界面不许猜臂在哪**
-锚点卡的「已到位」只能由 `phase === "done"` 点亮。三个已经踩过的坑：`phase` 为空**不等于**到位；controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，所以陈旧的 `done` 不能当作新点击的答复；急停或进入示教后必须立刻作废「已到位」—— 臂被冻在别处或即将被人推走。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
+「已到位」只能由 `phase === "done"` 点亮，且只在 done 的上升沿认领 —— controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，陈旧的 `done` 不能当作新点击的答复。急停、进入示教、开始新一次执行都必须立刻作废「已到位」—— 臂被冻在别处、即将被人推走、或已在路上。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
 
 **急停在栈顶**
-`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式，而它以前恰好被自己的遮罩挡住了。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
 
 **技能体系只用 [mattpocock/skills](https://github.com/mattpocock/skills)**
 今后新增技能一律从 mattpocock/skills 构建；已有的 `threejs-*` 参考技能保留。
@@ -189,7 +192,7 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 
 `SimArm` 和 `SimShutter` 是一等公民而非测试边角料 —— 它们同时是无硬件开发循环的基础设施，两者都支持注入失败。
 
-**前后端契约是机器校验的，不是手工对齐的。** `tests/test_contract.py` 把 `contract/cases/` 里每个 golden 用例在 FastAPI TestClient 和 mock（`frontend/mock/api.ts`）上各跑一遍、逐字段比对；normalize 用例同时跑 TS（`frontend/src/timeline/model.ts`）与 Python（`backend/sequences/normalize.py`）。改任一侧的响应形状或 normalize 规则，先跑它。归一化规则（null≈缺字段、12-hex 即 id、≥1e9 即时间戳、volatile 键）在 `tests/test_contract.py` 与 `frontend/contract/mock-driver.ts` 的 docstring 里各有一份 —— 这是刻意抄的两份（两种语言各执一端），改规则必须两侧同步。新增用例 = 往 `contract/cases/` 丢一个 JSON。本地缺 node 或 `frontend/node_modules` 时该文件整体 skip；CI（`.github/workflows/ci.yml`）两者都装。
+**前后端契约是机器校验的，不是手工对齐的。** `tests/test_contract.py` 把 `contract/cases/` 里每个 golden 用例在 FastAPI TestClient 和 mock（`frontend/mock/api.ts`）上各跑一遍、逐字段比对；normalize 用例同时跑 TS（`frontend/src/timeline/model.ts`）与 Python（`backend/sequences/normalize.py`）。改任一侧的响应形状或 normalize 规则，先跑它。归一化规则在 `tests/test_contract.py` 与 `frontend/contract/mock-driver.ts` 的 docstring 里各有一份 —— 这是刻意抄的两份（两种语言各执一端），改规则必须两侧同步。新增用例 = 往 `contract/cases/` 丢一个 JSON。本地缺 node 或 `frontend/node_modules` 时该文件整体 skip；CI（`.github/workflows/ci.yml`）两者都装。
 
 **碰撞测试里的姿态不是编的** —— 是在 URDF 自己的限位盒里随机采样、留下 Pinocchio 判定相撞的构型。要加新的自碰撞用例就照这个方法找，别手写一个「看起来会撞」的姿态。
 
@@ -211,16 +214,14 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 |---|---|---|
 | `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
 | [`PROGRESS.md`](./PROGRESS.md) | 状态机：现在做到哪、什么被卡住、交接协议 | 接手一个 session 时 |
-| [`README.md`](./README.md)（英文）/ [`README.zh-CN.md`](./README.zh-CN.md)（中文） | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API。项目名 **Teach & Repeat · 示教回放**；repo 目录名 `rebot-copilot-camera` 暂不改 | 要用这个服务时；用户报故障先翻它的故障排查表。改 README 时两份同步改 |
+| [`README.md`](./README.md)（英文）/ [`README.zh-CN.md`](./README.zh-CN.md)（中文） | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时；用户报故障先翻它的故障排查表。改 README 时两份同步改 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`firmware/esp32-shutter/README.md`](./firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
 | [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴编辑器设计定稿（新一版交互骨架）：块/标记模型 / 预演与执行 / 布局 / 三期路线 | 动前端界面或编排交互时 |
 | [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
 | [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份 B601-RS 主从录制/回放 demo 提炼的**物理事实与策略**（限速、插值、首尾衔接、温度保护）。那份走 LeRobot，**代码一行都不能抄，抄的是数值和「为什么必须这么做」** | 写示教录制、轨迹回放、限速/过热保护时 |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 历史设计决策记录（不再追加；当前设计模式看 ARCHITECTURE.md） | 想知道某个旧决定为什么这样时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。
 
 **每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、进度在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。
-

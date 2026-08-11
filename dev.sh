@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# start.sh —— 本机启动脚本：所有命令都在你坐着的这台机器上执行。
-# 部署到 R2x 设备是另一个脚本 ./manage.sh —— 两个脚本的分界不是「做什么」，
+# dev.sh —— 本机开发启动脚本：所有命令都在你坐着的这台机器上执行。
+# 部署到设备是另一个脚本 ./device.sh —— 两个脚本的分界不是「做什么」，
 # 而是代码在哪台机器上执行。
 #
-#   ./start.sh prod [--sim] [--no-build] [--host H] [--port N]
-#                    构建前端 + 起后端，同一个源；无硬件加 --sim
-#   ./start.sh mock  只起前端，内存 mock，无后端
-#   ./start.sh build 只构建前端，产物进 backend/static/
+# 日常只有两种模式：
+#   ./dev.sh sim   只起前端，内存 mock，无后端 —— 看界面、前端开发
+#   ./dev.sh prod [--sim] [--no-build] [--host H] [--port N]
+#                  production：构建前端 + 起后端，同一个源；无硬件加 --sim（模拟臂）。
+#                  后端的安全措施（急停闩锁 / 运动闸门 / 看门狗）与启动方式
+#                  无关，任何模式都在。
+#   ./dev.sh build 只构建前端，产物进 backend/static/
 #
-# prod 和 mock 跑在前台，Ctrl-C 停。
+# API 联调不起前端：./dev.sh prod --no-build（需已 build 过一次），/docs 即控制台。
+# sim 和 prod 跑在前台，Ctrl-C 停。不带参数只打印本说明，不默认启动。
+# 旧名别名（过渡期，择机移除）：mock → sim。
 #
-# build 归这里而不是 manage.sh：构建是本机工作。manage.sh push 调它，
+# build 归这里而不是 device.sh：构建是本机工作。device.sh push 调它，
 # 构建步骤就只有一个所有者 —— 抄第二份会漂移，而漂移掉的那份照样产出
 # 一个能跑的 bundle，只是不是你要发的那个。
 
@@ -93,10 +98,10 @@ cmd_prod() {
 	exec env LANG="${LANG:-zh_CN.UTF-8}" uv run -m backend.app "$@"
 }
 
-cmd_mock() {
+cmd_sim() {
 	require_submodule
 
-	step "[本机] 启动 mock 前端"
+	step "[本机] 启动 sim 前端（内存 mock，无后端）"
 	# `vite --mode mock` drops the backend proxy and mounts mock/plugin.ts, which
 	# answers /api and /ws from in-memory state and serves the URDF out of the
 	# submodule. No backend, no python, no arm. The mock is hand-aligned with the
@@ -104,6 +109,10 @@ cmd_mock() {
 	npm_install
 	cd "$HERE/frontend"
 	exec npm run dev:mock -- "$@"
+}
+
+deprecated() {
+	echo "warning: './dev.sh $1' 已更名为 './dev.sh $2'，别名过渡期后移除" >&2
 }
 
 case "${1:-}" in
@@ -120,9 +129,10 @@ prod)
 	export NO_BUILD
 	cmd_prod ${args+"${args[@]}"}
 	;;
-mock)
+sim | mock)
+	[ "$1" = mock ] && deprecated mock sim
 	shift
-	cmd_mock "$@"
+	cmd_sim "$@"
 	;;
 build) cmd_build ;;
 help | -h | --help) usage ;;

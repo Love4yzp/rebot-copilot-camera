@@ -14,7 +14,7 @@ drag → release → record → ordered waypoints + actions → arrive → settl
 
 The first deployment is automated multi-view photography: a reBot-RS six-axis arm holds a Canon camera, the subject stays put. Photos land on the camera's SD card — this project only drives the arm to the pose and presses the shutter.
 
-> Software complete, 252 tests; two on-hardware checks pending. Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors).
+> Software complete, 386 tests; two on-hardware checks pending. Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors).
 
 ---
 
@@ -59,9 +59,9 @@ Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, w
 Frontend work: `cd frontend && npm run dev` (hot reload, proxies to 18790).
 Tests: `uv run pytest`.
 
-`./start.sh` wraps the two ways to launch it locally — `./start.sh prod` builds the frontend and runs the backend on one origin (add `--sim` for no hardware), `./start.sh mock` runs the frontend alone. Deployment to the device is a different script, `./manage.sh`.
+`./dev.sh` wraps the two local modes — `./dev.sh prod` builds the frontend and runs the backend on one origin (add `--sim` for no hardware), `./dev.sh sim` runs the frontend alone. API integration without the frontend: `./dev.sh prod --no-build`, `/docs` is the console (requires the frontend to have been built once). The old name `mock` still works as an alias for `sim`, slated for removal. **Whatever the mode, the backend's arm safety measures (estop latch / motion gate / watchdog) are always on.** Deployment to the device is a different script, `./device.sh` — see "Deploy to the R2x"; daily use never touches it.
 
-**Preview the frontend without the backend**: `./start.sh mock`, or `cd frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
+**Preview the frontend without the backend**: `./dev.sh sim`, or `cd frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
 
 ---
 
@@ -163,7 +163,7 @@ Besides the human button, a watchdog triggers automatically: the control loop pe
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
 
 CLI: `--sim` / `--host` / `--port`.
-`manage.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
+`device.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
 
 **Retune after mounting the camera** (in code, covered by tests):
 
@@ -177,25 +177,25 @@ CLI: `--sim` / `--host` / `--port`.
 
 ## Deploy to the R2x
 
-Point `manage.sh` at your device first — no target is baked in:
+Point `device.sh` at your device first — no target is baked in:
 
 ```bash
 export REBOT_HOST_SSH=recomputer@<device-ip>   # `recomputer` is the reComputer factory-default user
 
-./manage.sh setup     # once: uv + systemd + CAN + udev + groups
-./manage.sh push      # after changes: build frontend + rsync + restart
-./manage.sh enable    # start on boot
-./manage.sh status    # running? real arm or simulator?
-./manage.sh logs      # tail journalctl
-./manage.sh open      # SSH tunnel + open browser
-./manage.sh run       # foreground, for print/breakpoint debugging
+./device.sh setup     # once: uv + systemd + CAN + udev + groups
+./device.sh push      # after changes: build frontend + rsync + restart
+./device.sh enable    # start on boot
+./device.sh status    # running? real arm or simulator?
+./device.sh logs      # tail journalctl
+./device.sh open      # SSH tunnel + open browser
+./device.sh run       # foreground, for print/breakpoint debugging
 ```
 
 **No auth layer**, and this service moves a 48V arm. Two deployment shapes:
 
 **Localhost only (default, the unit in this repo)**
 
-The service listens on `127.0.0.1`; remote access goes through an SSH tunnel: `./manage.sh open` builds the tunnel and opens the browser. Right for networks you don't trust.
+The service listens on `127.0.0.1`; remote access goes through an SSH tunnel: `./device.sh open` builds the tunnel and opens the browser. Right for networks you don't trust.
 
 **LAN access (common on a reComputer)**
 
@@ -218,8 +218,8 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Arm won't drag | teach not on, or estop latched | with teach on the arm **starts holding** — push it once to release. Design, not stuck |
 | Shutter self-test passes, nothing shot during play | the camera declined or went to sleep — `camera: true` says it was paired when asked, not that it will answer | test the whole chain with `?shoot=true`. Usual causes: camera asleep, Bluetooth not set to "remote control", or the board rebooted and lost its pairing (re-pair with `POST /api/shutter/pair`) |
 | Host receives nothing from the ESP32 at all | `platformio.ini` missing `-D ARDUINO_USB_CDC_ON_BOOT=1` | add it and reflash. Without it `Serial` goes to the UART0 pins: the board enumerates, the port opens, writes succeed — **no error anywhere in the chain** |
-| `/api/logs` is empty | service account not in the `systemd-journal` group | `./manage.sh setup` adds it; log in again after |
-| Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `manage.sh run` both set `LANG=zh_CN.UTF-8` |
+| `/api/logs` is empty | service account not in the `systemd-journal` group | `./device.sh setup` adds it; log in again after |
+| Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `device.sh run` both set `LANG=zh_CN.UTF-8` |
 | Arm suddenly stopped on its own | watchdog-triggered estop | reason is on the estop bar. All three conditions require **sustained** failure — a jitter or a dropped frame won't trigger |
 | 3D blank in the frontend | URDF / meshes not loaded | the drawer says "load failed" / "mesh missing" / "3D failed to initialise" — follow that line. Most common: submodule not pulled, `git submodule update --init`. Self-check: `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` should return 200 — note meshes live at the **package root**, not under `urdf/` |
 | Never lights green (in place) | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — "去这里" any pose or run the sequence again |

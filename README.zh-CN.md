@@ -14,7 +14,7 @@
 
 第一个落地场景是自动化多视角拍摄：reBot-RS 六轴臂夹佳能相机，被拍物体固定不动。照片留在相机 SD 卡里 —— 本项目只管把臂开到位、把快门按下去。
 
-> 软件已完成，252 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
+> 软件已完成，386 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
 
 ---
 
@@ -59,9 +59,9 @@ uv run -m backend.app --sim
 改前端：`cd frontend && npm run dev`（热更新，自动 proxy 到 18790）。
 跑测试：`uv run pytest`。
 
-`./start.sh` 把本机两种启动方式包了起来 —— `./start.sh prod` 构建前端并起后端，同一个源（无硬件加 `--sim`）；`./start.sh mock` 只起前端。部署到设备是另一个脚本 `./manage.sh`。
+`./dev.sh` 把本机启动包成两种模式 —— `./dev.sh prod` 构建前端并起后端，同一个源（无硬件加 `--sim`）；`./dev.sh sim` 只起前端。API 联调不起前端：`./dev.sh prod --no-build`，/docs 即控制台（需已构建过一次前端）。旧名 `mock` 仍是 `sim` 的别名，过渡期后移除。**不管哪种模式，后端控臂的安全措施（急停闩锁 / 运动闸门 / 看门狗）都在。** 部署到设备是另一个脚本 `./device.sh`，见「部署到 R2x」一节，日常使用不需要它。
 
-**不启动后端也能预览前端**：`./start.sh mock`，或 `cd frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
+**不启动后端也能预览前端**：`./dev.sh sim`，或 `cd frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
 
 ---
 
@@ -163,7 +163,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 
 命令行：`--sim` / `--host` / `--port`。
-`manage.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
+`device.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
 
 **挂上相机后要重调的**（都在代码里，有测试兜着）：
 
@@ -177,25 +177,25 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 ## 部署到 R2x
 
-先把 `manage.sh` 指向你的设备 —— 仓库不含任何内置目标：
+先把 `device.sh` 指向你的设备 —— 仓库不含任何内置目标：
 
 ```bash
 export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出厂默认用户
 
-./manage.sh setup     # 一次性：uv + systemd + CAN + udev + 权限组
-./manage.sh push      # 改完代码：build 前端 + rsync + 重启
-./manage.sh enable    # 开机自启
-./manage.sh status    # 在不在跑，跑在真臂还是模拟器上
-./manage.sh logs      # tail journalctl
-./manage.sh open      # SSH 隧道 + 开浏览器
-./manage.sh run       # 前台跑，调 print/breakpoint 用
+./device.sh setup     # 一次性：uv + systemd + CAN + udev + 权限组
+./device.sh push      # 改完代码：build 前端 + rsync + 重启
+./device.sh enable    # 开机自启
+./device.sh status    # 在不在跑，跑在真臂还是模拟器上
+./device.sh logs      # tail journalctl
+./device.sh open      # SSH 隧道 + 开浏览器
+./device.sh run       # 前台跑，调 print/breakpoint 用
 ```
 
 **没有认证层**，而这个服务能让一条 48V 的臂动起来。两种部署方式：
 
 **仅本机访问（默认，仓库里 unit 的配置）**
 
-服务只听 `127.0.0.1`，外部走 SSH 隧道：`./manage.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。
+服务只听 `127.0.0.1`，外部走 SSH 隧道：`./device.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。
 
 **局域网访问（reComputer 上的常见形态）**
 
@@ -218,8 +218,8 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 | 臂拖不动 | 没开示教，或急停闩着 | 示教开着时臂**起手是握持的**，推一下才放开 —— 这是设计不是卡住 |
 | 快门自检通过，播放时拍不到 | 相机睡了或拒绝了 —— `camera: true` 只说明问的那一刻它连着 | 用 `?shoot=true` 测整条链路。一般是相机睡了、蓝牙没设成「遥控」、或板子重启丢了配对（用 `POST /api/shutter/pair` 重配）|
 | 主机完全收不到 ESP32 任何数据 | `platformio.ini` 少了 `-D ARDUINO_USB_CDC_ON_BOOT=1` | 加上重烧。少了它 `Serial` 走 UART0 引脚，板子照常枚举、端口能开、写入都成功，**全链路无一处报错** |
-| `/api/logs` 是空的 | 服务账号不在 `systemd-journal` 组 | `./manage.sh setup` 会加，加完要重新登录 |
-| journalctl 里中文变 `?` | systemd 默认 `LANG=C` | unit 和 `manage.sh run` 都已设 `LANG=zh_CN.UTF-8` |
+| `/api/logs` 是空的 | 服务账号不在 `systemd-journal` 组 | `./device.sh setup` 会加，加完要重新登录 |
+| journalctl 里中文变 `?` | systemd 默认 `LANG=C` | unit 和 `device.sh run` 都已设 `LANG=zh_CN.UTF-8` |
 | 臂突然自己停了 | 看门狗触发的急停 | 急停条上有原因。三个条件都要求**持续**，抖一下、丢一帧不会触发 |
 | 前端 3D 空白 | URDF / mesh 没加载 | 抽屉里会写明是「加载失败」「网格缺失」还是「3D 无法初始化」，照着那句查。最常见是 submodule 没拉：`git submodule update --init`。自查 `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` 应返 200 —— 注意 mesh 在**包根**下，不在 `urdf/` 里 |
 | 一直不亮绿（到位） | 臂被急停或示教动过 | 这是对的。臂被冻在别处或被人推走之后，界面不再声称知道它在哪 —— 对任意位姿「去这里」或重跑一次即可 |

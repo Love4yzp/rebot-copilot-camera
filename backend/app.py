@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 
 from contextlib import asynccontextmanager
@@ -125,6 +126,7 @@ def health() -> dict:
         "status": "ok",
         "version": __version__,
         "uptime_s": round(time.time() - STARTED_AT, 3),
+        "mode": "sim" if app.state.simulated else "prod",
         "estop": {
             "latched": latch.latched,
             "reason": latch.reason,
@@ -180,6 +182,12 @@ def main() -> None:
     # shutter reports every frame as fired, and an operator who walks a whole
     # set on that finds out when they review it. See backend/shutter/factory.
     shutter, shutter_simulated = create_shutter(force_sim=args.sim)
+
+    # When the service is in sim mode, make the turntable plugin use its
+    # in-process simulator too. The plugin decides between hardware and sim
+    # by reading TURNTABLE_PORT at import time, so we set it before discovery.
+    if args.sim:
+        os.environ.setdefault("TURNTABLE_PORT", "sim")
     app.state.shutter_simulated = shutter_simulated
     app.state.controller.set_shutter(shutter)
     # replace=True because the built-in registered at import time is being swapped

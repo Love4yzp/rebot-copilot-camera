@@ -78,7 +78,7 @@
 
 ## 插件的位置
 
-插件体系(entry_points 发现、runner 隔离、三道校验、FieldSpec 三控件 manifest,见 [`PLUGINS.md`](./PLUGINS.md))**原样继承**,变的只是动作的家:从 `waypoint.actions` 有序列表搬到**块内标记**。标记的参数编辑面板仍由 provider 的 manifest 渲染。动作依然是瞬发触发 —— 「持续」由设备自己维持(边运动边录 = 开录/停录两个标记夹住一个过渡块),**工作流线性的既定决策不破**(`backend/routines/models.py` 开头)。
+插件体系(entry_points 发现、runner 隔离、三道校验、FieldSpec 三控件 manifest,见 [`PLUGINS.md`](./PLUGINS.md))**原样继承**,变的只是动作的家:从 `waypoint.actions` 有序列表搬到**块内标记**。标记的参数编辑面板仍由 provider 的 manifest 渲染。动作依然是瞬发触发 —— 「持续」由设备自己维持(边运动边录 = 开录/停录两个标记夹住一个过渡块),**工作流线性的既定决策不破**(`backend/sequences/models.py` 开头)。
 
 ## 沿袭的既有约定(不因重构改变)
 
