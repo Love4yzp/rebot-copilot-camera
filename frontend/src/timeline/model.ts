@@ -251,6 +251,50 @@ export function poseAtTime(blocks: Block[], poses: PoseMap, t: number): Record<s
   return out;
 }
 
+// ── approach (first-block) helpers ─────────────────────────────────────────────
+//
+// These constants mirror backend/core/executor.py:
+//   DEFAULT_APPROACH_S  = 2.0
+//   FIRST_APPROACH_MAX_SPEED = 0.25
+// They are deliberately duplicated (the repo already has this pattern for
+// normalize rules in model.ts vs normalize.py).  Keep them in sync.
+
+/** Base duration for the approach to the first block's pose. */
+export const DEFAULT_APPROACH_S = 2.0;
+/** Ceiling on joint speed for the approach to the first pose, rad/s. */
+export const FIRST_APPROACH_MAX_SPEED = 0.25;
+
+/** Largest single-joint delta between two poses (rad). */
+export function maxJointDelta(
+  from: Record<string, number>,
+  to: Record<string, number>,
+): number {
+  let max = 0;
+  for (const joint of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    const a = from[joint] ?? 0;
+    const b = to[joint] ?? 0;
+    const d = Math.abs(b - a);
+    if (d > max) max = d;
+  }
+  return max;
+}
+
+/** Linear (constant-speed) interpolation between two pose maps. */
+export function lerpPose(
+  from: Record<string, number>,
+  to: Record<string, number>,
+  t: number,
+): Record<string, number> {
+  const k = Math.max(0, Math.min(1, t));
+  const out: Record<string, number> = {};
+  for (const joint of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    const a = from[joint] ?? 0;
+    const b = to[joint] ?? 0;
+    out[joint] = a + (b - a) * k;
+  }
+  return out;
+}
+
 /** Absolute playback time from a SeqPlayback frame, clamped to the ruler. */
 export function playbackAbsTime(
   blocks: Block[],

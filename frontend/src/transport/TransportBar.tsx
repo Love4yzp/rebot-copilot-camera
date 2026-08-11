@@ -14,6 +14,12 @@ interface Props {
   onExecute: () => void;
   onStop: () => void;
   onResume: () => void;
+  /** The arm is far from the first station — show "去起点" instead of "执行". */
+  far: boolean;
+  /** Callback for the "去起点" button. */
+  onGoToStart: () => void;
+  /** True when executing, approaching, and on block 0 — show "接近起点…". */
+  showApproaching: boolean;
 }
 
 function timecode(t: number, total: number): string {
@@ -46,12 +52,18 @@ export function TransportBar({
   onExecute,
   onStop,
   onResume,
+  far,
+  onGoToStart,
+  showApproaching,
 }: Props) {
   const waiting = preview.waiting || playback?.phase === "wait";
 
   let previewLabel = "▶ 预演";
   let previewDisabled = false;
   if (latched || executing) {
+    previewDisabled = true;
+  } else if (preview.approaching) {
+    previewLabel = "预演 · 接近起点…";
     previewDisabled = true;
   } else if (preview.waiting) {
     previewLabel = "预演 · 等待中";
@@ -68,11 +80,14 @@ export function TransportBar({
     else preview.start();
   };
 
-  const execLabel = executing
-    ? playback?.phase === "wait"
-      ? "执行中 · 等待"
-      : "执行中…"
-    : "执行（臂会动）";
+  const execLabel = (() => {
+    if (executing && showApproaching) return "接近起点…";
+    if (executing) return playback?.phase === "wait" ? "执行中 · 等待" : "执行中…";
+    if (far) return "去起点";
+    return "执行（臂会动）";
+  })();
+
+  const execClick = far && !executing ? onGoToStart : onExecute;
 
   return (
     <div className="transport">
@@ -82,8 +97,8 @@ export function TransportBar({
       <button
         type="button"
         className="touch-target transport__exec"
-        disabled={latched || executing || !canExecute || total === 0}
-        onClick={onExecute}
+        disabled={latched || executing || !canExecute || (!far && total === 0)}
+        onClick={execClick}
       >
         {execLabel}
       </button>

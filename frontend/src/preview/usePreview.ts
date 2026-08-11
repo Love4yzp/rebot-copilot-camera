@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Block } from "../types";
-import { markerSchedule, poseAtTime, sequenceDuration } from "../timeline/model";
+import type { RefObject } from "react";
+import type { Block, HoldBlock } from "../types";
+import {
+  DEFAULT_APPROACH_S,
+  FIRST_APPROACH_MAX_SPEED,
+  lerpPose,
+  markerSchedule,
+  maxJointDelta,
+  poseAtTime,
+  sequenceDuration,
+} from "../timeline/model";
 import type { PoseMap, ScheduledMarker } from "../timeline/model";
 
 export interface PreviewApi {
@@ -9,6 +18,8 @@ export interface PreviewApi {
   playing: boolean;
   /** Suspended on a wait marker until 继续. */
   waiting: boolean;
+  /** Approaching the first station from the arm's current position. */
+  approaching: boolean;
   /** Playhead position on the plan ruler, seconds. */
   t: number;
   /** The plan pose at `t` — null while no session is engaged. */
@@ -35,10 +46,17 @@ export interface PreviewApi {
  * root `previewing` class (applied by App while `active`) keeps the whole
  * interface on the grey ramp for the session's lifetime.
  */
-export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
+export function usePreview(
+  blocks: Block[],
+  poses: PoseMap,
+  approachFromRef?: RefObject<Record<string, number> | null>,
+): PreviewApi {
   const [active, setActive] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [approaching, setApproaching] = useState(false);
+  /** Approach progress 0..1, drives linear interpolation for the pose. */
+  const [approachP, setApproachP] = useState(0);
   const [t, setT] = useState(0);
 
   const total = useMemo(() => sequenceDuration(blocks), [blocks]);
@@ -46,6 +64,11 @@ export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
     () => markerSchedule(blocks).filter((s) => s.marker.kind === "wait"),
     [blocks],
   );
+
+  // Snapshots captured at start() time so edits don't change the approach mid-run.
+  const approachFrom_ = useRef<Record<string, number> | null>(null);
+  const approachDuration_ = useRef(0);
+  const approachElapsed_ = useRef(0);
 
   // The rAF loop reads through refs so an edit never restarts it mid-run, and
   // tRef mirrors the playhead so the tick computes outside React updaters.
@@ -66,8 +89,11 @@ export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
     setActive(false);
     setPlaying(false);
     setWaiting(false);
+    setApproaching(false);
+    setApproachP(0);
     setPlayhead(0);
     consumed.current.clear();
+    approachElapsed_.current = 0;
   }, [setPlayhead]);
 
   const start = useCallback(() => {
@@ -75,9 +101,33 @@ export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
     consumed.current.clear();
     setPlayhead(0);
     setWaiting(false);
+
+    // Check whether a visible approach (arm → first station) is needed.
+    // Only start() triggers approach; seek/resume skip it.
+    const raw = approachFromRef?.current ?? null;
+    const firstHold = blocks.find((b): b is HoldBlock => b.type === "hold");
+    if (raw && firstHold) {
+      const to = poses[firstHold.pose_id];
+      if (to) {
+        const delta = maxJointDelta(raw, to);
+        if (delta > 0.01) {
+          const duration = Math.max(DEFAULT_APPROACH_S, delta / FIRST_APPROACH_MAX_SPEED);
+          approachFrom_.current = raw;
+          approachDuration_.current = duration;
+          approachElapsed_.current = 0;
+          setApproachP(0);
+          setApproaching(true);
+          setActive(true);
+          setPlaying(false);
+          return;
+        }
+      }
+    }
+
+    // No approach needed — start normal playback immediately.
     setActive(true);
     setPlaying(true);
-  }, [setPlayhead]);
+  }, [setPlayhead, approachFromRef, blocks, poses]);
 
   const pause = useCallback(() => setPlaying(false), []);
 
@@ -95,6 +145,9 @@ export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
   const seek = useCallback(
     (next: number) => {
       const clamped = Math.min(Math.max(next, 0), totalRef.current);
+      // Scrubbing lands on the plan ruler directly — the approach pre-roll is
+      // a start-of-run thing, not a point on the ruler, so a seek cancels it.
+      setApproaching(false);
       setPlayhead(clamped);
       setWaiting(false);
       setActive(true);
@@ -148,10 +201,52 @@ export function usePreview(blocks: Block[], poses: PoseMap): PreviewApi {
     return () => cancelAnimationFrame(raf);
   }, [playing, setPlayhead]);
 
-  const pose = useMemo(
-    () => (active && total > 0 ? poseAtTime(blocks, poses, t) : null),
-    [active, total, blocks, poses, t],
-  );
+  // ── approach rAF loop ──────────────────────────────────────────────────────
+  // Runs when approaching is true.  Steps the elapsed time forward and updates
+  // approachP; when the duration is reached, transitions to normal playback.
+  useEffect(() => {
+    if (!approaching) return;
+    let raf = 0;
+    let last: number | null = null;
 
-  return { active, playing, waiting, t, pose, start, pause, resume, stop, seek, continueWait };
+    const tick = (ts: number) => {
+      if (last === null) last = ts;
+      const dt = Math.min((ts - last) / 1000, 0.25);
+      last = ts;
+
+      const elapsed = approachElapsed_.current + dt;
+      approachElapsed_.current = elapsed;
+      const dur = approachDuration_.current;
+
+      if (elapsed >= dur) {
+        // Approach complete — start normal playback from t=0.
+        setApproaching(false);
+        setApproachP(0);
+        setPlayhead(0);
+        setPlaying(true);
+        return;
+      }
+
+      setApproachP(elapsed / dur);
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [approaching, setPlayhead]);
+
+  const pose = useMemo(() => {
+    if (!active || total <= 0) return null;
+    if (approaching) {
+      const from = approachFrom_.current;
+      const firstHold = blocks.find((b): b is HoldBlock => b.type === "hold");
+      if (from && firstHold) {
+        const to = poses[firstHold.pose_id];
+        if (to) return lerpPose(from, to, approachP);
+      }
+    }
+    return poseAtTime(blocks, poses, t);
+  }, [active, total, blocks, poses, t, approaching, approachP]);
+
+  return { active, playing, waiting, approaching, t, pose, start, pause, resume, stop, seek, continueWait };
 }

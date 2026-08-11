@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
-import type { AppMode, Block, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
+import type { AppMode, Block, HoldBlock, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
 import { useControlSocket } from "./useControlSocket";
 import { usePreview } from "./preview/usePreview";
-import { makeHold, markerSchedule, playbackAbsTime, sequenceDuration } from "./timeline/model";
+import { makeHold, markerSchedule, maxJointDelta, playbackAbsTime, sequenceDuration } from "./timeline/model";
 import { EstopBar } from "./components/EstopBar";
 import { LogDrawer } from "./components/LogDrawer";
 import { TallyRail } from "./components/TallyRail";
@@ -28,6 +28,11 @@ const TRACK_DENSITY_KEY = "rebot:track-density";
 
 /** A shutter marker reads as a white flash for this long after crossing. */
 const SHUTTER_FLASH_S = 0.5;
+
+/** UX threshold: max single-joint delta above which the transport shows "去起点"
+ * instead of "执行".  ≈17°.  This is a UI classification threshold, separate
+ * from the backend's approach speed limit (executor FIRST_APPROACH_MAX_SPEED). */
+const APPROACH_FAR_RAD = 0.3;
 
 function Workspace() {
   const { state, playback, connected } = useControlSocket();
@@ -71,7 +76,14 @@ function Workspace() {
     [poses],
   );
 
-  const preview = usePreview(blocks, poseMap);
+  // The arm's live pose in a ref: the preview snapshots it at start() to play
+  // the approach, and ws updates must not restart the session mid-run.
+  const approachFromRef = useRef<Record<string, number> | null>(null);
+  useEffect(() => {
+    if (state?.positions) approachFromRef.current = state.positions;
+  }, [state?.positions]);
+
+  const preview = usePreview(blocks, poseMap, approachFromRef);
 
   const mode = state?.mode ?? null;
   const latched = state?.estop.latched ?? false;
@@ -85,6 +97,28 @@ function Workspace() {
    */
   const runningSequence = executing && playback?.sequence_id === sequence?.id;
   const total = sequenceDuration(blocks);
+
+  // ── distance-graded execution ("去起点" vs "执行") ──────────────────────────
+
+  /** The first hold block's pose object, for the "去起点" feature. */
+  const firstHoldPose = useMemo<Pose | undefined>(() => {
+    if (!sequence) return undefined;
+    const firstHold = blocks.find((b): b is HoldBlock => b.type === "hold");
+    if (!firstHold) return undefined;
+    return poses.find((p) => p.id === firstHold.pose_id);
+  }, [blocks, poses]);
+
+  /** Max single-joint delta from current position to the first station's pose. */
+  const maxDelta = useMemo<number>(() => {
+    if (!firstHoldPose || !state?.positions) return 0;
+    return maxJointDelta(state.positions, firstHoldPose.joints);
+  }, [firstHoldPose, state?.positions]);
+
+  /** The arm is far from the first station — show "去起点" instead of "执行". */
+  const far = sequence !== null && !executing && maxDelta > APPROACH_FAR_RAD;
+
+  /** True during execution on block 0 while the arm is still approaching. */
+  const showApproaching = executing && !!playback?.approaching && playback.block_index === 0;
 
   /**
    * The green 到位 claim is per-run, not a property of the last broadcast
@@ -319,6 +353,13 @@ function Workspace() {
     [latched, executing, show],
   );
 
+  /** Send the arm to the first station's pose, stopping preview first. */
+  const goToStart = useCallback(() => {
+    if (!firstHoldPose) return;
+    if (preview.active) preview.stop();
+    void gotoPose(firstHoldPose);
+  }, [firstHoldPose, preview, gotoPose]);
+
   // Number keys fire the first nine poses: the operator's hands are usually
   // on the camera or the arm, and the same binding takes a foot pedal.
   const posesRef = useRef(poses);
@@ -537,6 +578,9 @@ function Workspace() {
             onExecute={() => void execute()}
             onStop={stop}
             onResume={resume}
+            far={far}
+            onGoToStart={goToStart}
+            showApproaching={showApproaching}
           />
         )}
         <div className="trk-tabs" role="tablist" aria-label="编排密度">
