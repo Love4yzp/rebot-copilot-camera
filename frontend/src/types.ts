@@ -1,5 +1,24 @@
 export type Mode = "idle" | "teach" | "playback" | "estop";
 
+/** App deployment mode: sim (simulator/frontend-only) or prod (production). */
+export type AppMode = "sim" | "prod";
+
+/** Shape of `GET /api/health`. */
+export interface HealthResponse {
+  status: string;
+  version: string;
+  uptime_s: number;
+  mode: AppMode;
+  estop: EstopState;
+  shutter: { simulated: boolean };
+  arm: {
+    simulated: boolean;
+    urdf: string;
+    end_effector_frame: string;
+    joints: string[];
+  };
+}
+
 /**
  * One control in the marker inspector, as described by the provider.
  *

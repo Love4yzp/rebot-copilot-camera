@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
-import type { Block, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
+import type { AppMode, Block, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
 import { useControlSocket } from "./useControlSocket";
 import { usePreview } from "./preview/usePreview";
 import { markerSchedule, playbackAbsTime, sequenceDuration } from "./timeline/model";
@@ -29,6 +29,7 @@ function Workspace() {
   const { state, playback, connected } = useControlSocket();
   const { attempt, show } = useToast();
 
+  const [appMode, setAppMode] = useState<AppMode | null>(null);
   const [poses, setPoses] = useState<Pose[]>([]);
   const [summaries, setSummaries] = useState<SequenceSummary[]>([]);
   const [templates, setTemplates] = useState<SeqTemplate[]>([]);
@@ -126,6 +127,48 @@ function Workspace() {
       .then(setProviders)
       .catch(() => setProviders([]));
   }, []);
+
+  // Poll health to detect sim/prod mode. Poll every 5s while disconnected,
+  // then stop polling once we know the mode (it won't change at runtime).
+  useEffect(() => {
+    let cancelled = false;
+    let prevMode: AppMode | null = null;
+    let done = false;
+
+    const poll = async () => {
+      try {
+        const health = await api.health();
+        if (cancelled) return;
+        const mode = (health as { mode?: AppMode }).mode ?? null;
+        if (mode && mode !== prevMode) {
+          if (prevMode === "sim" && mode === "prod") {
+            show("info", "⚠️ 现在处于 PROD 模式，操作将直接驱动机械臂");
+          }
+          prevMode = mode;
+        }
+        if (mode) done = true;
+        setAppMode(mode);
+      } catch {
+        if (cancelled) return;
+        // Keep polling — the backend may not be up yet.
+      }
+    };
+
+    // Immediate first fetch, then poll every 5s until we have a mode.
+    void poll();
+    const interval = setInterval(() => {
+      if (done || cancelled) {
+        clearInterval(interval);
+        return;
+      }
+      void poll();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [show]);
 
   // Land on something usable: the sequence that was open last, else the first.
   useEffect(() => {
@@ -346,7 +389,7 @@ function Workspace() {
   return (
     <div className={`app ${preview.active ? "previewing" : ""} ${executing ? "exec" : ""}`}>
       <TallyRail state={tally} />
-      <EstopBar estop={state?.estop ?? null} mode={mode} connected={connected} />
+      <EstopBar estop={state?.estop ?? null} mode={mode} connected={connected} appMode={appMode} moving={executing} />
 
       <header className="seq-bar">
         <span className="engrave seq-bar__tag">序列</span>

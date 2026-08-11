@@ -1,12 +1,15 @@
 import { useEffect } from "react";
 import { api } from "../api";
-import type { EstopState, Mode } from "../types";
+import type { AppMode, EstopState, Mode } from "../types";
 import { useToast } from "./Toasts";
+import { ModeBadge } from "./ModeBadge";
 
 interface Props {
   estop: EstopState | null;
   mode: Mode | null;
   connected: boolean;
+  appMode: AppMode | null;
+  moving: boolean;
 }
 
 /** Machine modes, named for what the operator sees rather than what the backend calls them. */
@@ -27,7 +30,7 @@ const MODE_LABEL: Record<Mode, string> = {
  * overlay. Teach mode is exactly when the operator's hands are on the arm and
  * exactly when a sheet is open.
  */
-export function EstopBar({ estop, mode, connected }: Props) {
+export function EstopBar({ estop, mode, connected, appMode, moving }: Props) {
   const { attempt } = useToast();
   const latched = estop?.latched ?? false;
 
@@ -79,6 +82,8 @@ export function EstopBar({ estop, mode, connected }: Props) {
           </>
         )}
       </div>
+
+      <ModeBadge mode={appMode} moving={moving} connected={connected} />
 
       <span className="mode-chip" data-mode={mode ?? "idle"}>
         {mode ? MODE_LABEL[mode] : "—"}
