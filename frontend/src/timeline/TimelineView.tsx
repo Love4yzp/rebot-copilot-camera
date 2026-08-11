@@ -10,27 +10,32 @@ import {
   sequenceDuration,
 } from "./model";
 import { markerIcon, markerKindOptions, markerLabel, newMarkerOfKind } from "./markers";
+import { TrackBlock } from "./TrackBlock";
+import { StationCard } from "./StationCard";
+import { StationConnector } from "./StationConnector";
+import type { Selection } from "./selection";
 import type { PreviewApi } from "../preview/usePreview";
 import { Dialog } from "../components/Dialog";
 import { POSE_MIME } from "../library/LibraryPanel";
 
-export type Selection =
-  | { kind: "block"; id: string }
-  | { kind: "marker"; blockId: string; markerId: string }
-  | null;
+export type { Selection } from "./selection";
+
+/** The two faces of the track: station cards for assembly, the ruler for precision. */
+export type TrackDensity = "stations" | "timeline";
 
 interface Props {
   sequence: Sequence | null;
   poses: Pose[];
   playback: SeqPlayback | null;
   /**
-   * The *open sequence* is the one being executed — its ruler is locked and
+   * The *open sequence* is the thing being executed — its ruler is locked and
    * shows the truth (TIMELINE rule 5). A single-pose goto does not lock it:
    * the arm transits, but nothing here is being consumed.
    */
   locked: boolean;
   latched: boolean;
   preview: PreviewApi;
+  density: TrackDensity;
   selection: Selection;
   onSelect: (selection: Selection) => void;
   /** Send a block list to PATCH; the server normalizes and answers. */
@@ -40,29 +45,35 @@ interface Props {
 
 const HOLD_MIME = "application/x-rebot-hold";
 
-const EASING_LABEL: Record<string, string> = {
-  linear: "线性",
-  ease_in: "缓入",
-  ease_out: "缓出",
-  ease_in_out: "缓入缓出",
-};
-
 const snap = (v: number, step: number) => Math.round(v / step) * step;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * The timeline: plan ruler + skeleton blocks + pinned markers + playhead.
+ * The editing track: ONE editor with two render densities.
  *
- * The ruler is a *plan* ruler — block lengths are commanded durations, marker
- * spans are estimates, and the labels say which is which. Transitions never
- * offer a delete affordance: they are not data the user owns, they are the
- * physics between two stations, rebuilt by `normalize` after every edit.
+ * - "stations" (default, assembly): holds render as equal-width station cards
+ *   with every affordance visible (duration stepper, action chips,
+ *   「＋ 动作」, reorder arrows). No ruler, no scrub, no time proportions —
+ *   the ruler is either true (timeline density) or absent, never faked.
+ * - "timeline" (precision): proportional blocks + ruler + trim + scrub.
  *
- * Gestures: drag a pose in from the library (insert a hold) or tap the
- * library card's 「＋追加」, drag holds to reorder, drag a hold's right edge
- * to trim, pin a marker via the selected block's 「＋ 动作」 button (or
- * double-click), drag a marker to move it, Delete removes the selected
- * marker or hold block (the pose in the library is untouched either way).
+ * Structural rules — do not break:
+ * 1. Geometry only ever reads element rects (getBoundingClientRect); never
+ *    recompute coordinates from zoom state.
+ * 2. Drop-preview insertion is computed in data space (committed blocks plus
+ *    the current hint), never from placeholder-shifted layout.
+ * 3. Densities are render branches; every edit (append, delete, reorder,
+ *    duration, marker) has exactly one implementation, in this file.
+ *
+ * The physics model is unchanged either way: transitions are rebuilt by the
+ * server's normalize after every edit, markers stay pinned inside their
+ * parent block, and the ruler locks while a run owns it.
+ *
+ * Gestures (timeline density): drag a pose in from the library (insert a
+ * hold) or tap the library card's 「＋追加」, drag holds to reorder, drag a
+ * hold's right edge to trim, pin a marker via the selected block's 「＋ 动作」
+ * button (or double-click), drag a marker to move it, Delete removes the
+ * selected marker or hold block (the pose in the library is untouched).
  */
 export function TimelineView({
   sequence,
@@ -71,12 +82,14 @@ export function TimelineView({
   locked,
   latched,
   preview,
+  density,
   selection,
   onSelect,
   onPatch,
   providers,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
   /** Trim/marker pointer work inside a draggable hold must not start an HTML5 drag. */
   const noDragRef = useRef(false);
   /** Live overrides while a trim/marker drag is in flight (PATCHed on release). */
@@ -108,6 +121,10 @@ export function TimelineView({
   const total = sequenceDuration(blocks);
   const starts = useMemo(() => blockStarts(blocks), [blocks]);
   const poseById = useMemo(() => new Map(poses.map((p) => [p.id, p])), [poses]);
+  const holdOrder = useMemo(
+    () => blocks.filter((b) => b.type === "hold").map((b) => b.id),
+    [blocks],
+  );
 
   // The playhead walks the plan ruler in preview, the truth in execution.
   const playheadT = locked && playback ? playbackAbsTime(blocks, playback) : preview.t;
@@ -119,7 +136,63 @@ export function TimelineView({
     onPatch(next);
   };
 
-  // ── pose drop from the library ────────────────────────────────────────────
+  /** Is the block at index i under the playhead right now? */
+  const isCurrentBlock = (i: number) =>
+    playheadVisible &&
+    playheadT >= starts[i] - 1e-9 &&
+    (i === blocks.length - 1 || playheadT < starts[i] + blocks[i].duration_s);
+
+  // ── the single set of edit implementations (both densities call these) ────
+
+  const addMarkerOn = (block: Block) => {
+    if (locked) return;
+    setAddMarker({
+      blockId: block.id,
+      at:
+        block.type === "hold"
+          ? snap(clamp(block.duration_s / 2, 0, block.duration_s), 0.1)
+          : 0.5,
+    });
+  };
+
+  const setHoldDuration = (block: Block, seconds: number) => {
+    if (locked || block.type !== "hold") return;
+    patch(blocks.map((b) => (b.id === block.id ? { ...b, duration_s: seconds } : b)));
+  };
+
+  const removeMarkerOfBlock = (blockId: string, markerId: string) => {
+    if (locked) return;
+    patch(
+      blocks.map((b) =>
+        b.id === blockId ? { ...b, markers: b.markers.filter((m) => m.id !== markerId) } : b,
+      ),
+    );
+    if (selection?.kind === "marker" && selection.markerId === markerId) {
+      onSelect({ kind: "block", id: blockId });
+    }
+  };
+
+  const removeHold = (block: Block) => {
+    // Transitions are physics, not data: no delete affordance, ever.
+    if (locked || block.type !== "hold") return;
+    patch(blocks.filter((b) => b.id !== block.id));
+    if (selection?.kind === "block" && selection.id === block.id) onSelect(null);
+  };
+
+  /** Swap a hold with its previous/next neighbour; normalize re-links transitions. */
+  const moveHold = (holdId: string, dir: -1 | 1) => {
+    if (locked) return;
+    const holds = blocks.filter((b): b is Extract<Block, { type: "hold" }> => b.type === "hold");
+    const i = holds.findIndex((h) => h.id === holdId);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= holds.length) return;
+    const order = [...holds];
+    [order[i], order[j]] = [order[j], order[i]];
+    let cursor = 0;
+    patch(blocks.map((b) => (b.type === "hold" ? order[cursor++] : b)));
+  };
+
+  // ── pose drop from the library (timeline density) ─────────────────────────
 
   const timeAtClientX = (clientX: number): number => {
     const rect = trackRef.current?.getBoundingClientRect();
@@ -158,6 +231,17 @@ export function TimelineView({
       event.preventDefault();
       reorderHold(holdId, timeAtClientX(event.clientX));
     }
+  };
+
+  const onBlockDragStart = (event: DragEvent, block: Block) => {
+    // A trim/marker/button pointer gesture passing through must not pick the
+    // whole block up.
+    if (noDragRef.current) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.setData(HOLD_MIME, block.id);
+    event.dataTransfer.effectAllowed = "move";
   };
 
   const reorderHold = (holdId: string, t: number) => {
@@ -282,7 +366,7 @@ export function TimelineView({
     window.addEventListener("pointerup", onUp);
   };
 
-  // ── double-click a block to pin a marker ──────────────────────────────────
+  // ── double-click a block to pin a marker (the shortcut; ＋动作 is the visible way) ──
 
   const blockDoubleClick = (event: ReactPointerEvent | React.MouseEvent, block: Block) => {
     if (locked) return;
@@ -317,24 +401,32 @@ export function TimelineView({
       if (node?.closest("[role='dialog']")) return;
       event.preventDefault();
       if (selection.kind === "marker") {
-        patch(
-          blocks.map((b) =>
-            b.id === selection.blockId
-              ? { ...b, markers: b.markers.filter((m) => m.id !== selection.markerId) }
-              : b,
-          ),
-        );
+        removeMarkerOfBlock(selection.blockId, selection.markerId);
       } else {
         const block = blocks.find((b) => b.id === selection.id);
-        // Transitions are physics, not data: no delete affordance, ever.
-        if (!block || block.type !== "hold") return;
-        patch(blocks.filter((b) => b.id !== selection.id));
+        if (!block) return;
+        removeHold(block);
       }
-      onSelect(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // ── scroll the station strip to a freshly appended card ───────────────────
+
+  const appendWatchRef = useRef<{ seqId: string | null; length: number }>({
+    seqId: null,
+    length: 0,
+  });
+  useEffect(() => {
+    const seqId = sequence?.id ?? null;
+    const prev = appendWatchRef.current;
+    const appendedOne = prev.seqId === seqId && seqId !== null && blocks.length === prev.length + 1;
+    if (density === "stations" && appendedOne && stripRef.current) {
+      stripRef.current.scrollLeft = stripRef.current.scrollWidth;
+    }
+    appendWatchRef.current = { seqId, length: blocks.length };
+  }, [density, sequence, blocks.length]);
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -360,172 +452,152 @@ export function TimelineView({
     return out;
   }, [blocks, starts, total, providers]);
 
+  const emptyState =
+    sequence === null ? (
+      <div className="tl-empty">先在顶栏选择或新建一条序列。</div>
+    ) : density === "stations" ? (
+      <div className="tl-empty tl-empty--guide">
+        <p className="tl-empty__title">三步排出第一条拍摄序列：</p>
+        <ol>
+          <li>素材库点「+ 录位姿」把臂拖到位，「保存为站位」一步成站（或点已有位姿卡的「＋追加」）</li>
+          <li>选中站位卡，点「＋ 动作」钉上快门 / 等待</li>
+          <li>「▶ 预演」走一遍计划，确认后「执行」</li>
+        </ol>
+      </div>
+    ) : (
+      <div className="tl-empty">
+        点素材库位姿卡上的「＋追加」，或把位姿拖到这里，排出第一个站位；「站位」档可逐卡组装
+      </div>
+    );
+
   return (
     <div className="tl">
       <div className="tl-meta">
-        <span>
-          时间轴 · {blocks.length} 块 · {markerCount} 个动作（过渡自动生成、不可删）
-        </span>
+        {density === "timeline" ? (
+          <span>
+            时间轴 · {blocks.length} 块 · {markerCount} 个动作（过渡自动生成、不可删）
+          </span>
+        ) : (
+          <span>
+            站位 · {holdOrder.length} 站 · {markerCount} 个动作（过渡自动生成、不可删）
+          </span>
+        )}
         <span className="r">
-          适配宽度 · 全长 <span className="num">{total.toFixed(1)}s</span>（指令时长，动作时长为预估）
+          全长 <span className="num">{total.toFixed(1)}s</span>（指令时长，动作时长为预估）
         </span>
       </div>
 
-      <div className="tl-inner">
-        <div className="tl-ruler" onPointerDown={scrubStart}>
-          {ticks.map((s) => (
-            <div key={s} className="tl-tick" style={{ left: `${(s / total) * 100}%` }}>
-              {s % 5 === 0 && total - s >= 2 ? <span className="num">{s}s</span> : null}
-            </div>
-          ))}
-          {total > 0 ? (
-            <div className="tl-tick end" style={{ left: "100%" }}>
-              <span className="num">{total.toFixed(1)}s</span>
+      {density === "timeline" ? (
+        <div className="tl-inner">
+          <div className="tl-ruler" onPointerDown={scrubStart}>
+            {ticks.map((s) => (
+              <div key={s} className="tl-tick" style={{ left: `${(s / total) * 100}%` }}>
+                {s % 5 === 0 && total - s >= 2 ? <span className="num">{s}s</span> : null}
+              </div>
+            ))}
+            {total > 0 ? (
+              <div className="tl-tick end" style={{ left: "100%" }}>
+                <span className="num">{total.toFixed(1)}s</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="tl-track" ref={trackRef} onDragOver={onDragOver} onDrop={onDrop}>
+            {blocks.length === 0
+              ? emptyState
+              : blocks.map((block, i) => (
+                  <TrackBlock
+                    key={block.id}
+                    block={block}
+                    start={starts[i]}
+                    widthPct={(block.duration_s / total) * 100}
+                    isCurrent={isCurrentBlock(i)}
+                    locked={locked}
+                    playheadVisible={playheadVisible}
+                    playheadT={playheadT}
+                    pose={block.type === "hold" ? poseById.get(block.pose_id) : undefined}
+                    selection={selection}
+                    providers={providers}
+                    noDragRef={noDragRef}
+                    onSelectBlock={(id) => onSelect({ kind: "block", id })}
+                    onSelectMarker={(blockId, markerId) =>
+                      onSelect({ kind: "marker", blockId, markerId })
+                    }
+                    onBlockDragStart={onBlockDragStart}
+                    onBlockDoubleClick={blockDoubleClick}
+                    onTrimStart={trimStart}
+                    onMarkerDragStart={markerDragStart}
+                    onAddMarker={addMarkerOn}
+                  />
+                ))}
+
+            {playheadVisible ? (
+              <div className="tl-playhead" style={{ left: `${(playheadT / total) * 100}%` }} />
+            ) : null}
+
+            {locked ? <div className="tl-lock">执行中 · 已锁定</div> : null}
+          </div>
+
+          {spans.length > 0 ? (
+            <div className="tl-spans">
+              {spans.map((span) => (
+                <span
+                  key={span.key}
+                  className="tl-span"
+                  style={{ left: `${span.left}%`, width: `${span.width}%` }}
+                >
+                  {span.label}
+                </span>
+              ))}
             </div>
           ) : null}
         </div>
-
-        <div className="tl-track" ref={trackRef} onDragOver={onDragOver} onDrop={onDrop}>
-          {blocks.length === 0 ? (
-            <div className="tl-empty">从素材库把位姿拖到这里，排出第一个站位</div>
-          ) : (
-            blocks.map((block, i) => {
-              const width = `${(block.duration_s / total) * 100}%`;
-              const isCurrent =
-                playheadVisible &&
-                playheadT >= starts[i] - 1e-9 &&
-                (i === blocks.length - 1 || playheadT < starts[i] + block.duration_s);
-              const selected = selection?.kind === "block" && selection.id === block.id;
-              const pose = block.type === "hold" ? poseById.get(block.pose_id) : undefined;
-              return (
-                <div
-                  key={block.id}
-                  className={[
-                    "blk",
-                    block.type === "hold" ? "hold" : "trans",
-                    isCurrent ? "cur" : "",
-                    selected ? "sel" : "",
-                    block.type === "hold" && !pose ? "missing" : "",
-                  ].join(" ")}
-                  style={{ width }}
-                  draggable={!locked && block.type === "hold"}
-                  onDragStart={(event) => {
-                    // A trim/marker pointer gesture passing through must not
-                    // pick the whole block up.
-                    if (noDragRef.current) {
-                      event.preventDefault();
-                      return;
-                    }
-                    event.dataTransfer.setData(HOLD_MIME, block.id);
-                    event.dataTransfer.effectAllowed = "move";
-                  }}
-                  onClick={() => onSelect({ kind: "block", id: block.id })}
-                  onDoubleClick={(event) => blockDoubleClick(event, block)}
-                >
-                  {block.type === "hold" ? (
-                    <div className="blk__in">
-                      <span className="blk__name">{pose?.name ?? "已删除位姿"}</span>
-                      <span className="blk__dur num">{block.duration_s.toFixed(1)}s</span>
-                    </div>
-                  ) : (
-                    <div className="blk__in trans">
-                      <span className="num">{block.duration_s.toFixed(1)}s</span>{" "}
-                      {EASING_LABEL[block.easing]}
-                    </div>
-                  )}
-
-                  {block.markers.map((marker) => {
-                    const atSeconds = markerTimeInBlockView(block, marker);
-                    const absT = markerAbsTime(starts[i], block, marker);
-                    const fired = playheadVisible && playheadT >= absT - 1e-9 && playheadT > 0;
-                    const markerSelected =
-                      selection?.kind === "marker" && selection.markerId === marker.id;
+      ) : (
+        <div className="stn-wrap">
+          <div className="stn-strip" ref={stripRef}>
+            {blocks.length === 0
+              ? emptyState
+              : blocks.map((block, i) => {
+                  if (block.type === "hold") {
+                    const position = holdOrder.indexOf(block.id);
                     return (
-                      <button
-                        key={marker.id}
-                        type="button"
-                        className={`mk ${fired ? "fired" : ""} ${markerSelected ? "sel" : ""}`}
-                        style={{ left: `${(atSeconds / block.duration_s) * 100}%` }}
-                        title={`${markerLabel(marker.kind, providers)} · t=${absT.toFixed(1)}s${
-                          marker.kind === "wait" ? " · 播放到此暂停" : ""
-                        }`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onSelect({ kind: "marker", blockId: block.id, markerId: marker.id });
-                        }}
-                        onPointerDown={(event) => markerDragStart(event, block, marker)}
-                      >
-                        {markerIcon(marker.kind)}
-                      </button>
+                      <StationCard
+                        key={block.id}
+                        block={block}
+                        index={position + 1}
+                        pose={poseById.get(block.pose_id)}
+                        isCurrent={isCurrentBlock(i)}
+                        locked={locked}
+                        selection={selection}
+                        providers={providers}
+                        canMovePrev={position > 0}
+                        canMoveNext={position >= 0 && position < holdOrder.length - 1}
+                        onSelect={() => onSelect({ kind: "block", id: block.id })}
+                        onSelectMarker={(markerId) =>
+                          onSelect({ kind: "marker", blockId: block.id, markerId })
+                        }
+                        onRemoveMarker={(markerId) => removeMarkerOfBlock(block.id, markerId)}
+                        onSetDuration={(seconds) => setHoldDuration(block, seconds)}
+                        onAddMarker={() => addMarkerOn(block)}
+                        onMove={(dir) => moveHold(block.id, dir)}
+                        onRemove={() => removeHold(block)}
+                      />
                     );
-                  })}
-
-                  {block.type === "hold" && !locked ? (
-                    <span
-                      className="blk__trim"
-                      title="拖拽修剪时长"
-                      onPointerDown={(event) => trimStart(event, block)}
+                  }
+                  return (
+                    <StationConnector
+                      key={block.id}
+                      block={block}
+                      isCurrent={isCurrentBlock(i)}
+                      selected={selection?.kind === "block" && selection.id === block.id}
+                      onSelect={() => onSelect({ kind: "block", id: block.id })}
                     />
-                  ) : null}
-
-                  {selected && !locked ? (
-                    <button
-                      type="button"
-                      className="blk__add"
-                      title="在此块添加动作（快门 / 等待…）"
-                      onPointerDown={(event) => {
-                        // The button sits inside a draggable hold: swallow the
-                        // gesture so a press never picks the whole block up.
-                        event.stopPropagation();
-                        noDragRef.current = true;
-                        window.addEventListener(
-                          "pointerup",
-                          () => {
-                            noDragRef.current = false;
-                          },
-                          { once: true },
-                        );
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setAddMarker({
-                          blockId: block.id,
-                          at:
-                            block.type === "hold"
-                              ? snap(clamp(block.duration_s / 2, 0, block.duration_s), 0.1)
-                              : 0.5,
-                        });
-                      }}
-                    >
-                      ＋ 动作
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })
-          )}
-
-          {playheadVisible ? (
-            <div className="tl-playhead" style={{ left: `${(playheadT / total) * 100}%` }} />
-          ) : null}
-
+                  );
+                })}
+          </div>
           {locked ? <div className="tl-lock">执行中 · 已锁定</div> : null}
         </div>
-
-        {spans.length > 0 ? (
-          <div className="tl-spans">
-            {spans.map((span) => (
-              <span
-                key={span.key}
-                className="tl-span"
-                style={{ left: `${span.left}%`, width: `${span.width}%` }}
-              >
-                {span.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      )}
 
       {addMarker ? (
         <Dialog label="添加动作" onClose={() => setAddMarker(null)}>
@@ -561,9 +633,4 @@ export function TimelineView({
       ) : null}
     </div>
   );
-}
-
-/** Marker position inside its block, in seconds (proportion → seconds). */
-function markerTimeInBlockView(block: Block, marker: EventMarker): number {
-  return block.type === "hold" ? marker.at : marker.at * block.duration_s;
 }

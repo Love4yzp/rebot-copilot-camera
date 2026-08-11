@@ -1,6 +1,7 @@
-import type { Block, Easing, Pose, ProviderInfo, Sequence } from "../types";
+import type { Block, Pose, ProviderInfo, Sequence } from "../types";
 import { MIN_HOLD_S } from "./model";
 import { markerLabel, WAIT_KIND } from "./markers";
+import { EASINGS } from "./easing";
 import type { Selection } from "./TimelineView";
 import { ProviderFields } from "../components/ProviderFields";
 
@@ -13,13 +14,6 @@ interface Props {
   onPatch: (blocks: Block[]) => void;
   onClose: () => void;
 }
-
-const EASINGS: { value: Easing; label: string }[] = [
-  { value: "linear", label: "线性" },
-  { value: "ease_in", label: "缓入" },
-  { value: "ease_out", label: "缓出" },
-  { value: "ease_in_out", label: "缓入缓出" },
-];
 
 const snap = (v: number, step: number) => Math.round(v / step) * step;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));

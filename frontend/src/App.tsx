@@ -16,12 +16,15 @@ import { TeachBar } from "./library/TeachBar";
 import { TemplateWizard } from "./library/TemplateWizard";
 import { MonitorPanel } from "./monitor/MonitorPanel";
 import { TimelineView } from "./timeline/TimelineView";
-import type { Selection } from "./timeline/TimelineView";
+import type { Selection, TrackDensity } from "./timeline/TimelineView";
 import { Inspector } from "./timeline/Inspector";
 import { TransportBar } from "./transport/TransportBar";
 
 /** Which sequence was open last, so a reload does not cost a tap. */
 const LAST_SEQUENCE_KEY = "rebot:last-sequence";
+
+/** The track's face survives reloads too: stations for assembly, the ruler for precision. */
+const TRACK_DENSITY_KEY = "rebot:track-density";
 
 /** A shutter marker reads as a white flash for this long after crossing. */
 const SHUTTER_FLASH_S = 0.5;
@@ -44,6 +47,14 @@ function Workspace() {
   const [sequence, setSequence] = useState<Sequence | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
   const [teachOpen, setTeachOpen] = useState(false);
+  /** The track's face: station cards (assembly, default) or the ruler (precision). */
+  const [trackDensity, setTrackDensity] = useState<TrackDensity>(() =>
+    localStorage.getItem(TRACK_DENSITY_KEY) === "timeline" ? "timeline" : "stations",
+  );
+  const chooseTrackDensity = (next: TrackDensity) => {
+    setTrackDensity(next);
+    localStorage.setItem(TRACK_DENSITY_KEY, next);
+  };
   /** The template being instantiated through the station wizard, if any. */
   const [wizardTemplate, setWizardTemplate] = useState<SeqTemplate | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -528,6 +539,26 @@ function Workspace() {
             onResume={resume}
           />
         )}
+        <div className="trk-tabs" role="tablist" aria-label="编排密度">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={trackDensity === "stations"}
+            className={`trk-tab ${trackDensity === "stations" ? "active" : ""}`}
+            onClick={() => chooseTrackDensity("stations")}
+          >
+            站位
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={trackDensity === "timeline"}
+            className={`trk-tab ${trackDensity === "timeline" ? "active" : ""}`}
+            onClick={() => chooseTrackDensity("timeline")}
+          >
+            时间轴
+          </button>
+        </div>
         <div className="foot__timeline">
           <TimelineView
             sequence={sequence}
@@ -536,6 +567,7 @@ function Workspace() {
             locked={runningSequence}
             latched={latched}
             preview={preview}
+            density={trackDensity}
             selection={selection}
             onSelect={setSelection}
             onPatch={(next) => void patchBlocks(next)}

@@ -946,6 +946,238 @@ select:focus {
   color: var(--mark-dim);
   font-size: 13px;
 }
+.tl-empty--guide {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 20px;
+  line-height: 1.7;
+}
+.tl-empty__title {
+  font-weight: 600;
+  color: var(--mark);
+}
+.tl-empty--guide ol {
+  margin: 0;
+  padding-left: 1.4em;
+  display: grid;
+  gap: 4px;
+}
+
+/* ── track density tabs ──────────────────────────────────────────────────── */
+
+.trk-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 16px 0;
+}
+.trk-tab {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  color: var(--mark-dim);
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 8px 8px 0 0;
+}
+.trk-tab.active {
+  color: var(--mark);
+  background: var(--body-lift);
+  font-weight: 600;
+}
+
+/* ── station density ─────────────────────────────────────────────────────── */
+/* Equal-width cards, no ruler: the strip either shows true time (timeline
+ * density) or no proportions at all — never a fake one. */
+
+.stn-wrap {
+  position: relative; /* the lock overlay covers the strip regardless of scroll */
+}
+.stn-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 132px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+}
+.stn {
+  flex: none;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--body-lift);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The current station: grey while previewing (a plan), amber only while the
+ * arm is really walking it — same rule as .blk.cur. */
+.stn.cur {
+  box-shadow: inset 0 0 0 1.5px var(--mark-dim);
+}
+.exec .stn.cur {
+  box-shadow: inset 0 0 0 1.5px var(--motion);
+}
+.stn.sel {
+  box-shadow: inset 0 0 0 1.5px var(--mark);
+}
+.stn__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.stn__idx {
+  color: var(--mark-dim);
+  font-size: 11px;
+}
+.stn__name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stn.missing .stn__name {
+  color: var(--mark-dim);
+  text-decoration: line-through;
+}
+.stn__dur {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.stn__dur-label {
+  color: var(--mark-dim);
+  margin-right: auto;
+}
+.stn__dur button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--mark);
+  background: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  touch-action: manipulation;
+}
+.stn__dur .num {
+  min-width: 3.2em;
+  text-align: center;
+}
+.stn__markers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  background: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.chip.sel {
+  border-color: var(--mark);
+}
+.chip button {
+  min-width: 0;
+  min-height: 0;
+  background: none;
+  border: none;
+  font-size: 11px;
+  color: var(--mark);
+}
+.chip__main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 4px 3px 8px;
+}
+.chip__main .num {
+  color: var(--mark-dim);
+  font-size: 10px;
+}
+.chip__x {
+  padding: 3px 8px 3px 4px;
+  color: var(--mark-dim);
+}
+.chip__x:hover {
+  color: var(--mark);
+}
+.stn__add {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--mark-dim);
+  background: transparent;
+  border: 1px dashed var(--edge);
+  border-radius: 12px;
+}
+.stn__add:hover {
+  color: var(--mark);
+  border-color: var(--mark-dim);
+}
+.stn__ops {
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--edge-soft);
+}
+.stn__ops button {
+  min-width: 34px;
+  min-height: 30px;
+  font-size: 14px;
+}
+.stn__ops .ghost {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* The connector between stations: a transition block's station-density face. */
+.stn-link {
+  flex: none;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 64px;
+  min-height: 0;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: var(--mark-dim);
+  background: transparent;
+  border: 1px solid var(--edge-soft);
+  border-radius: 8px;
+}
+.stn-link.cur {
+  color: var(--mark);
+  border-color: var(--mark-dim);
+}
+.exec .stn-link.cur {
+  color: var(--motion);
+  border-color: var(--motion);
+}
+.stn-link.sel {
+  color: var(--mark);
+  border-color: var(--mark);
+}
+.stn-link__arrow {
+  font-size: 14px;
+  line-height: 1;
+}
 .blk {
   position: relative;
   height: 100%;
