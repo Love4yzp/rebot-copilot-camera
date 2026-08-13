@@ -72,21 +72,44 @@ turntable = "rebot_plugin_turntable:TurntableProvider"
 
 entry point 指向的东西必须**无参可调**。`TURNTABLE_PORT=sim` 时例子走一个进程内的模拟转台 —— 跟 `SimArm` / `SimShutter` 同一套哲学,插件作者的第一天不该需要那个配件。
 
-装到设备上:
+### 两种装法
+
+**一、丢进 `plugins/` 目录（简单的那种）。** 一个文件夹就是插件：代码 + 一个 `plugin.json` 清单：
+
+```
+plugins/
+  my-turntable/
+    plugin.json
+    rebot_plugin_turntable.py     # module 指的那个文件,多文件就放一整个包
+```
+
+```json
+{"module": "rebot_plugin_turntable", "provider": "TurntableProvider", "enabled": true}
+```
+
+`module` 从这个文件夹里 import,`provider` 是模块里那个**无参可调**的类。装 = 把文件夹拷进 `plugins/` 再重启服务,没有 pip、没有 lockfile —— 也就不存在 `uv sync` 把它清掉的事(那正是 entry point 装法手动 `uv pip install` 后每次 `device.sh push` 都丢插件的原因)。`plugins/` 被 gitignore 但会跟 `device.sh push` 一起同步到设备,源在你开发机上。
+
+`enabled: false` 就是开关:停用后插件灰显在 `/api/plugins` 里带着原因,不会被排进新序列;改回 `true` 重启恢复。状态随插件自己的文件走,不怕更新覆盖。
+
+两条限制:插件只能用**宿主环境里已有的依赖**(stdlib + 宿主装的那些,比如 pydantic、pyserial);`module` 名字不能跟别的插件或已装的包撞名 —— 撞了先加载的赢,后加载的那个会因为拿到重复 id 在注册闸门前被拒,出声,不静默。
+
+**二、pip 包 + entry point(要分发的那种)。** 有自己的依赖要声明、要给别人装,就做成包:
 
 ```bash
 uv pip install ./rebot-plugin-turntable
 sudo systemctl restart rebot-copilot-camera
 ```
 
-完事。**宿主零改动,前端零改动。** 转台出现在 `GET /api/plugins`、出现在标记检查器、可以和快门排先后。
+注意 `uv pip install` 进的是 venv,**`uv sync` 会把它当多余包清掉** —— 长期用就把包加进 `pyproject.toml` 的 `dependencies` + `[tool.uv.sources]`(turntable 例子就是这么装的),或者干脆用装法一。
+
+两种装法都**宿主零改动,前端零改动**:出现在 `GET /api/plugins`、出现在标记检查器、可以和快门排先后。加载都在启动时 —— 运行中丢进去的文件夹下次重启生效。
 
 宿主不管插件配置 —— 一管就要为每个插件定义配置 schema,那是没边的;插件自己读环境变量或自己的文件。
 
 ### 无硬件开发循环
 
 ```bash
-uv run -m backend.actions.check                          # 列出装了什么
+uv run -m backend.actions.check                          # 列出装了什么(entry point 和 plugins/ 都扫)
 uv run -m backend.actions.check turntable                # 看它的 manifest
 uv run -m backend.actions.check turntable --probe        # 跑自检
 uv run -m backend.actions.check turntable --run '{"degrees": 90}'
@@ -155,7 +178,7 @@ uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 
 `available: false` 的行在编辑面板里灰显带原因,旁边有「重新检测配件」—— 打 `POST /api/plugins/probe`,重跑所有自检。没有它,从灰显恢复的唯一办法是重启服务,而那在棚里意味着去找一台终端。自检不动关节不烧帧,所以**不挂运动闸门**。
 
-装了哪些插件不会在页面运行期间变(装包 + 重启),但配件答不答应会变 —— 所以刷新的是健康,不是清单。
+装了哪些插件不会在页面运行期间变（装包 / 丢文件夹都要重启才加载），但配件答不答应会变 —— 所以刷新的是健康，不是清单。
 
 ---
 
@@ -231,7 +254,7 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 - **pre-hook**(能否决运动的钩子 = 第三方代码进安全路径)
 - **条件 / 分支规则引擎** —— 工作流是线性的:到位、稳定、触发、下一个。论证在 `backend/sequences/models.py` 开头
 - **插件间通信** —— 两个插件要说话,说明它们该是一个插件
-- **热重载** —— 现场设备重启服务,比调试半加载状态便宜
+- **运行时加载/卸载** —— 装插件(丢文件夹或 pip 包)都要重启才生效。Python 没有可靠的模块卸载,进程内「热拔」实际只能注销 provider、代码留在进程里,调试半加载状态比现场重启一次贵得多
 
 ---
 
@@ -242,7 +265,7 @@ backend/actions/
   base.py       ActionProvider Protocol / ActionContext / FieldSpec / 异常
   runner.py     ThreadedRunner(每 provider 一条 worker,action 与 probe 同一条队列)
                 + InlineRunner(测试用)
-  registry.py   entry_points 发现 + check_shape 形状闸门 + 健康状态 + manifest
+  registry.py   entry_points + plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康状态 + manifest
   validate.py   写入时与播放前的两道校验
   shutter.py    ShutterProvider —— 第一个 provider,包 ShutterDriver
   check.py      插件作者的命令行

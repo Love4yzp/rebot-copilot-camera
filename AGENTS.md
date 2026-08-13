@@ -69,8 +69,9 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 ```
 backend/
   app.py            FastAPI 入口。静态挂载必须在所有路由之后 —— mount("/") 匹配一切
-  assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫
+  assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫 + gripper 开关（has_gripper / effective_hardware_yaml 剥电机 / effective_urdf_path 剥质量）
   config.py         只放真正依赖部署的值（数据目录、快门串口/波特率）。限位不在这（从 URDF 读）
+  tuning.py         调参模型与存取：payload profile / 浮动增益 / 阈值 + 服务端钳位；热改只进内存，显式保存才落 config/tuning.yaml
   agent.py          外部 agent 的独占控制租约（token + 双重 TTL）
 
   arm/
@@ -87,7 +88,7 @@ backend/
   actions/
     base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
     runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上，probe 走同一条队列
-    registry.py     entry_points 发现 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
+    registry.py     entry_points + plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
     validate.py     写入时与播放前两道校验，让错误离开 ACTING 阶段
     shutter.py      ShutterProvider —— 第一个 provider
     check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
@@ -115,15 +116,16 @@ backend/
   api/
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
-    estop.py        急停端点
+    estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
     poses.py        位姿库 CRUD / capture / links / goto
     sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
     templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）
     control.py      execute/stop+resume / 示教 / 快门自检 / WebSocket
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
+    config.py       调参端点 GET/PUT/save/reset —— 闸门在 Controller.apply_tuning（执行中拒一切、浮动中拒负载切换），不挂运动闸门，但要在 NON_MOTION_ROUTES 写明理由
     logs.py         journalctl 包装
 
-frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 backend/sequences/normalize.py 互为双语言端
+frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 backend/sequences/normalize.py 互为双语言端。调参面板 `components/TuningPanel.tsx`（Tweakpane，停靠监视器区右侧，全灰阶，prod 进入需确认）
 frontend/mock/      `npm run dev:mock` 的内存后端。数据形状与后端逐字段对齐，由 golden 契约测试守卫
 frontend/contract/  golden 契约的 mock 侧 runner（esbuild 打包，node 直跑）
 contract/cases/     golden 用例文件：REST 会话 + normalize 输入，两侧各跑一遍逐字段比对，见 tests/test_contract.py
@@ -131,6 +133,7 @@ frontend/public/    自托管字体（离线设备，不能挂 CDN）
 firmware/esp32-shutter/  PlatformIO 工程
 deploy/             systemd unit ×2 + udev 规则
 config/rebotarm_rs.yaml  从上游 fork 的硬件配置（挂相机后要重调）
+config/tuning.yaml       调参面板的落盘值（操作者标定）；文件缺失 = 代码默认值
 vendor/reBotArm_control_py/  git submodule，锁 d540405
 ```
 
@@ -155,6 +158,9 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 
 FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍历一个端点都看不见，测试会永远空转通过 —— 所以那条测试有递归候选加 OpenAPI 交叉校验两层守卫，下次 FastAPI 改内部结构会大声失败而不是静默失效。**别删交叉校验。**
 
+**调参闸门**
+调参写入不走运动闸门，走 `Controller.apply_tuning` 的分级：**执行中拒一切写入**（executor 的值是构造时捕获的）；**负载 profile 切换额外拒于浮动中**（前馈一次跳几 N·m，浮动没有位置环接得住）；**float kp/kd 浮动中可改**（follow 目标=当前位置，跳变为零 —— 边掰边调就靠这条）。服务端钳位在 `backend/tuning.py` 的 pydantic 模型里，面板的滑块范围只是 UX，可以被绕过，端点不能。
+
 **时间**
 任何测试里不出现 `time.sleep`。时钟统一走可注入接口。执行器、闩锁、看门狗、浮动/锁定、串口客户端全部接受 `clock` 参数。
 
@@ -178,6 +184,9 @@ FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍�
 
 **急停在栈顶**
 `.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+
+**退出路径先回零**
+Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零位（复用 goto 的进站限速与到位检测），到位后才停控制循环 —— 停循环永远是退出的最后一步。闩锁吸合时例外：原地冻结保持退出，不回零（闩锁吸合意味着出了状况，不再规划新运动）。信号归 `backend/app.py` 的 `ParkOnExitServer` 管，**别换回 `uvicorn.run`**：原版第二次 Ctrl+C 置 `force_exit` 并**跳过 lifespan shutdown**，回零整段就没了。systemd 的 `TimeoutStopSec=60` 是按最坏回零 ~37s 留的，别调小。配套：`main()` 在碰 CAN 之前先做端口预检（`_ensure_port_free`）—— 一个绑不上端口的实例若连了臂，它的退出回零就会去动一台归别的进程管的臂。
 
 **技能体系只用 [mattpocock/skills](https://github.com/mattpocock/skills)**
 今后新增技能一律从 mattpocock/skills 构建；已有的 `threejs-*` 参考技能保留。

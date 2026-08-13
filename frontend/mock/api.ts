@@ -30,6 +30,11 @@ function json(status: number, body: unknown): MockResponse {
   return { status, body };
 }
 
+/** Plain-object check for the tuning deep merge (arrays like com replace, not merge). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function notFound(detail: string): MockResponse {
   return json(404, { detail });
 }
@@ -204,9 +209,11 @@ export function handleApi(
     state.estop.source = null;
     state.estop.engaged_at = null;
     state.estop.freeze_pose = null;
-    if (state.mode === "estop") state.mode = "idle";
-    // The run was already aborted at engage (see above) — nothing to resume
-    // here; clearing only re-arms the machine to idle.
+    // The backend's clear hands the arm to the operator in zero-gravity drag
+    // teaching (locked until a hand moves it) — a rigidly held arm right
+    // after a stop is one nobody can reposition. The run was already aborted
+    // at engage (see above) — nothing resumes.
+    if (state.mode === "estop") state.mode = "teach";
     state.goto = null;
     return json(200, estopStatus(state.estop, true));
   }
@@ -596,6 +603,67 @@ export function handleApi(
       firmware_version: "esp32-mock-1.0.0",
       error: null,
     });
+  }
+
+  // ── tuning ────────────────────────────────────────────────────────────────
+  const TUNING_SECTIONS = ["payload", "float", "floatlock", "settle", "approach"] as const;
+
+  /**
+   * Recursive merge for the PUT patch: plain objects merge key by key,
+   * anything else (numbers, null, the com tuple) replaces. Shallow merging
+   * would drop `camera.mass` when a patch only carries `camera.com`.
+   */
+  function deepMerge(
+    target: Record<string, unknown>,
+    patch: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const out = { ...target };
+    for (const [k, v] of Object.entries(patch)) {
+      const t = out[k];
+      out[k] = isPlainObject(t) && isPlainObject(v) ? deepMerge(t, v) : v;
+    }
+    return out;
+  }
+
+  function tuningResponse(state: MockState): Record<string, unknown> {
+    const current = state.tuning_current as Record<string, unknown>;
+    const saved = state.tuning_saved as Record<string, unknown>;
+    const dirty = TUNING_SECTIONS.filter(
+      (s) => JSON.stringify(current[s]) !== JSON.stringify(saved[s]),
+    );
+    return {
+      current,
+      saved,
+      dirty,
+      gripper_motor: false,
+      payload_options: ["bare", "camera"],
+    };
+  }
+
+  if (pathname === "/api/config/tuning" && method === "GET") {
+    return json(200, tuningResponse(state));
+  }
+  if (pathname === "/api/config/tuning" && method === "PUT") {
+    const patch = reqBody as Record<string, unknown>;
+    const current = state.tuning_current as Record<string, unknown>;
+    for (const key of TUNING_SECTIONS) {
+      if (!(key in patch)) continue;
+      const pv = patch[key];
+      if (isPlainObject(pv) && isPlainObject(current[key])) {
+        current[key] = deepMerge(current[key] as Record<string, unknown>, pv);
+      } else {
+        current[key] = pv;
+      }
+    }
+    return json(200, tuningResponse(state));
+  }
+  if (pathname === "/api/config/tuning/save" && method === "POST") {
+    state.tuning_saved = structuredClone(state.tuning_current);
+    return json(200, tuningResponse(state));
+  }
+  if (pathname === "/api/config/tuning/reset" && method === "POST") {
+    state.tuning_current = structuredClone(state.tuning_saved);
+    return json(200, tuningResponse(state));
   }
 
   // ── logs ──────────────────────────────────────────────────────────────────

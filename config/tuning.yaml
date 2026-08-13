@@ -1,0 +1,25 @@
+# 调参面板保存的值；热改只进内存，显式保存才落到这里。
+# Saved by the tuning panel. Hot-applied values live in memory
+# until an explicit save writes them here.
+payload:
+  profile: bare
+  camera:
+    mass: null
+    com:
+    - 0.0
+    - 0.0
+    - 0.0
+float:
+  kp: 1.2
+  kd: 1.0
+floatlock:
+  linear_threshold: 0.04
+  angular_threshold: 0.08
+  release_factor: 1.0
+  lock_factor: 0.6
+  min_still_s: 0.25
+settle:
+  drift_rad: 0.003
+  min_s: 0.15
+approach:
+  first_max_speed: 0.25

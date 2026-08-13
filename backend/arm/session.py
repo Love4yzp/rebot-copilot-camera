@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -29,12 +29,22 @@ from .. import assets
 from ..safety.kinematics import ARM_JOINTS
 from .base import ArmState
 
+if TYPE_CHECKING:
+    from ..tuning import PayloadTuning
+
 log = logging.getLogger(__name__)
 
 #: MIT-mode gains for holding position. Overridden per joint from the hardware
 #: yaml when it has them; these are the fallback.
 DEFAULT_HOLD_KP = 50.0
 DEFAULT_HOLD_KD = 3.0
+
+#: MIT-mode gains while floating: near-zero stiffness so the operator's hand
+#: moves the arm, while gravity feedforward carries the load. Values from
+#: upstream's example/9_gravity_compensation.py, tuned on the *unloaded* arm —
+#: expect to retune with the camera mounted (docs/HARDWARE_NOTES.md, B2).
+FLOAT_KP = 2.0
+FLOAT_KD = 1.0
 
 
 class ArmSession:
@@ -51,7 +61,7 @@ class ArmSession:
 
         assets.assert_rs_model()
         self._clock = clock or time.monotonic
-        self._arm = RebotArm(hardware_yaml or str(assets.HARDWARE_YAML))
+        self._arm = RebotArm(hardware_yaml or str(assets.effective_hardware_yaml()))
         self._lock = threading.RLock()
         self._connected = False
         self._floating = False
@@ -69,6 +79,9 @@ class ArmSession:
 
         self._dyn_model = None
         self._dyn_data = None
+        self._payload: PayloadTuning | None = None
+        self._float_kp = FLOAT_KP
+        self._float_kd = FLOAT_KD
 
     def _verify_joint_names(self) -> None:
         expected = tuple(assets.joint_names())
@@ -159,15 +172,46 @@ class ArmSession:
     def set_float(self, enabled: bool) -> None:
         """Enter or leave zero-force float.
 
-        Leaving re-asserts a hold at wherever the arm currently is, which is the
-        "let go and it stays put" behaviour. Getting that wrong means the arm
-        snaps back to a stale target the moment the operator releases it.
+        Entering only marks the mode — what actually frees the arm is the
+        per-tick :meth:`follow` stream that the control loop runs while
+        floating. Leaving re-asserts a hold at wherever the arm currently is,
+        which is the "let go and it stays put" behaviour. Getting that wrong
+        means the arm snaps back to a stale target the moment the operator
+        releases it.
         """
         with self._lock:
             self._floating = enabled
             if not enabled:
                 q, _, _ = self._arm.get_state()
                 self._send_mit(q, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
+
+    def follow(self) -> None:
+        """One zero-force tick: target = where the arm is, gravity at live q.
+
+        MIT mode executes the last command it received, so float is only real
+        while this is streamed every tick. Silence on the bus leaves the
+        motors running the stale lock setpoint, and the arm pulls back toward
+        wherever it locked — which an operator reads as "it keeps lifting".
+        """
+        with self._lock:
+            if not self._floating:
+                return
+            q, _, _ = self._arm.get_state()
+            self._send_mit(q, kp=self._float_kp, kd=self._float_kd)
+
+    def set_float_gains(self, kp: float, kd: float) -> None:
+        """Retune the float gains live — see :class:`~backend.arm.base.ArmDriver`."""
+        with self._lock:
+            self._float_kp = kp
+            self._float_kd = kd
+
+    def reload_dynamics(self, payload: "PayloadTuning | None" = None) -> None:
+        """Drop the cached dynamics model so the next torque computes against
+        the new payload. The rebuild happens lazily in :meth:`_dynamics_model`."""
+        with self._lock:
+            self._payload = payload
+            self._dyn_model = None
+            self._dyn_data = None
 
     @property
     def is_floating(self) -> bool:
@@ -210,13 +254,16 @@ class ArmSession:
         The URDF path is passed explicitly and always. Upstream's default
         resolves through ``config/rebotarm.yaml`` to the **B601-DM** arm and
         loads without raising, which would silently feed forward another
-        robot's gravity — wrong torques, no error.
+        robot's gravity — wrong torques, no error. The path goes through
+        :func:`assets.effective_urdf_path` so a detached gripper's mass comes
+        out of the gravity model along with its motor, and a camera payload
+        goes in when the tuning profile says one is mounted.
         """
         if self._dyn_model is None:
             from reBotArm_control_py.dynamics.robot_model import load_dynamics_model
             from reBotArm_control_py.dynamics.inverse_dynamics import create_data
 
-            self._dyn_model = load_dynamics_model(str(assets.urdf_path()))
+            self._dyn_model = load_dynamics_model(str(assets.effective_urdf_path(self._payload)))
             self._dyn_data = create_data(self._dyn_model)
         return self._dyn_model
 

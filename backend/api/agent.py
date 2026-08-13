@@ -116,7 +116,7 @@ def release(
 
 class JointCommand(BaseModel):
     joints: dict[str, float] = Field(
-        description="Target angles in radians, keyed by joint name (joint1..joint6, gripper).",
+        description="Target angles in radians, keyed by joint name (joint1..joint6).",
     )
     duration_s: float = Field(
         default=2.0,

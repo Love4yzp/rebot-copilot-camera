@@ -65,6 +65,12 @@ NON_MOTION_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/agent/acquire"): "takes a lease, moves nothing",
     ("POST", "/api/agent/release"): "gives a lease back; must work while stopped",
     ("POST", "/api/agent/control/stop"): "stopping must work while stopped",
+    # Tuning retunes gains/thresholds but commands no motion itself; the
+    # torque-class changes are refused by the controller while executing or,
+    # for a payload switch, while floating.
+    ("PUT", "/api/config/tuning"): "retunes parameters, moves nothing; gated on execution inside the controller",
+    ("POST", "/api/config/tuning/save"): "persists tuning to disk, moves nothing",
+    ("POST", "/api/config/tuning/reset"): "reloads saved tuning, moves nothing",
 }
 
 

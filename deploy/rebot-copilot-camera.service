@@ -28,10 +28,12 @@ Environment=REBOT_HOST=127.0.0.1
 Environment=REBOT_PORT=18790
 Environment=REBOT_ROUTINES_DIR=/opt/rebot-copilot-camera/routines
 
-# Deliberately NOT KillSignal=SIGKILL. The shutdown path releases the CAN bus
-# while leaving the motors holding their last pose; a hard kill skips it.
+# Deliberately NOT KillSignal=SIGKILL. The shutdown path first moves the arm
+# slowly back to the zero pose (worst case ~37 s, budgeted 45 s), then
+# releases the CAN bus while leaving the motors holding that pose; a hard
+# kill skips the park and leaves the arm hanging wherever it was.
 KillSignal=SIGTERM
-TimeoutStopSec=20
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target

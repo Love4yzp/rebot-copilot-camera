@@ -67,5 +67,4 @@ def test_the_simulated_arm_reports_the_hardware_joint_set():
         "joint4",
         "joint5",
         "joint6",
-        "gripper",
     ]

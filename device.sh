@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# device.sh —— 部署脚本：每条命令都经 ssh 落到设备上执行。
-# 在你坐着的这台机器上起服务是 ./dev.sh —— 两个脚本的分界不是「做什么」，
-# 而是代码在哪台机器上执行。
+# 设备部署与运维脚本 (device.sh)
+# 作用：通过 SSH 远程把代码部署到机械臂工控机（如 reComputer）并进行运维管理。
 #
-# 子命令沿用上一代服务的名字：肌肉记忆比更整齐的词汇表值钱。
+# 前置条件：
+#   使用前需先设置远程设备 SSH 连接地址：
+#   export REBOT_HOST_SSH=recomputer@192.168.1.10
 #
-#   ./device.sh setup    一次性：uv、systemd、CAN、udev、权限组
-#   ./device.sh enable   开机自启
-#   ./device.sh push     构建前端 + rsync + 重启
-#   ./device.sh logs     tail journalctl
-#   ./device.sh open     SSH 隧道 + 开浏览器
-#   ./device.sh run      设备上前台跑，调 print/breakpoint 用
-#   ./device.sh status   在不在跑，跑在真臂还是模拟器上
+# 常用子命令：
+#   ./device.sh push     一键部署：在电脑上打包前端 -> 增量同步代码到设备 -> 重启服务
+#   ./device.sh setup    一次性初始化设备环境（安装 uv、systemd 服务、udev 硬件规则）
+#   ./device.sh status   检查设备服务状态，并确认是否成功连上物理机械臂（非模拟器）
+#   ./device.sh open     创建 SSH 端口转发隧道并自动打开本地浏览器访问设备界面
+#   ./device.sh logs     实时查看设备上的后台服务日志 (journalctl)
+#   ./device.sh run      临时停止后台服务并在终端前台运行，方便 print/breakpoint 调试
+#   ./device.sh enable   设置设备开机自动启动机械臂服务
 
 set -euo pipefail
 
-# No default for HOST: this is a public repo, and a baked-in SSH alias only
-# resolves on one machine.
+# HOST 不设默认值：公有仓库中硬编码 SSH 别名只能在一台电脑生效。必须显式设 REBOT_HOST_SSH
 HOST="${REBOT_HOST_SSH:-}"
 REMOTE_DIR="${REBOT_REMOTE_DIR:-/opt/rebot-copilot-camera}"
 PORT="${REBOT_PORT:-18790}"
@@ -29,9 +30,7 @@ die() {
 }
 step() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 
-# Help text is the header comment at the top of this file — a second copy here
-# would drift, and help text that describes the wrong subcommands is worse
-# than none.
+# usage 提取文件开头的注释作为 --help 输出（遇到第一个空行截止），避免维护多份文档
 usage() {
 	awk 'NR > 1 && /^$/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"
 }
@@ -51,8 +50,7 @@ cmd_setup() {
 	scp "$HERE/deploy/99-rebot-usb.rules" "$HOST:/tmp/"
 	ssh "$HOST" 'sudo mv /tmp/99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload'
 
-	# Without systemd-journal membership /api/logs comes back empty, with no
-	# error to explain why. Same trap as the previous service.
+	# 如果不把用户加入 systemd-journal 组，/api/logs 端点会静默返回空列表且无任何错误提示
 	step "[r2x] 授予 journal 与串口权限"
 	ssh "$HOST" 'sudo usermod -aG systemd-journal,dialout $(whoami)'
 
@@ -62,17 +60,12 @@ cmd_setup() {
 }
 
 cmd_push() {
-	# Building is local work, so it belongs to the local launcher. Keeping a
-	# second copy here would drift from it, and a drifted build step still
-	# produces a working bundle — just not the one you meant to deploy.
+	# 前端构建属于开发机本地工作，统一调 ./dev.sh build，避免两端构建规则漂移
 	"$HERE/dev.sh" build
 
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
-	# --delete keeps the remote clean, but the data directories are operator
-	# work that only exists on the device and must never be deleted by a deploy.
-	# routines/ is the v1 migration source — kept as the backup. Patterns
-	# without a leading / match at any depth, so each is anchored — otherwise
-	# backend/routines/ (a Python package) would be excluded too.
+	# --delete 保证远端代码干净；但必须保护数据目录（包含操作员现场示教出来的点位数据，绝不能删）。
+	# 带前导斜杠挂在根路径锚点上，防止误杀路径中同名的 Python 包目录（如 backend/routines/）。
 	rsync -az --delete \
 		--exclude '.git/' \
 		--exclude '.venv/' \
@@ -90,8 +83,7 @@ cmd_push() {
 		"$HERE/" "$HOST:$REMOTE_DIR/"
 
 	step "[r2x] 同步 vendored 臂层"
-	# rsync skips submodule contents, so it is sent explicitly rather than left
-	# as an empty directory that fails at import.
+	# rsync 默认跳过子模块内容，因此显式同步子模块，避免远端 import 报错
 	rsync -az --delete "$HERE/vendor/reBotArm_control_py/" \
 		"$HOST:$REMOTE_DIR/vendor/reBotArm_control_py/"
 
@@ -117,12 +109,8 @@ cmd_status() {
 	ssh "$HOST" "systemctl is-active $SERVICE || true"
 
 	step "[r2x] 健康检查"
-	# Reports whether the real arm was found. A service happily running on the
-	# simulator is the failure this exists to catch.
-	#
-	# Poll until the service answers, with a hard timeout: right after a
-	# restart the backend can take longer than any fixed sleep to come up, and
-	# a "no response" that is really "not up yet" is a false alarm.
+	# 轮询 /api/health 确认真实机械臂是否成功连接，专门拦截“硬件断连后静默退回模拟器”的隐蔽故障。
+	# 设置 30 秒超时：重启后后端初始化需要时间，避免因服务尚未就绪而发生误报。
 	local deadline=$((SECONDS + 30))
 	local body=""
 	while ((SECONDS < deadline)); do
@@ -138,9 +126,7 @@ cmd_status() {
 
 cmd_open() {
 	step "[r2x] 建隧道 $PORT 并打开浏览器"
-	# ExitOnForwardFailure: if the local port is already taken the tunnel dies
-	# immediately and ssh exits non-zero, instead of silently failing the
-	# forward and leaving the browser staring at a dead page.
+	# ExitOnForwardFailure=yes：若本地端口被占用则立即退出，防止端口转发失败导致浏览器打开空白页
 	ssh -f -N -o ExitOnForwardFailure=yes -L "$PORT:127.0.0.1:$PORT" "$HOST"
 	sleep 1
 	case "$(uname)" in
@@ -151,8 +137,7 @@ cmd_open() {
 
 cmd_run() {
 	step "[r2x] 停服务并前台运行"
-	# LANG set explicitly: without it journalctl and the terminal disagree about
-	# Chinese routine names and prints come out as ?.
+	# 显式设置 LANG=zh_CN.UTF-8：防止系统默认 LANG=C 导致终端与 journalctl 中文序列名打出 ? 乱码
 	ssh -t "$HOST" "sudo systemctl stop $SERVICE; cd $REMOTE_DIR && LANG=zh_CN.UTF-8 ~/.local/bin/uv run -m backend.app ${*:-}"
 }
 

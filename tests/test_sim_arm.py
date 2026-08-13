@@ -167,6 +167,27 @@ def test_releasing_float_holds_at_the_dragged_position(arm: SimArm):
     assert arm.read_state().positions["joint1"] == pytest.approx(-0.4, abs=1e-6)
 
 
+def test_follow_keeps_a_floating_arm_where_it_was_put(arm: SimArm):
+    """follow() is the simulator's side of the per-tick float stream: it keeps
+    the target synced to wherever the hand left the arm, so nothing pulls it
+    back between drag gestures."""
+    arm.set_float(True)
+    arm.drag({"joint1": 0.5})
+    arm.follow()
+    run(arm, seconds=2.0)
+
+    assert arm.read_state().positions["joint1"] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_follow_without_float_does_nothing(arm: SimArm):
+    """A follow tick outside float must not retarget a held arm."""
+    arm.hold({"joint1": 1.0})
+    arm.follow()
+    run(arm, seconds=2.0)
+
+    assert arm.read_state().positions["joint1"] == pytest.approx(1.0, abs=1e-3)
+
+
 def test_dragging_to_three_poses_records_three_distinct_positions(arm: SimArm):
     """The teach loop: drag, release, capture — three times."""
     captured = []

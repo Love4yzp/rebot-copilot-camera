@@ -53,6 +53,7 @@ from backend.core import Broadcaster, Controller
 from backend.sequences import Block, PoseStore, SequenceStore, TemplateStore, normalize
 from backend.safety import SafetyLatch
 from backend.shutter import SimShutter
+from backend.tuning import TuningStore
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_DIR = ROOT / "contract" / "cases"
@@ -133,6 +134,7 @@ def rig(tmp_path: Path):
     app.state.sequence_store = SequenceStore(tmp_path / "sequences")
     app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
+    app.state.tuning_store = TuningStore(tmp_path / "tuning.yaml")
     shutter = SimShutter()
     runner = InlineRunner()
     app.state.plugins = ActionRegistry(runner)

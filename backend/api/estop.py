@@ -3,18 +3,25 @@
 Three entry points engage the stop: the web UI's button, this API, and the
 watchdog. All three land on the same latch.
 
-Note what is deliberately absent: there is no "clear and resume". Clearing
-leaves the arm standing where it is. By the time an operator clears a stop the
-scene has usually changed, and resuming into a changed scene is a collision.
+Note what is deliberately absent: there is no "clear and resume". By the time
+an operator clears a stop the scene has usually changed, and resuming into a
+changed scene is a collision. What a clear *does* do is hand the arm to the
+operator in zero-gravity drag teaching: a cleared arm that just stands rigid
+is one nobody can reposition without fighting the motors — and the moments
+right after a stop are exactly when someone needs to move the arm by hand.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import logging
+
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from ..safety import LatchSnapshot, LatchSource, SafetyLatch
 from .gate import get_latch
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/estop", tags=["estop"])
 
@@ -71,11 +78,23 @@ def engage_estop(
 
 
 @router.post("/clear", response_model=EstopStatus)
-def clear_estop(latch: SafetyLatch = Depends(get_latch)) -> EstopStatus:
-    """Release the stop. The arm stays where it is; nothing resumes.
+def clear_estop(request: Request, latch: SafetyLatch = Depends(get_latch)) -> EstopStatus:
+    """Release the stop, then drop into zero-gravity drag teaching.
+
+    Nothing resumes — the run aborted at engage stays aborted. Teaching
+    starts locked and floats once a hand moves the arm, so the operator can
+    reposition immediately instead of prying at a rigidly held arm.
 
     Deliberately not behind the motion gate -- gating the escape hatch on the
     thing it escapes would wedge the system.
     """
     changed = latch.clear()
+    if changed:
+        try:
+            request.app.state.controller.set_teaching(True)
+        except RuntimeError:
+            # A run somehow still in flight keeps its refusal; the clear
+            # itself stands either way — teaching is a convenience, not a
+            # precondition for the arm being safe.
+            log.warning("estop cleared but teaching was refused", exc_info=True)
     return EstopStatus.from_snapshot(latch.snapshot(), changed=changed)

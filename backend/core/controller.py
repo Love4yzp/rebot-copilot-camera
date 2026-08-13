@@ -31,13 +31,26 @@ from ..arm.base import ArmDriver
 from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..arm.base import ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
+from ..safety.kinematics import ARM_JOINTS
 from ..shutter.base import ShutterDriver
+from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
 from .broadcaster import Broadcaster
 from .executor import DEFAULT_APPROACH_S, SequenceExecutor
 from .floatlock import FloatLock, FloatLockConfig
 
 log = logging.getLogger(__name__)
+
+
+def _floatlock_config(tuning: TuningConfig) -> FloatLockConfig:
+    fl = tuning.floatlock
+    return FloatLockConfig(
+        linear_threshold=fl.linear_threshold,
+        angular_threshold=fl.angular_threshold,
+        release_factor=fl.release_factor,
+        lock_factor=fl.lock_factor,
+        min_still_s=fl.min_still_s,
+    )
 
 
 class Controller:
@@ -54,6 +67,7 @@ class Controller:
         expected_period_s: float = 0.01,
         floatlock: FloatLockConfig | None = None,
         actions: ActionRunner | None = None,
+        tuning: TuningConfig | None = None,
     ) -> None:
         self.arm = arm
         # The driver stays reachable: /api/shutter/test checks the link from a
@@ -85,8 +99,13 @@ class Controller:
         self._was_latched = False
         #: Who asked for the sequence that is running (or last ran).
         self._playback_source = "ui"
-        self._floatlock = FloatLock(floatlock)
+        #: Operator-calibrated tuning, hot-swappable via :meth:`apply_tuning`.
+        #: The whole object is replaced, never mutated in place, so a tick in
+        #: flight sees either the old config or the new one — never half of one.
+        self._tuning = tuning or TuningConfig()
+        self._floatlock = FloatLock(floatlock or _floatlock_config(self._tuning))
         self._float_engaged = False
+        self._push_tuning_to_arm()
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -105,6 +124,63 @@ class Controller:
         with self._lock:
             self.shutter = driver
             self.actions.register(ShutterProvider(driver))
+
+    # ── tuning ─────────────────────────────────────────────────────────────────
+
+    @property
+    def tuning(self) -> TuningConfig:
+        with self._lock:
+            return self._tuning
+
+    def bind_arm(self, arm: ArmDriver) -> None:
+        """Swap the arm driver and re-push the current tuning onto it.
+
+        ``main()`` re-chooses the hardware after import time; without this the
+        real arm would run the code defaults while the panel shows the saved
+        tuning — the same trap ``set_shutter`` exists to close."""
+        with self._lock:
+            self.arm = arm
+            self._push_tuning_to_arm()
+
+    def apply_tuning(self, config: TuningConfig) -> None:
+        """Hot-apply a new tuning config. Rejects what the arm state forbids.
+
+        The gates, by risk class:
+
+        - everything is refused while a sequence executes: the run's executor
+          captured its settle/approach values at construction, and retuning a
+          moving arm helps no one;
+        - a payload change moves the gravity feedforward by newton-metres at
+          once, so it is refused while the arm floats (a floating arm has no
+          position loop to catch the jump with);
+        - float gains are safe mid-float: the follow target is the arm's own
+          position, so the position error — and the torque jump — is zero.
+        """
+        from .. import assets
+
+        with self._lock:
+            if self.is_playing:
+                raise TuningRejected("a sequence is executing — stop it before retuning")
+            payload_changed = config.payload != self._tuning.payload
+            if payload_changed:
+                if config.payload.profile is PayloadProfile.GRIPPER and not assets.has_gripper():
+                    raise TuningRejected(
+                        "profile 'gripper' but the gripper motor is off the bus — "
+                        "a profile cannot hot-add a motor"
+                    )
+                if self.arm.is_floating:
+                    raise TuningRejected(
+                        "the arm is floating — let it lock before changing the payload; "
+                        "the gravity feedforward jumps when the payload does"
+                    )
+            self._tuning = config
+            self._floatlock.config = _floatlock_config(config)
+            self._push_tuning_to_arm(rebuild_dynamics=payload_changed)
+
+    def _push_tuning_to_arm(self, rebuild_dynamics: bool = True) -> None:
+        self.arm.set_float_gains(self._tuning.float_.kp, self._tuning.float_.kd)
+        if rebuild_dynamics:
+            self.arm.reload_dynamics(self._tuning.payload)
 
     def emit_event(self, name: str, data: dict) -> None:
         """Publish a semantic event. Never blocks, never raises.
@@ -174,6 +250,9 @@ class Controller:
                 arm=self.arm,
                 actions=self.actions,
                 clock=self._clock,
+                settle_s=self._tuning.settle.min_s,
+                settle_drift=self._tuning.settle.drift_rad,
+                first_approach_max_speed=self._tuning.approach.first_max_speed,
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": _progress_payload(p)}
                 ),
@@ -216,6 +295,9 @@ class Controller:
                 arm=self.arm,
                 actions=self.actions,
                 clock=self._clock,
+                settle_s=self._tuning.settle.min_s,
+                settle_drift=self._tuning.settle.drift_rad,
+                first_approach_max_speed=self._tuning.approach.first_max_speed,
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": _progress_payload(p)}
                 ),
@@ -253,6 +335,41 @@ class Controller:
             # broadcasting its final "done".
             self._executor = None
             return running
+
+    # ── shutdown ─────────────────────────────────────────────────────────────
+
+    def park_home(self) -> SequenceExecutor | None:
+        """Slow move to the all-zero rest pose, for process shutdown.
+
+        Returns the executor driving the move, or ``None`` when no move was
+        started. ``None`` means the stop latch is engaged: an engaged stop
+        means something went wrong, and planning a new motion is exactly what
+        it exists to prevent — the arm holds its frozen pose through exit
+        instead, and the motors keep holding it after the process is gone.
+
+        The move goes through :meth:`goto`, so the first-approach speed limit,
+        arrival detection and stuck-abort all apply unchanged. Only the six
+        arm joints are parked; the gripper is left where it is (there is no
+        calibrated mapping from motor angle to finger travel). A stop engaged
+        *during* the park is handled by the normal latched-tick path: the
+        executor is aborted and the arm freezes where it is.
+        """
+        if self.latch.is_latched:
+            log.warning("stop latch engaged — holding the frozen pose, not parking")
+            return None
+        if self.is_teaching:
+            self.set_teaching(False)
+        self.stop_playback("process shutdown — parking at zero")
+        pose = Pose(
+            name="回零 · park",
+            joints={n: 0.0 for n in ARM_JOINTS if n in self.arm.joint_names},
+        )
+        try:
+            return self.goto(pose, source="shutdown")
+        except RuntimeError:
+            # The latch engaged between the check above and the goto.
+            log.warning("stop latch engaged mid-park — holding the frozen pose")
+            return None
 
     # ── teaching ─────────────────────────────────────────────────────────────
 
@@ -385,11 +502,15 @@ class Controller:
         following = self._floatlock.update(speed, 0.0, self._clock())
 
         if following:
-            # Free: the arm compensates gravity and does not resist.
+            # Free: the arm compensates gravity and does not resist. Float is
+            # a command stream, not silence — MIT executes the last command it
+            # received, so a loop that goes quiet here leaves the motors
+            # holding the stale lock target and the arm pulls back toward it.
             if not self._float_engaged:
                 self.arm.set_float(True)
                 self._float_engaged = True
             self._hold_target = None
+            self.arm.follow()
             return
 
         # Locked: pin it where the operator let go. Re-asserted only on the
@@ -468,6 +589,13 @@ class Controller:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the control-loop thread is up. The shutdown park's move is
+        driven by that loop, so a shutdown before startup finished has nothing
+        to drive it with."""
+        return self._thread is not None
 
     def _run(self, rate_hz: float) -> None:
         period = 1.0 / rate_hz

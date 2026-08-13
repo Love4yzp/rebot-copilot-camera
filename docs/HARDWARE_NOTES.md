@@ -111,6 +111,30 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 单位 N·m。j2 从 +1.5 变 -3.8 符合物理直觉（重心越过支点）。**上机后要拿实际电流对一遍。**
 
+### 10. MIT 模式执行最后一条指令 —— 浮动期间停发 = 保持陈旧设定值
+
+真机实测现象（2026-08，录姿态时）：示教浮动一触发，臂就往最后锁定的位置回拉，操作者感觉是「一直往上抬」。
+
+机制（源码级）：旧版 `_tick_teaching` 判定「手在动」后完全停止发令，`set_float(True)` 当时只设标志位。MIT 模式的电机持续执行**最后收到的那条指令** —— 即锁定阶段的 `hold(锁定位置, kp=50~150, tau=gravity)`，臂被位置环拉回锁定点。上游示例 `9_gravity_compensation.py` / `10_gravity_compensation_lock.py` 的做法是浮动期间**每 tick 流式发 MIT**：目标=当前位置、低增益（kp=2/kd=1）、按当前 q 实时算重力前馈。
+
+对策：`ArmDriver.follow()` —— 浮动期间控制循环每 tick 必调（`ArmSession.follow()` 发低增益 MIT + 实时重力前馈；`SimArm.follow()` 只同步目标，保持 sim/真机语义对齐）。模拟器的 `set_float(True)` 原本是真释放，所以这条 bug 在 `--sim` 下完全隐形 —— sim 和真机的「释放」语义差异是这类 bug 的温床。
+
+### 11. 夹爪不在机上时，它的 0.8 kg 也必须离开重力模型
+
+真机配置（2026-08）：裸臂，无相机、**无夹爪**。`gripper: false` 开关（#见 `backend/assets.py`）原本只把夹爪**电机**从总线上剥掉，URDF 里的 `gripper_end`（0.65 kg，质心偏出 11.3 cm）+ 两个指节（0.0752 kg × 2）共 **0.8004 kg** 还留在重力模型里。
+
+差分实测（开发机上对 URDF 算，有/无夹爪质量两个模型对比）—— 幻影力矩，单位 N·m：
+
+| 姿态 | joint2 | joint3 | joint4 |
+|---|---|---|---|
+| 静止 q=0 | -1.404 | **+3.257** | +1.466 |
+| `j2=1.2, j3=0.6` | -2.339 | +3.010 | +1.210 |
+| `j2=1.57, j3=1.0` | -3.048 | +3.050 | +1.234 |
+
+每关节库仑摩擦只有 0.2–0.5 N·m（#5），幻影力矩是它的 6–15 倍，什么都盖不住。浮动 kp=2 的位置环要对抗 3.26 N·m 需要偏出 1.6 rad —— 等于完全不设防。「点录制姿态臂就自己往上抬」的主嫌疑就是它（follow 修复见 #10，两者叠加）。
+
+对策：`assets.effective_urdf_path()` —— `gripper: false` 时生成剥掉夹爪连杆 `<inertial>` 质量的临时 URDF（与 `effective_hardware_yaml()` 同款手法），只供动力学模型用；运动学/碰撞仍用 vendor 原文件（幻影几何是保守方向）。`ArmSession._dynamics_model()` 与 `scripts/verify_gravity.py` 都走它。负载配置已产品化为 `config/tuning.yaml` 的 payload profile（bare/camera）+ 调参面板（`backend/tuning.py`），camera 档位把称出的相机质量/质心注入 `gripper_end`。注意 joint2 的幻影是**反向**的（夹爪质心在 -x 侧，原本起着配重作用），摘掉后 j2 重力需求反而上升 —— 别凭直觉猜符号，以差分表为准。
+
 ---
 
 ## 待实测 —— 上真机前不要当事实用
@@ -125,7 +149,9 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 上游标定是**空载**的臂（误差 5–11%）。末端挂一台机身后负载变了，浮动手感和保持精度都会变。
 
-可能的对策：在 URDF 末端加相机的等效质量/质心，或接受手感变差并靠位置环刚度补，或重调浮动/锁定的速度阈值（上游默认线速度 `0.04 m/s`、角速度 `0.08 rad/s`）。
+**现状（2026-08）**：机上无相机、无夹爪。夹爪的 0.8 kg 已从动力学模型剥离（#11，`effective_urdf_path()`），当前模型 = 纯裸臂，与上游标定状态一致。**负载机制已落地**：`config/tuning.yaml` 的 `payload.profile`（bare/camera）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
+
+相机到货后：整体称重（机身+支架）填 `camera.mass`，量出质心相对末端法兰的偏移填 `camera.com`，切到 camera profile，跑 `scripts/verify_gravity.py` 复核。次选：接受手感变差并靠位置环刚度补，或重调浮动/锁定的速度阈值（面板里就能调，上游默认线速度 `0.04 m/s`、角速度 `0.08 rad/s`）。
 
 ### B3. R2x 上 500 Hz 能否稳住
 
@@ -146,6 +172,7 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 ### 其它待确认
 
-- 七个关节的读数符号与零位是否和 URDF 一致（上游说 rest pose = 伸直 = q=0，未实测）。
+- 七个关节的读数符号与零位是否和 URDF 一致（上游说 rest pose = 伸直 = q=0，未实测）。**验证工具**：`uv run scripts/verify_gravity.py` —— 纯位置环刚性保持当前姿态（不带前馈），把电机实测力矩和模型 g(q) 逐关节对比，静态平衡下实测即真实负载。符号相反 = 前馈在推臂（浮动时「自己抬起来」的嫌疑）。跑之前先退出所有 backend 实例（独占 CAN 总线）。
 - 夹爪 `0x07` 的行程与 URDF 里 `joint_left`/`joint_right` 的米制限位如何对应。
 - 进站限速 `FIRST_APPROACH_MAX_SPEED = 0.25 rad/s`（`backend/core/executor.py`）是按 demo 安全同步速度 15°/s 取的（`docs/rebot-policy.md` §1.3），挂相机后的安全值未实测。execute 与 goto 的进站段都走它；真机上观察进站是否过冲/共振，必要时再降。
+- 到位静止判定 `SETTLE_DRIFT_RAD = 0.003` / `SETTLE_MIN_S = 0.15`（`backend/core/executor.py`）：hold 的时钟与快门都要等「进 eps 窗 + 驻留 0.15s 内漂移 < 0.003 rad」才算到位。刻意用位置漂移而不用差分速度判静止 —— 100 Hz 差分会把 CAN 读抖动放大 ~100 倍，速度阈值在真机上可能永远不满足，表现为每个序列都在进站 deadline abort。真机上若见到这种「永远不到位」，先查这条：把两个阈值放宽到能稳定通过的最紧值并回填。

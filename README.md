@@ -150,6 +150,12 @@ Colour and words always appear together. **No green means the UI doesn't know wh
 
 Besides the human button, a watchdog triggers automatically: the control loop persistently late, sustained CAN read failures, joints persistently drifting while holding. The reason is shown on the estop bar.
 
+## Shutting down
+
+**Ctrl+C (or `systemctl stop`) does not exit immediately**: the arm first moves slowly back to the zero pose (all joints q=0, ~14°/s, up to ~45 s), and only then does the control loop stop and the process exit. Pressing Ctrl+C again during the park neither speeds it up nor interrupts it — repeated signals are ignored. After the process exits the motors stay energized, pinning the arm at zero.
+
+One exception: **if the emergency stop is latched, shutdown does not park** — the arm exits holding its frozen pose. A latched stop means something went wrong, and planning a new motion is exactly what it exists to prevent.
+
 ---
 
 ## Configuration
@@ -161,17 +167,14 @@ Besides the human button, a watchdog triggers automatically: the control loop pe
 | `REBOT_ROUTINES_DIR` | `./routines` | Routines directory, one JSON per routine |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
+| `REBOT_TUNING_FILE` | `./config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
 
 CLI: `--sim` / `--host` / `--port`.
 `device.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
 
-**Retune after mounting the camera** (in code, covered by tests):
+**Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `config/tuning.yaml`, and「恢复已保存」reverts to the last save.
 
-| Constant | Location | Default | Why |
-|---|---|---|---|
-| `FloatLockConfig` speed threshold | `backend/core/floatlock.py` | 0.04 m/s | Upstream calibration is for an unloaded arm; feel changes with a camera |
-| `DEFAULT_HOLD_KP` / `KD` | `backend/arm/session.py` | 50 / 3 | Load changed, hold stiffness follows |
-| `LIMIT_TOLERANCE_RAD` | `backend/safety/kinematics.py` | 0.02 | Raise if encoder noise is high |
+**After mounting the camera**: weigh the body + mount, enter the mass under「负载 → 相机质量」and the centre-of-mass offset as com, switch to the camera profile, then re-verify the gravity model with `scripts/verify_gravity.py`. No code constants to edit anymore.
 
 ---
 
@@ -212,6 +215,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Symptom | Probably | Do |
 |---|---|---|
 | Service running, arm dead still | silently fell back to the simulator | `curl -s :18790/api/health \| grep simulated`. `true` means not connected; the startup log has the reason |
+| Falls back on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh prod` injects the dyld search path itself; a direct `uv run -m backend.app` needs `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
 | `import reBotArm_control_py` fails | submodule not pulled | `git submodule update --init` |
 | Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
 | Play returns **409** | estop latched, or already playing / teaching | `detail` says which |
@@ -248,7 +252,7 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 
 **Every endpoint that moves the arm returns 409 with a reason during estop.**
 
-**Extending the machine**: action plugins (in-process, `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
+**Extending the machine**: action plugins (in-process — drop a folder with a `plugin.json` into `plugins/`, or `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
 
 **Agent API** (`/api/agent/*`) for external LLMs / scripts: `acquire` takes an exclusive token, `control/joints` and `control/play/{id}` issue commands, `release` hands it back (`?force=true` lets the Web UI forcibly reclaim). Leases expire after 5 idle minutes or 30 minutes held. **It grants control, not safety exemption** — during estop the agent is refused exactly like a human. Full parameters in `/docs`.
 

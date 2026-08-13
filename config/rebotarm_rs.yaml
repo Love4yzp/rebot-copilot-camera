@@ -13,27 +13,34 @@
 
 # reBotArm RS 配置文件（RobStride 电机 + CAN 总线）
 # vendor: robstride  |  transport: CAN
-# 关节分组: arm (前6关节) + gripper (夹爪，可选)
-# 夹爪说明:
-#   - 使用电机夹爪时: 取消注释 gripper 组，arm 组指定6个关节
-#   - 使用其他执行器(吸盘等)时: 注释掉 gripper 组，arm 组改为6个关节
-#   - arm.gripper 在无配置时自动替换为 NoOpGroup，所有操作均为空操作
-
-# 运动学配置（URDF 路径、末端执行器帧）
-
-
+# 关节分组: arm (前6关节) + gripper (夹爪，由下面的 gripper 开关控制)
+#
 # reBotArm RS config (RobStride motors + CAN bus)
 # vendor: robstride  |  transport: CAN
-# Joint groups: arm (first 6 joints) + gripper (optional)
-# Gripper notes:
-#   - Using motor gripper: uncomment gripper group, arm group lists 6 joints
-#   - Using other actuator (suction cup, etc.): comment out gripper group
-#   - arm.gripper auto-replaces with NoOpGroup when unconfigured; all operations are no-op
+# Joint groups: arm (first 6 joints) + gripper (gated by the `gripper` switch)
 
 # Kinematics config (URDF path, end-effector frame)
 
 urdf_path: "urdf/00-arm-rs_asm-v3/urdf/00-arm-rs_asm-v3.urdf"
 end_effector_frame: "gripper_end"
+
+# 末端执行器开关。夹爪是可拆装件，切换只改这一行，不动下面的组和关节定义：
+#   false —— 无夹爪（或装了吸盘等其它执行器）：加载时剥掉 gripper 组和关节，
+#            上游以 NoOpGroup 顶替，所有夹爪调用为空操作；同时生成一份剥掉
+#            夹爪连杆质量的 URDF 供动力学模型用 —— 否则重力前馈会一直补偿
+#            一块不在机上的 0.8 kg，浮动时臂被自己的前馈推着走
+#            （见 backend/assets.py 的 effective_urdf_path）。
+#   true  —— 使用电机夹爪：groups.gripper 与文末的 gripper 关节生效。
+# End-effector switch — the gripper is a swappable accessory, so toggling it is
+# this one line, not an edit to the group/joint definitions below:
+#   false — no gripper (or another actuator): the gripper group and joint are
+#           stripped at load time; upstream substitutes a NoOpGroup whose every
+#           call is a no-op. The gripper links' mass is likewise stripped from
+#           the URDF handed to the dynamics model — otherwise the gravity
+#           feedforward keeps compensating 0.8 kg that is not on the arm and
+#           the floating arm pushes itself around (assets.effective_urdf_path).
+#   true  — motor gripper attached: groups.gripper and the gripper joint apply.
+gripper: false
 
 channel: can0
 rate: 500

@@ -17,7 +17,10 @@ against the simulator then behaves the same on hardware.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Mapping, Protocol, Sequence, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..tuning import PayloadTuning
 
 
 @dataclass(frozen=True)
@@ -39,11 +42,16 @@ class ArmDriver(Protocol):
 
     @property
     def joint_names(self) -> Sequence[str]:
-        """Hardware joint order: ``joint1``..``joint6`` then ``gripper``."""
+        """Hardware joint order, as configured in the hardware yaml."""
         ...
 
     @property
     def is_connected(self) -> bool: ...
+
+    @property
+    def is_floating(self) -> bool:
+        """True while the arm is in zero-force float (drag teaching)."""
+        ...
 
     def connect(self) -> None: ...
 
@@ -79,5 +87,36 @@ class ArmDriver(Protocol):
 
         While floating, the arm compensates gravity but does not resist being
         pushed. Leaving float re-asserts a hold at wherever it currently is.
+        """
+        ...
+
+    def follow(self) -> None:
+        """One zero-force tick while floating: track the hand, carry gravity.
+
+        Must be called every control-loop tick for as long as the arm floats.
+        MIT mode executes the *last command it received*, so going silent is
+        not "free" — it leaves the motors holding the stale lock setpoint and
+        the arm pulls back toward where it locked. Float only exists while
+        this stream keeps running.
+        """
+        ...
+
+    def set_float_gains(self, kp: float, kd: float) -> None:
+        """Retune the float stiffness/damping, live.
+
+        Safe to call mid-float: the follow target is the arm's current
+        position, so the position error — and with it the torque jump a gain
+        change could cause — is zero. Changing the *payload* is a different
+        story; see :meth:`reload_dynamics`.
+        """
+        ...
+
+    def reload_dynamics(self, payload: "PayloadTuning | None" = None) -> None:
+        """Rebuild the gravity model for a changed end load.
+
+        Switching the payload profile moves the gravity feedforward by
+        newton-metres at once, so callers gate this on the arm not floating
+        (``Controller.apply_tuning``). The simulator records the payload for
+        semantic parity and otherwise has no model to rebuild.
         """
         ...

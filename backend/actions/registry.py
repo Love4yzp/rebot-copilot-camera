@@ -1,13 +1,14 @@
 """Finding providers, and knowing which of them work.
 
-Providers arrive two ways. The shutter is registered directly, because it ships
-with the service. Everything else comes from an entry point::
+Providers arrive three ways. The shutter is registered directly, because it
+ships with the service. Distributable plugins come from an entry point::
 
     [project.entry-points."rebot.actions"]
     turntable = "rebot_plugin_turntable:TurntableProvider"
 
-so installing a plugin is ``uv pip install`` plus a restart, with no host
-change and no front-end change.
+and everything else is a folder dropped into ``plugins/`` with a
+``plugin.json`` in it (see :meth:`ActionRegistry.discover_dir`). Either way,
+installing a plugin needs no host change and no front-end change.
 
 **A broken plugin never stops the service.** A device missing one accessory
 should still lay out anchors and drive the arm; refusing to start would turn a
@@ -31,10 +32,14 @@ discovery and health on top, and never keeps a second copy of the list.
 
 from __future__ import annotations
 
+import importlib
+import json
 import logging
 import re
+import sys
 from dataclasses import dataclass
 from importlib.metadata import entry_points
+from pathlib import Path
 from typing import Iterable
 
 from pydantic import BaseModel
@@ -181,6 +186,72 @@ class ActionRegistry:
                 continue
 
             log.info("plugin %r provides action %r", entry.name, provider.id)
+
+    def discover_dir(self, plugins_dir: Path) -> None:
+        """Load every plugin dropped into ``plugins_dir``, one folder per plugin.
+
+        The drop-in route, for plugins that are not worth a pip package: a
+        folder holding the code plus a ``plugin.json``::
+
+            {"module": "rebot_plugin_turntable",
+             "provider": "TurntableProvider",
+             "enabled": true}
+
+        The folder goes on ``sys.path`` and ``module`` is imported from it, so
+        a plugin can be several files. Module names must not collide with each
+        other or with installed packages — first loader wins, and a name that
+        resolves to the wrong module fails its shape check loudly rather than
+        loading twice.
+
+        ``enabled: false`` is the off switch: the plugin is skipped and listed
+        as unavailable with the reason, so a disabled accessory reads as
+        deliberately off, not as missing. Loading still happens at startup —
+        a folder dropped in mid-run takes effect on the next restart.
+
+        Plugins loaded this way run against the host's own environment; one
+        that needs packages of its own has to become a pip package with entry
+        points instead. A folder without ``plugin.json`` is ignored — it may
+        be somebody's notes. Everything else about failure is identical to
+        :meth:`discover`: a bad plugin costs itself, nothing more.
+        """
+        root = Path(plugins_dir)
+        if not root.is_dir():
+            return
+        for child in sorted(p for p in root.iterdir() if p.is_dir()):
+            manifest_path = child / "plugin.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+                module_name = meta["module"]
+                attr = meta["provider"]
+            except Exception as exc:
+                log.error("plugin %r has an unreadable plugin.json: %s", child.name, exc)
+                self._record_broken(child.name, f"bad plugin.json: {exc}")
+                continue
+
+            if not meta.get("enabled", True):
+                log.info("plugin %r is disabled in its plugin.json", child.name)
+                self._record_broken(
+                    child.name, f"disabled — set enabled to true in {child.name}/plugin.json"
+                )
+                continue
+
+            try:
+                sys.path.insert(0, str(child))
+                try:
+                    module = importlib.import_module(module_name)
+                except Exception:
+                    sys.path.remove(str(child))
+                    raise
+                provider = getattr(module, attr)()
+                self.register(provider)
+            except Exception as exc:
+                log.error("plugin %r failed to load: %s", child.name, exc, exc_info=True)
+                self._record_broken(child.name, f"failed to load: {exc}")
+                continue
+
+            log.info("plugin %r provides action %r (dropped into %s)", child.name, provider.id, child)
 
     def _record_broken(self, name: str, reason: str) -> None:
         """List a plugin that never became a provider, under its package's name.

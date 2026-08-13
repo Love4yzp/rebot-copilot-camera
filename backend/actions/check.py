@@ -39,6 +39,7 @@ def _registry() -> ActionRegistry:
     The shutter driver is built unopened, so listing and inspecting work with
     no board attached; ``--probe`` is what actually reaches for one.
     """
+    from .. import config
     from ..shutter import create_shutter
     from .shutter import ShutterProvider
 
@@ -46,6 +47,7 @@ def _registry() -> ActionRegistry:
     driver, _ = create_shutter()
     registry.register(ShutterProvider(driver))
     registry.discover()
+    registry.discover_dir(config.PLUGINS_DIR)
     return registry
 
 

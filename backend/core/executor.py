@@ -14,9 +14,10 @@ arm forces:
   arrival detection, where the mock lerps joints. **Easing only shapes the
   frontend preview** — the real arm walks whatever profile upstream's
   ``move_to`` picks. Close, not guaranteed identical; the UI says so.
-- a hold's clock starts when the arm has *arrived* at the pose, so a marker
-  can never fire mid-approach and photograph a moving scene. The mock starts
-  the countdown at block entry because its arm is never late.
+- a hold's clock starts when the arm has arrived at the pose *and held
+  still* for a settle dwell, so a marker can never fire mid-approach — or
+  mid-settle — and photograph a moving scene. The mock starts the countdown
+  at block entry because its arm is never late.
 - a block can be stretched by reality: a marker still executing when the
   commanded duration runs out holds the block open until it finishes. That is
   TIMELINE rule 4 — the plan ruler is commanded time, execution is honest.
@@ -87,6 +88,21 @@ ARRIVAL_TIMEOUT_FLOOR_S = 2.0
 #: marker, and a failed marker aborts the run — the fixed policy (see module
 #: docstring and TIMELINE: a silently missed frame is found at review time).
 MARKER_TIMEOUT_S = 5.0
+#: "Arrived" means arrived *and still*. Position alone is not enough: a
+#: first-order approach crosses the eps window at speed, and a marker fired
+#: on that tick photographs a moving arm. During the settle dwell no joint
+#: may wander further than this, in radians, or the dwell restarts.
+#:
+#: Stillness is judged from positions, not velocities: velocity on this arm
+#: is finite-differenced (mechVel is not rad/s — docs/HARDWARE_NOTES.md), so
+#: at 100 Hz a velocity threshold would amplify CAN read jitter ~100x and the
+#: arm might never report "still" on real hardware. **Not yet calibrated on
+#: the real arm.**
+SETTLE_DRIFT_RAD = 0.003
+#: How long the arm must hold within SETTLE_DRIFT_RAD before arrival is
+#: claimed, in seconds. Bounds the latent speed at any shot to drift/dwell
+#: (0.02 rad/s ≈ 1.1°/s — invisible on a sub-second exposure).
+SETTLE_MIN_S = 0.15
 
 
 @dataclass(frozen=True)
@@ -125,10 +141,11 @@ class Progress:
     finished (the advance step increments before it notices it is done).
 
     ``approaching`` is ``True`` when the current block is a :class:`HoldBlock`
-    and the arm is still flying toward its pose — the hold's clock has not yet
-    started.  Once the arm arrives and :meth:`_begin_hold_timing` is called,
-    ``approaching`` flips to ``False`` for the rest of the block.  Every other
-    phase (transition, wait, done, aborted) always reports ``False``.
+    and the arm is still flying toward — or settling at — its pose: the hold's
+    clock has not yet started.  Once the arm has arrived *and held still* and
+    :meth:`_begin_hold_timing` is called, ``approaching`` flips to ``False``
+    for the rest of the block.  Every other phase (transition, wait, done,
+    aborted) always reports ``False``.
     """
 
     phase: Phase
@@ -156,6 +173,9 @@ class SequenceExecutor:
         actions: ActionRunner,
         clock: Callable[[], float],
         arrival_eps: float = DEFAULT_ARRIVAL_EPS,
+        settle_s: float = SETTLE_MIN_S,
+        settle_drift: float = SETTLE_DRIFT_RAD,
+        first_approach_max_speed: float = FIRST_APPROACH_MAX_SPEED,
         #: Set for a single-pose goto: the sequence is one transition block and
         #: this is where it goes. The mock's goto is exactly this shape.
         goto: Pose | None = None,
@@ -168,6 +188,9 @@ class SequenceExecutor:
         self._actions = actions
         self._clock = clock
         self._arrival_eps = arrival_eps
+        self._settle_s = settle_s
+        self._settle_drift = settle_drift
+        self._first_approach_max_speed = first_approach_max_speed
         self._goto = goto
         self._on_progress = on_progress
         self._on_event = on_event
@@ -183,6 +206,11 @@ class SequenceExecutor:
         self._arrival_deadline = 0.0
         #: Whether the current transition's target has been reached.
         self._arrived = False
+        #: Settle dwell bookkeeping: when the arm first entered the arrival
+        #: window and where it stood then. Drift past ``settle_drift``
+        #: restarts both — see :meth:`_has_arrived`.
+        self._settle_since: float | None = None
+        self._settle_ref: dict[str, float] | None = None
         #: The pose the current block is about: the hold's own pose, or the
         #: transition's target (the next hold's pose, or the goto pose).
         self._block_pose: Pose | None = None
@@ -388,6 +416,8 @@ class SequenceExecutor:
         self._job = None
         self._shots_fired = 0
         self._arrived = False
+        self._settle_since = None
+        self._settle_ref = None
         now = self._clock()
 
         if isinstance(block, HoldBlock):
@@ -451,7 +481,7 @@ class SequenceExecutor:
             (abs(positions.get(name, q) - q) for name, q in target.items()),
             default=0.0,
         )
-        needed = largest_move / FIRST_APPROACH_MAX_SPEED
+        needed = largest_move / self._first_approach_max_speed
         if needed > base:
             log.info(
                 "stretching approach to first pose: %.1fs -> %.1fs (%.2f rad to cover)",
@@ -546,8 +576,37 @@ class SequenceExecutor:
                 )
 
     def _has_arrived(self, target: Mapping[str, float]) -> bool:
+        """Position inside the eps window, *held still* for the settle dwell.
+
+        Position alone is not arrival: a joint creeping through the window
+        at speed satisfies it, and a shutter fired on that tick photographs
+        a moving arm. Stillness is measured from position drift, not the
+        differenced velocity — see :data:`SETTLE_DRIFT_RAD`.
+        """
         positions = self._arm.read_state().positions
-        return all(abs(positions.get(n, 0.0) - q) <= self._arrival_eps for n, q in target.items())
+        now = self._clock()
+        within = all(
+            abs(positions.get(n, 0.0) - q) <= self._arrival_eps
+            for n, q in target.items()
+        )
+        if not within:
+            self._settle_since = None
+            self._settle_ref = None
+            return False
+        if self._settle_since is None or self._settle_ref is None:
+            self._settle_since = now
+            self._settle_ref = dict(positions)
+            return False
+        drifting = any(
+            abs(positions.get(n, 0.0) - self._settle_ref.get(n, 0.0)) > self._settle_drift
+            for n in target
+        )
+        if drifting:
+            # Still creeping through the window: restart the dwell from here.
+            self._settle_since = now
+            self._settle_ref = dict(positions)
+            return False
+        return now - self._settle_since >= self._settle_s
 
     # ── markers ──────────────────────────────────────────────────────────────
 

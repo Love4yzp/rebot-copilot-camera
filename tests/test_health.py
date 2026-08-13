@@ -29,5 +29,4 @@ def test_health_reports_the_rs_arm_not_the_dm_arm():
         "joint4",
         "joint5",
         "joint6",
-        "gripper",
     ]

@@ -160,15 +160,34 @@ def test_letting_go_locks_the_arm_where_it_was_left(rig: Rig):
     assert settled > 0.3, "should have stayed where it was dragged"
 
 
-def test_a_floating_arm_is_not_commanded(rig: Rig):
+def test_a_floating_arm_is_followed_every_tick(rig: Rig):
+    """Float is a command stream, not silence. MIT mode executes the last
+    command it received, so a loop that goes quiet while "floating" leaves
+    the motors holding the stale lock setpoint — the arm pulls back toward
+    where it locked, which an operator reads as "it keeps lifting"."""
+    calls = 0
+    real_follow = rig.arm.follow
+
+    def spy() -> None:
+        nonlocal calls
+        calls += 1
+        real_follow()
+
+    rig.arm.follow = spy  # type: ignore[method-assign]
+
     rig.controller.set_teaching(True)
     rig.arm.drag({"joint1": 0.4})
     rig.step(2)
     assert rig.arm.is_floating is True
 
-    before = rig.arm.read_state().positions["joint1"]
+    before = calls
     rig.step(3)
-    assert rig.arm.read_state().positions["joint1"] == pytest.approx(before)
+    assert calls - before == 3, "every floating tick must stream a follow command"
+
+    # ...and the observable behaviour is unchanged: the arm stays where put.
+    settled = rig.arm.read_state().positions["joint1"]
+    rig.step(3)
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(settled)
 
 
 # ── emergency stop ───────────────────────────────────────────────────────────

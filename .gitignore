@@ -5,6 +5,8 @@
 /poses/
 /sequences/
 /templates/
+# drop-in plugins — the user's own code, synced by device.sh push, never committed
+/plugins/
 
 # python
 __pycache__/

@@ -9,6 +9,7 @@ import type {
   Sequence,
   SequenceSummary,
   ShutterResult,
+  TuningState,
 } from "./types";
 
 /** Error carrying the server's structured reason, so the UI can show it. */
@@ -153,4 +154,14 @@ export const api = {
    * with a 409 while a sequence is executing.
    */
   pairShutter: () => post<ShutterResult>("/api/shutter/pair"),
+
+  // ── tuning ──────────────────────────────────────────────────────────────
+  tuning: {
+    get: () => request<TuningState>("/api/config/tuning"),
+    /** Deep-merge partial patch. Body is {section: {field: value, ...}} */
+    put: (patch: Record<string, unknown>) =>
+      request<TuningState>("/api/config/tuning", { method: "PUT", body: JSON.stringify(patch) }),
+    save: () => post<TuningState>("/api/config/tuning/save"),
+    reset: () => post<TuningState>("/api/config/tuning/reset"),
+  },
 };

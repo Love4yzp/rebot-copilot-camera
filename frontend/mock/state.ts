@@ -94,6 +94,9 @@ export interface MockState {
    * a frame is taken.
    */
   camera: boolean;
+  /** Tuning panel state — mirrors the backend's TuningConfig. */
+  tuning_current: Record<string, unknown>;
+  tuning_saved: Record<string, unknown>;
 }
 
 /** A plausible resting pose for every joint, so the 3D view starts relaxed. */
@@ -180,6 +183,15 @@ function seedTemplate(now: number): MockTemplate {
   };
 }
 
+/** Default tuning config matching the backend's TuningConfig defaults. */
+const DEFAULT_TUNING: Record<string, unknown> = {
+  payload: { profile: "bare", camera: { mass: null, com: [0, 0, 0] } },
+  float: { kp: 2.0, kd: 1.0 },
+  floatlock: { linear_threshold: 0.04, angular_threshold: 0.08, release_factor: 1.0, lock_factor: 0.6, min_still_s: 0.25 },
+  settle: { drift_rad: 0.003, min_s: 0.15 },
+  approach: { first_max_speed: 0.25 },
+};
+
 export function createState(options: { seed?: boolean } = {}): MockState {
   const seed = options.seed ?? true;
   const now = Date.now() / 1000;
@@ -211,5 +223,7 @@ export function createState(options: { seed?: boolean } = {}): MockState {
       : [],
     templates: seed ? [seedTemplate(now)] : [],
     goto: null,
+    tuning_current: structuredClone(DEFAULT_TUNING),
+    tuning_saved: structuredClone(DEFAULT_TUNING),
   };
 }

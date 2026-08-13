@@ -150,6 +150,12 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 除了人按，看门狗也会自动触发：控制循环持续迟到、连续 CAN 读失败、握持中关节持续漂移。原因显示在急停条上。
 
+## 退出
+
+**Ctrl+C（或 `systemctl stop`）不会立即退出**：先把臂慢速开回零位（全关节 q=0，约 14°/s，最长约 45 秒），到位后才停控制循环、终止进程。回零途中再按 Ctrl+C 不会加速也不会打断 —— 重复信号一律忽略。进程结束后电机保持上电，把臂钉在零位。
+
+例外：**急停吸合时退出不回零**，臂保持冻结姿态结束进程 —— 急停意味着出了状况，此时规划新运动正是急停要防的事。
+
 ---
 
 ## 配置
@@ -159,19 +165,16 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 | `REBOT_HOST` | `127.0.0.1` | 监听地址。**改成 `0.0.0.0` 等于把机械臂控制权开放给整个网络，本项目没有认证层** |
 | `REBOT_PORT` | `18790` | 端口 |
 | `REBOT_ROUTINES_DIR` | `./routines` | 序列目录，一条一个 JSON |
-| `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到 CAN 桥上看起来就是相机坏了）|
+| `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到别的 CDC 设备上看起来就是相机坏了）|
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
+| `REBOT_TUNING_FILE` | `./config/tuning.yaml` | 调参面板的落盘文件。文件缺失 = 默认值 |
 
 命令行：`--sim` / `--host` / `--port`。
 `device.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
 
-**挂上相机后要重调的**（都在代码里，有测试兜着）：
+**调参面板**（监视器区右侧「调参」按钮，prod 下进入需确认）：浮动手感 kp/kd、浮动/锁定阈值、到位判定、进站限速、负载 profile（bare/camera/gripper）。改动立即热生效 —— 示教浮动中也可以边掰边调 kp/kd；但负载 profile 切换要求臂不在浮动，序列执行中拒绝一切写入。热改只进内存，点「保存到配置」才写进 `config/tuning.yaml`；「恢复已保存」随时回到上次保存。
 
-| 常量 | 位置 | 默认 | 为什么 |
-|---|---|---|---|
-| `FloatLockConfig` 速度阈值 | `backend/core/floatlock.py` | 0.04 m/s | 上游标定是空载的臂，挂相机后手感会变 |
-| `DEFAULT_HOLD_KP` / `KD` | `backend/arm/session.py` | 50 / 3 | 负载变了，握持刚度要跟 |
-| `LIMIT_TOLERANCE_RAD` | `backend/safety/kinematics.py` | 0.02 | 编码器噪声大就加 |
+**挂上相机后**：整机（机身+支架）称重，把质量填进面板的「负载 → 相机质量」，质心相对末端法兰的偏移填 com，切到 camera profile，然后跑 `scripts/verify_gravity.py` 复核重力模型。不再需要改代码里的常量。
 
 ---
 
@@ -212,6 +215,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 | 现象 | 多半是 | 怎么办 |
 |---|---|---|
 | 服务在跑，臂一动不动 | 静默退回了模拟器 | `curl -s :18790/api/health \| grep simulated`。`true` 就是没连上，启动日志里有具体原因 |
+| macOS 上退回模拟器，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh prod` 会自动注入 dyld 搜索路径；直接 `uv run -m backend.app` 要自己设 `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
 | `import reBotArm_control_py` 失败 | submodule 没拉 | `git submodule update --init` |
 | 按播放返 **400** | 有点位越限 / 自碰撞，或相邻两点之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录点时不拒绝只警告**（臂物理上就在那），检查发生在播放前 |
 | 按播放返 **409** | 急停闩着，或已在播 / 在示教 | `detail` 里写了是哪种 |
@@ -248,7 +252,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 **所有会让臂动的端点在急停期间返 409 并带原因。**
 
-**扩展这台机器**：动作插件（进程内，`uv pip install` 一个声明了 `rebot.actions` entry point 的包）、触发源（打 `goto` 的 HTTP 客户端）、事件订阅（连 `/api/events` 的 WS 客户端）。三个扩展点的完整契约与无硬件开发循环 `uv run -m backend.actions.check` 在 [`docs/PLUGINS.md`](./docs/PLUGINS.md)；完整例子是一个**可安装的包** [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/)，不是文档里的代码块 —— 打包元数据本身有测试覆盖。
+**扩展这台机器**：动作插件（进程内 —— 把带 `plugin.json` 的文件夹丢进 `plugins/`，或 `uv pip install` 一个声明了 `rebot.actions` entry point 的包）、触发源（打 `goto` 的 HTTP 客户端）、事件订阅（连 `/api/events` 的 WS 客户端）。三个扩展点的完整契约与无硬件开发循环 `uv run -m backend.actions.check` 在 [`docs/PLUGINS.md`](./docs/PLUGINS.md)；完整例子是一个**可安装的包** [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/)，不是文档里的代码块 —— 打包元数据本身有测试覆盖。
 
 **Agent API**（`/api/agent/*`）给外部 LLM / 脚本用：`acquire` 拿独占 token，`control/joints` 和 `control/play/{id}` 下指令，`release` 交还（`?force=true` 让 Web UI 强制收回）。租约空闲 5 分钟或持有满 30 分钟自动过期。**给的是控制权不是安全豁免** —— 急停期间拒绝 agent，和拒绝人一模一样。完整参数看 `/docs`。
 

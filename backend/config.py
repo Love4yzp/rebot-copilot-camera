@@ -23,6 +23,18 @@ POSES_DIR = Path(os.environ.get("REBOT_POSES_DIR", REPO_ROOT / "poses"))
 SEQUENCES_DIR = Path(os.environ.get("REBOT_SEQUENCES_DIR", REPO_ROOT / "sequences"))
 TEMPLATES_DIR = Path(os.environ.get("REBOT_TEMPLATES_DIR", REPO_ROOT / "templates"))
 
+#: Drop-in plugins, one folder each with a plugin.json. Gitignored like the
+#: operator data — it is content the user added, not this repo's source — but
+#: unlike the stores it syncs with device.sh push, because it is code whose
+#: source of truth is the development machine.
+PLUGINS_DIR = Path(os.environ.get("REBOT_PLUGINS_DIR", REPO_ROOT / "plugins"))
+
+#: Operator-calibrated tuning (payload profile, float gains, thresholds),
+#: written only by the tuning panel's explicit save. Kept out of
+#: config/rebotarm_rs.yaml: that file is a commented upstream fork, and a
+#: YAML round-trip would strip every comment.
+TUNING_FILE = Path(os.environ.get("REBOT_TUNING_FILE", REPO_ROOT / "config" / "tuning.yaml"))
+
 #: Localhost only. Remote access goes through an SSH tunnel, as before.
 HOST = os.environ.get("REBOT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("REBOT_PORT", "18790"))

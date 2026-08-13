@@ -69,6 +69,27 @@ def test_clear_is_reachable_while_latched(client: TestClient):
     assert client.post("/api/estop/clear").status_code == 200
 
 
+def test_clear_drops_into_zero_gravity_teaching(client: TestClient):
+    """Right after a stop is exactly when someone needs to move the arm by
+    hand; a cleared arm that just stands rigid forces them to fight the
+    motors. So a real clear hands the arm over in drag teaching (locked
+    until touched)."""
+    client.post("/api/estop", json={"reason": "stop"})
+    client.post("/api/estop/clear")
+    try:
+        body = client.get("/api/control").json()
+        assert body["teaching"] is True
+        assert body["mode"] == "teach"
+    finally:
+        client.post("/api/teach", json={"enabled": False})
+
+
+def test_a_noop_clear_does_not_enter_teaching(client: TestClient):
+    """Clearing a stop that was never engaged changes nothing."""
+    assert client.post("/api/estop/clear").json()["changed"] is False
+    assert client.get("/api/control").json()["teaching"] is False
+
+
 def test_empty_reason_is_rejected(client: TestClient):
     r = client.post("/api/estop", json={"reason": "", "source": "api"})
     assert r.status_code == 422

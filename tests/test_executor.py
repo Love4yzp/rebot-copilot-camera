@@ -162,6 +162,31 @@ def test_focus_is_skipped_when_disabled():
     assert h.shutter.focuses == 0
 
 
+def test_the_shutter_waits_until_the_arm_is_actually_still():
+    """Position inside the arrival window is not stillness.
+
+    A first-order approach crosses the eps boundary while the joint is
+    still moving fast. A marker at ``at=0`` fired on that tick photographs
+    a moving arm — the frame comes back blurred and nothing reports why.
+    """
+    from backend.core.executor import SETTLE_DRIFT_RAD, SETTLE_MIN_S
+
+    a = pose(0.8, "a")
+    sequence, poses = make(hold(a, duration_s=2.0, markers=[shutter_marker(0.0)]))
+    poses[a.id] = a
+    h = Harness(sequence, poses)
+    h.executor.start()
+    while h.shutter.shots == 0 and h.clock.now < 30:
+        h.step()
+
+    assert h.shutter.shots == 1, "shutter never fired"
+    speed = abs(h.arm.read_state().velocities["joint1"])
+    # The dwell bounds the latent speed at the shot to drift/dwell.
+    assert speed <= SETTLE_DRIFT_RAD / SETTLE_MIN_S * 2, (
+        f"shot fired while joint1 was still moving at {speed:.3f} rad/s"
+    )
+
+
 def test_a_burst_fires_count_frames_and_refocuses_each():
     """Between frames of a burst the subject has usually moved — that is why
     there is a burst at all — so every frame gets its own half-press."""
@@ -601,8 +626,12 @@ def test_approaching_is_true_during_first_hold_approach():
         assert p.approaching is False
 
 
-def test_approaching_is_false_when_arm_already_at_pose():
-    """Arm already at the hold's pose at start — no approach needed."""
+def test_approaching_is_false_once_a_present_arm_proves_it_is_still():
+    """Arm already at the hold's pose at start — no approach needed, but the
+    settle dwell still has to pass before the hold's clock starts: "already
+    there" is also only believed once the arm has demonstrably held still."""
+    from backend.core.executor import SETTLE_MIN_S
+
     target = pose(0.0)
     sequence, poses = make(hold(target, 0.5))
     poses[target.id] = target
@@ -611,6 +640,10 @@ def test_approaching_is_false_when_arm_already_at_pose():
 
     p = h.executor.progress()
     assert p.phase is Phase.HOLD
+    assert p.approaching is True, "the stillness dwell has not run yet"
+
+    h.step(int(SETTLE_MIN_S / DT) + 2)
+    p = h.executor.progress()
     assert p.approaching is False
 
 

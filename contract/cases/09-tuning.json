@@ -1,0 +1,10 @@
+{
+  "name": "09-tuning",
+  "kind": "rest",
+  "steps": [
+    {"method": "GET", "path": "/api/config/tuning"},
+    {"method": "PUT", "path": "/api/config/tuning", "body": {"float": {"kp": 3.0, "kd": 1.5}}},
+    {"method": "PUT", "path": "/api/config/tuning", "body": {"settle": {"min_s": 0.3}}},
+    {"method": "GET", "path": "/api/config/tuning"}
+  ]
+}

@@ -24,9 +24,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:
+    from .tuning import PayloadTuning
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -84,8 +87,127 @@ def end_effector_frame() -> str:
 
 
 def joint_names() -> list[str]:
-    """Joint names in hardware order: ``joint1``..``joint6`` then ``gripper``."""
-    return [j["name"] for j in hardware_config().get("joints", [])]
+    """Joint names in hardware order, as listed in the hardware yaml.
+
+    Gripper joints drop out when the ``gripper`` switch is off — see
+    :func:`has_gripper`.
+    """
+    names = [j["name"] for j in hardware_config().get("joints", [])]
+    if has_gripper():
+        return names
+    gripper = set(_gripper_joint_names())
+    return [n for n in names if n not in gripper]
+
+
+def has_gripper() -> bool:
+    """Whether a motor gripper is attached (the ``gripper`` switch in the yaml).
+
+    The gripper is a swappable accessory, so this is a flag rather than an edit
+    to the group/joint definitions. Missing key defaults to ``True`` — a config
+    without the switch behaves exactly as before the switch existed.
+    """
+    return bool(hardware_config().get("gripper", True))
+
+
+def _gripper_joint_names() -> list[str]:
+    """Joint names belonging to the gripper group (usually just ``gripper``)."""
+    groups = hardware_config().get("groups", {})
+    return list(groups.get("gripper", {}).get("joints", []))
+
+
+def effective_hardware_yaml() -> Path:
+    """The yaml to hand upstream's ``RebotArm``.
+
+    With the gripper switched on this is simply :data:`HARDWARE_YAML`. With it
+    off, the gripper group and its joint entries are stripped into a throwaway
+    copy: otherwise upstream would register a motor that is not on the bus and
+    ``connect()`` would fail. Upstream substitutes a ``NoOpGroup`` for the
+    missing gripper group, so every gripper call above stays a harmless no-op.
+    Only ``name``/``channel``/``rate``/``groups``/``joints`` are read from the
+    file, so the copy's location does not matter.
+    """
+    if has_gripper():
+        return HARDWARE_YAML
+
+    import tempfile
+
+    cfg = hardware_config()
+    gripper = set(_gripper_joint_names())
+    stripped = {
+        **cfg,
+        "groups": {k: v for k, v in cfg.get("groups", {}).items() if k != "gripper"},
+        "joints": [j for j in cfg.get("joints", []) if j["name"] not in gripper],
+    }
+    with tempfile.NamedTemporaryFile(
+        "w", prefix="rebotarm_rs_nogrip_", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as f:
+        yaml.safe_dump(stripped, f)
+        return Path(f.name)
+
+
+def effective_urdf_path(payload: "PayloadTuning | None" = None) -> Path:
+    """The URDF to hand dynamics loaders (gravity feedforward).
+
+    With the gripper attached this is simply :func:`urdf_path`. Without it,
+    a throwaway copy whose end links match the payload profile:
+
+    - ``bare`` (also the default when ``payload`` is ``None``): the gripper
+      links' inertial masses are zeroed. The ``gripper`` switch takes the
+      motor off the bus (see :func:`effective_hardware_yaml`), but the
+      vendored URDF still carries ~0.8 kg of gripper links, and the gravity
+      model keeps feeding forward torque for a payload that is not there.
+      At q=0 that phantom torque is +3.3 N·m on joint3 against ~0.2–0.5 N·m
+      of friction — with float gains near zero nothing resists it, and the
+      "floating" arm pushes itself upward.
+    - ``camera``: the finger links are zeroed and ``gripper_end`` becomes the
+      camera — its mass and centre of mass come from the tuning file (the
+      camera mounts where the gripper did). Only mass and com are replaced;
+      the inertia tensor stays the link's own, because gravity feedforward
+      does not read it and inventing a tensor would be a made-up number.
+
+    Geometry caveat: the copy edits only ``<inertial>`` values and lives in
+    a temp dir, so its relative ``meshes/...`` paths no longer resolve. Use
+    it for dynamics only (``pin.buildModelFromUrdf`` alone reads no meshes);
+    kinematics/collision keep the vendored URDF, where the phantom gripper
+    geometry errs on the conservative side.
+    """
+    if has_gripper():
+        return urdf_path()
+
+    from .tuning import PayloadProfile  # local: assets must not hard-depend on tuning
+
+    profile = payload.profile if payload is not None else PayloadProfile.BARE
+    if profile is PayloadProfile.GRIPPER:
+        raise ValueError(
+            "payload profile 'gripper' but the gripper motor is off the bus "
+            "(hardware yaml gripper: false) — a profile cannot hot-add a motor"
+        )
+
+    import tempfile
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(urdf_path())
+    for link in tree.getroot().iter("link"):
+        name = link.get("name", "")
+        if not name.startswith("gripper"):
+            continue
+        mass = link.find("inertial/mass")
+        if mass is None:
+            continue
+        if profile is PayloadProfile.CAMERA and name == "gripper_end":
+            camera = payload.camera
+            mass.set("value", str(camera.mass))
+            origin = link.find("inertial/origin")
+            if origin is not None:
+                origin.set("xyz", " ".join(str(c) for c in camera.com))
+        else:
+            mass.set("value", "0.0")
+
+    with tempfile.NamedTemporaryFile(
+        "w", prefix=f"rebotarm_rs_{profile.value}_", suffix=".urdf", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(ET.tostring(tree.getroot(), encoding="unicode"))
+        return Path(f.name)
 
 
 def assert_rs_model() -> None:

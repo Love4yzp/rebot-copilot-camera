@@ -1,13 +1,21 @@
-# The USB2CAN bridge and the XIAO ESP32-S3 shutter board both enumerate as
-# generic CDC devices, so their /dev/ttyACM* numbering swaps depending on plug
-# order. Stable symlinks mean a reboot cannot silently point the shutter driver
-# at the CAN bridge.
+# The XIAO ESP32-S3 shutter board enumerates as a generic CDC device, so its
+# /dev/ttyACM* number swaps with whatever else is plugged in (a second CDC
+# gadget like the turntable is indistinguishable by path). A stable symlink
+# means a reboot cannot silently point the shutter driver at another board.
 #
-# Fill in the real idVendor/idProduct with `udevadm info -a -n /dev/ttyACM0`,
-# then: sudo cp 99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# The arm needs NO rule here: it talks socketcan on can0
+# (config/rebotarm_rs.yaml), brought up by rebot-can.service — a CAN network
+# interface, not a tty, so no SYMLINK could ever apply to it.
+#
+# Install: sudo cp 99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# (device.sh setup does this.) Confirm ids with `udevadm info -a -n /dev/ttyACM0`.
 
-# XIAO ESP32-S3 (native USB CDC)
+# XIAO ESP32-S3 shutter board. 303a:1001 is the Espressif TinyUSB default the
+# firmware enumerates with (ARDUINO_USB_CDC_ON_BOOT=1, no VID/PID overrides in
+# platformio.ini) — if the symlink does not appear, check `lsusb` on the device.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="rebot-shutter", MODE="0660", GROUP="dialout"
 
-# USB2CAN bridge — placeholder ids, confirm on the device before relying on it
-# SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="rebot-can", MODE="0660", GROUP="dialout"
+# Turntable: the example plugin (examples/rebot-plugin-turntable) defaults
+# TURNTABLE_PORT to /dev/rebot-turntable, but no rule creates that name —
+# the adapter's VID/PID are unknown until the hardware exists. Add a rule
+# here then; until then, set TURNTABLE_PORT on the device.

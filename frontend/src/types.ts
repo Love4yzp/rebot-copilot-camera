@@ -185,9 +185,9 @@ export interface SeqPlayback {
   finished: boolean;
   /**
    * True while the current block is a hold and the arm is still flying toward
-   * its pose — the hold's clock has not yet started. Once the arm reaches the
-   * pose this flips to false for the rest of the block. Transition, wait, done,
-   * and aborted phases always report false.
+   * — or settling at — its pose: the hold's clock has not yet started. Once
+   * the arm has arrived and held still this flips to false for the rest of
+   * the block. Transition, wait, done, and aborted phases always report false.
    */
   approaching: boolean;
 }
@@ -233,4 +233,54 @@ export interface ShutterResult {
   fired: boolean;
   firmware_version: string | null;
   error: string | null;
+}
+
+// ── tuning panel ────────────────────────────────────────────────────────────
+
+export interface CameraPayload {
+  mass: number | null;
+  com: [number, number, number];
+}
+
+export interface PayloadTuning {
+  profile: string;
+  camera: CameraPayload;
+}
+
+export interface FloatTuning {
+  kp: number;
+  kd: number;
+}
+
+export interface FloatLockTuning {
+  linear_threshold: number;
+  angular_threshold: number;
+  release_factor: number;
+  lock_factor: number;
+  min_still_s: number;
+}
+
+export interface SettleTuning {
+  drift_rad: number;
+  min_s: number;
+}
+
+export interface ApproachTuning {
+  first_max_speed: number;
+}
+
+export interface TuningConfig {
+  payload: PayloadTuning;
+  float: FloatTuning;
+  floatlock: FloatLockTuning;
+  settle: SettleTuning;
+  approach: ApproachTuning;
+}
+
+export interface TuningState {
+  current: TuningConfig;
+  saved: TuningConfig;
+  dirty: string[];
+  gripper_motor: boolean;
+  payload_options: string[];
 }

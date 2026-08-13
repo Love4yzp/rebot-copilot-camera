@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import math
 import threading
-from typing import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
 from .base import ArmState
+
+if TYPE_CHECKING:
+    from ..tuning import PayloadTuning
 
 #: Time constant of the first-order lag, in seconds. Roughly "how long until it
 #: has covered 63% of the distance to target".
@@ -132,6 +135,30 @@ class SimArm:
             self._floating = enabled
             if not enabled:
                 self._q_target = dict(self._q)
+
+    def follow(self) -> None:
+        """One zero-force tick while floating.
+
+        A floating SimArm already stays where it is put, so this only syncs
+        the target. The method existing here matters more than what it does:
+        on real hardware follow() is the per-tick MIT stream that float *is*,
+        and logic developed against the simulator must call it just the same.
+        """
+        with self._lock:
+            if self._floating:
+                self._q_target = dict(self._q)
+
+    def set_float_gains(self, kp: float, kd: float) -> None:
+        """Recorded, not applied: the simulator has no torque loop to retune,
+        but the call must land here exactly as it does on hardware."""
+        with self._lock:
+            self._float_gains = (kp, kd)
+
+    def reload_dynamics(self, payload: "PayloadTuning | None" = None) -> None:
+        """Recorded, not applied: the simulator carries no gravity model, but
+        a payload switch must reach it exactly as it reaches hardware."""
+        with self._lock:
+            self._payload = payload
 
     # ── simulation control (not part of ArmDriver) ───────────────────────────
 
