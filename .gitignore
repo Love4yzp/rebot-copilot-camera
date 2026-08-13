@@ -31,5 +31,4 @@ backend/static/
 
 # AI
 .kimi/
-.multica/
 .agent_context/
