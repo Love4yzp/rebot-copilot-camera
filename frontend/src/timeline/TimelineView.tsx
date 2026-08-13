@@ -554,18 +554,9 @@ export function TimelineView({
   const emptyState =
     sequence === null ? (
       <div className="tl-empty">先在顶栏选择或新建一条序列。</div>
-    ) : density === "stations" ? (
-      <div className="tl-empty tl-empty--guide">
-        <p className="tl-empty__title">三步排出第一条拍摄序列：</p>
-        <ol>
-          <li>素材库点「+ 录位姿」把臂拖到位，「保存为站位」一步成站（或点已有位姿卡的「＋追加」）</li>
-          <li>选中站位卡，点「＋ 动作」钉上快门 / 等待</li>
-          <li>「▶ 预演」走一遍计划，确认后「执行」</li>
-        </ol>
-      </div>
     ) : (
       <div className="tl-empty">
-        点素材库位姿卡上的「＋追加」，或把位姿拖到这里，排出第一个站位；「站位」档可逐卡组装
+        点素材库位姿卡的「＋追加」，或把位姿拖到这里，排出第一个站位
       </div>
     );
 

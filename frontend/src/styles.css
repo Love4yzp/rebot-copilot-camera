@@ -824,6 +824,201 @@ select:focus {
   aspect-ratio: auto;
 }
 
+/* ── monitor + tuning panel layout ───────────────────────────────────────── */
+.monitor-area {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* The tuning button row in the monitor header. */
+.monitor__tuning-btn {
+  display: flex;
+  justify-content: center;
+  flex: none;
+  margin-bottom: 6px;
+}
+.monitor__tuning-btn .ghost {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 2px 10px;
+}
+
+/* ── tuning panel ─────────────────────────────────────────────────────────── */
+.tuning-panel {
+  width: 320px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--body);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+}
+
+.tuning-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.tuning-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mark);
+}
+
+.tuning-panel__close {
+  background: none;
+  border: none;
+  color: var(--mark-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.tuning-panel__close:hover {
+  background: var(--edge);
+}
+
+.tuning-panel__error {
+  flex: none;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--mark);
+  background: var(--body-lift);
+  border-bottom: 1px solid var(--edge);
+}
+
+.tuning-panel__hint {
+  flex: none;
+  padding: 4px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--mark-dim);
+  border-bottom: 1px solid var(--edge-soft);
+}
+
+.tuning-panel__pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.tuning-panel__footer {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--edge);
+  flex: none;
+  flex-wrap: wrap;
+}
+.tuning-panel__footer .ghost {
+  flex: 1;
+  min-height: 32px;
+  font-size: 12px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+
+/* ── Tweakpane overrides: grayscale only ──────────────────────────────────── */
+.tp-dfwv {
+  --tp-base-background-color: var(--body);
+  --tp-base-shadow-color: transparent;
+  --tp-container-background-color: var(--body-lift);
+  --tp-container-background-color-focus: var(--body-lift);
+  --tp-container-background-color-hover: var(--edge);
+  --tp-container-background-color-active: var(--edge);
+  --tp-label-text-color: var(--mark-dim);
+  --tp-input-background-color: var(--body-lift);
+  --tp-input-background-color-focus: var(--body-lift);
+  --tp-input-background-color-hover: var(--body-lift);
+  --tp-input-background-color-active: var(--body-lift);
+  --tp-input-text-color: var(--mark);
+  --tp-input-text-color-focus: var(--mark);
+  --tp-input-text-color-hover: var(--mark);
+  --tp-input-text-color-active: var(--mark);
+  --tp-input-border-color: var(--edge);
+  --tp-input-border-color-focus: var(--mark-dim);
+  --tp-input-border-color-hover: var(--edge-soft);
+  --tp-input-border-color-active: var(--mark-dim);
+  --tp-knob-color: var(--mark-dim);
+  --tp-monitor-background-color: var(--body-lift);
+  --tp-monitor-text-color: var(--mark-dim);
+  --tp-blade-offset-multiplier: 0;
+  --tp-folder-button-background-color: var(--body);
+  --tp-folder-button-background-color-focus: var(--body-lift);
+  --tp-folder-button-background-color-hover: var(--body-lift);
+  --tp-folder-button-background-color-active: var(--body-lift);
+  --tp-folder-button-text-color: var(--mark);
+  --tp-folder-button-text-color-focus: var(--mark);
+  --tp-folder-button-text-color-hover: var(--mark);
+  --tp-folder-button-text-color-active: var(--mark);
+  --tp-switch-indicator-color: var(--body-lift);
+  --tp-switch-background-color: var(--edge);
+  --tp-switch-background-color-active: var(--mark-dim);
+  --tp-listicon-background-color: var(--edge);
+  --tp-listicon-background-color-hover: var(--body-lift);
+  --tp-listicon-background-color-active: var(--body-lift);
+  --tp-listicon-fill-color: var(--mark-dim);
+  --tp-listicon-fill-color-hover: var(--mark);
+  --tp-listicon-fill-color-active: var(--mark);
+}
+
+/* ── tuning panel prod gate ────────────────────────────────────────────────── */
+.tuning-prod-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(4, 4, 6, 0.78);
+}
+.tuning-prod-gate__panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px 24px;
+  background: var(--body);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.6);
+}
+.tuning-prod-gate__title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+}
+.tuning-prod-gate__icon {
+  color: var(--mark-dim);
+  font-variant-emoji: text;
+  font-size: 22px;
+  margin-right: 4px;
+}
+.tuning-prod-gate__body {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--mark-dim);
+}
+.tuning-prod-gate__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.tuning-prod-gate__actions .primary {
+  min-height: 48px;
+}
+.tuning-prod-gate__actions .ghost {
+  min-height: 48px;
+}
+
 /* The URDF viewer's own canvas host (see ArmView3D). */
 .viewer {
   width: 100%;
@@ -844,6 +1039,50 @@ select:focus {
   letter-spacing: 0.1em;
   color: var(--mark-dim);
   pointer-events: none;
+}
+
+/* ── viewer: camera contract controls + ghost pose labels ────────────────── */
+/* The camera is a constrained turntable (no pan, no roll, clamped elevation
+ * and zoom) — the controls below are its only presets. Amber appears on the
+ * follow toggle only as "on" affordance, matching the motion token; ghost
+ * labels stay greyscale, and a label may turn amber only while the arm is
+ * actually moving toward that pose. */
+.viewer__ctl {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 6px;
+}
+.viewer__ctl button {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--edge);
+  background: rgba(22, 22, 26, 0.8);
+  color: var(--mark-dim);
+  cursor: pointer;
+}
+.viewer__ctl button:hover {
+  color: var(--mark);
+}
+.viewer__ctl button.on {
+  color: var(--motion);
+  border-color: var(--motion);
+}
+.viewer__glabel {
+  position: absolute;
+  z-index: 2;
+  font-size: 12px;
+  color: var(--mark);
+  white-space: nowrap;
+  transform: translate(-50%, -140%);
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+.viewer__glabel.amber {
+  color: var(--motion);
 }
 
 /* ── transport ───────────────────────────────────────────────────────────── */
@@ -1952,3 +2191,108 @@ select:focus {
   --ready: #6f7681;
   --expose: #b9bec7;
 }
+
+/* ── library v2: the card is the destination ────────────────────────────── */
+/* No tab bar anymore — poses are the only material; templates live in the
+ * new-sequence dialog. */
+.lib__title {
+  flex: none;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--mark);
+  padding: 10px 12px 2px;
+}
+.lib__context {
+  font-size: 11.5px;
+  color: var(--mark-dim);
+  padding: 0 2px;
+}
+.lib__context b {
+  color: var(--mark);
+  font-weight: 600;
+}
+.lib__pose {
+  position: relative;
+  cursor: pointer; /* the card itself is 去这里 */
+}
+.lib__pose:hover {
+  border-color: var(--edge-strong, #4a5563);
+}
+.lib__pose:hover::after {
+  content: "点击 → 臂开过去";
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--mark-dim);
+  pointer-events: none;
+}
+.lib__more {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: var(--mark-dim);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.lib__pose:hover .lib__more {
+  opacity: 1;
+}
+.lib__more:hover {
+  color: var(--mark);
+}
+.lib__menu {
+  position: absolute;
+  top: 28px;
+  right: 8px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--body-lift);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.lib__menu button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 6px 16px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lib__menu button:hover {
+  background: var(--ink);
+}
+
+/* ── new-sequence dialog: three starting points ─────────────────────────── */
+.create-opts {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.create-opts button {
+  flex: 1;
+  padding: 8px 6px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--body-lift);
+  color: var(--mark);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.create-opts button.sel {
+  border-color: var(--motion);
+  color: var(--motion);
+}
+.create-opts button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+

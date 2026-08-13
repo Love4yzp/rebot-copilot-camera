@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { Pose, PoseLinks, SeqTemplate } from "../types";
-import { sequenceDuration } from "../timeline/model";
+import type { Pose, PoseLinks } from "../types";
 import { Dialog } from "../components/Dialog";
 import { useToast } from "../components/Toasts";
 
@@ -9,7 +8,6 @@ export const POSE_MIME = "application/x-rebot-pose";
 
 interface Props {
   poses: Pose[];
-  templates: SeqTemplate[];
   executing: boolean;
   latched: boolean;
   teaching: boolean;
@@ -19,6 +17,8 @@ interface Props {
   sequencesUnavailable: boolean;
   /** A sequence is open and not running — pose cards may offer 「＋追加」. */
   canAppend: boolean;
+  /** Name of the open sequence — the 追加 target, stated once, in one place. */
+  appendTarget: string | null;
   /** Append the pose as a new station at the open sequence's tail. */
   onAppendPose: (pose: Pose) => void;
   onGoto: (pose: Pose) => void;
@@ -26,41 +26,41 @@ interface Props {
   onChanged: () => void;
   onSelectSequence: (id: string) => void;
   onTeach: () => void;
-  /** 用它 — the parent opens the station-by-station wizard for this template. */
-  onUseTemplate: (template: SeqTemplate) => void;
 }
 
 /**
- * The library: poses and templates, always on screen.
+ * The library: poses, always on screen.
  *
- * The card board's 点哪去哪 did not die — it moved in here as 去这里. Poses
- * are *links* from every sequence that uses them, so deleting one first asks
- * the server who would be affected and says the names out loud before
+ * The card IS the destination — tapping it sends the arm there (the same goto
+ * as the ghost arms in the monitor); there is no 「去这里」 label because the
+ * label needed a subject ("who goes?") and the card is the answer. The only
+ * always-visible button is ＋追加; rename and delete live in the ⋯ menu.
+ * Poses are *links* from every sequence that uses them, so deleting one first
+ * asks the server who would be affected and says the names out loud before
  * anything is thrown away (先告知再动手).
  */
 export function LibraryPanel({
   poses,
-  templates,
   executing,
   latched,
   teaching,
   wizardOpen,
   sequencesUnavailable,
   canAppend,
+  appendTarget,
   onAppendPose,
   onGoto,
   onChanged,
   onSelectSequence,
   onTeach,
-  onUseTemplate,
 }: Props) {
   const { attempt, show } = useToast();
-  const [tab, setTab] = useState<"poses" | "templates">("poses");
   /** pose id → who links it, fetched once per library refresh. */
   const [links, setLinks] = useState<Record<string, PoseLinks>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ pose: Pose; links: PoseLinks } | null>(null);
 
   const refreshLinks = useCallback(async () => {
@@ -123,174 +123,146 @@ export function LibraryPanel({
 
   return (
     <aside className="lib" aria-label="素材库">
-      <div className="lib__tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "poses"}
-          className={`lib__tab ${tab === "poses" ? "active" : ""}`}
-          onClick={() => setTab("poses")}
-        >
-          位姿
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "templates"}
-          className={`lib__tab ${tab === "templates" ? "active" : ""}`}
-          onClick={() => setTab("templates")}
-        >
-          模板
-        </button>
-      </div>
+      <div className="lib__title">位姿</div>
 
       {sequencesUnavailable ? (
         <p className="lib__note">序列接口不可用（v2 后端未部署）—— 监视器、急停、日志仍可用。</p>
       ) : null}
 
-      {tab === "poses" ? (
-        <div className="lib__pane">
-          <p className="lib__note">
-            位姿被序列<b>链接</b>：序列只存位姿名，不存关节角。点「＋追加」排到序列末尾成站位，也可拖上时间轴；数字键 1–9 直达前九个位姿。
+      <div className="lib__pane">
+        {canAppend && appendTarget ? (
+          <p className="lib__context">
+            ＋追加 → 排到 <b>{appendTarget}</b> 末尾
           </p>
-          {poses.map((pose) => {
-            const info = links[pose.id];
-            return (
-              <div
-                key={pose.id}
-                className="lib__pose"
-                draggable={!executing}
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(POSE_MIME, pose.id);
-                  event.dataTransfer.effectAllowed = "copy";
+        ) : null}
+        {poses.map((pose) => {
+          const info = links[pose.id];
+          return (
+            <div
+              key={pose.id}
+              className="lib__pose"
+              title="点击 → 臂开过去"
+              draggable={!executing}
+              onClick={() => onGoto(pose)}
+              onDragStart={(event) => {
+                event.dataTransfer.setData(POSE_MIME, pose.id);
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+            >
+              <button
+                type="button"
+                className="lib__more"
+                aria-label="位姿菜单"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuFor(menuFor === pose.id ? null : pose.id);
                 }}
               >
-                <div className="lib__pose-top">
-                  {renaming === pose.id ? (
-                    <input
-                      autoFocus
-                      value={renameDraft}
-                      onChange={(event) => setRenameDraft(event.target.value)}
-                      onBlur={() => void rename(pose)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void rename(pose);
-                        if (event.key === "Escape") setRenaming(null);
-                      }}
-                      aria-label="位姿名称"
-                    />
+                ⋯
+              </button>
+              {menuFor === pose.id ? (
+                <div className="lib__menu">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setMenuFor(null);
+                      setRenaming(pose.id);
+                      setRenameDraft(pose.name);
+                    }}
+                  >
+                    改名
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setMenuFor(null);
+                      void removePose(pose);
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              ) : null}
+              <div className="lib__pose-top" onClick={(event) => event.stopPropagation()}>
+                {renaming === pose.id ? (
+                  <input
+                    autoFocus
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onBlur={() => void rename(pose)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void rename(pose);
+                      if (event.key === "Escape") setRenaming(null);
+                    }}
+                    aria-label="位姿名称"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="lib__pose-name"
+                    title="点击改名"
+                    onClick={() => {
+                      setRenaming(pose.id);
+                      setRenameDraft(pose.name);
+                    }}
+                  >
+                    {pose.name}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="lib__chip"
+                  onClick={() => setExpanded(expanded === pose.id ? null : pose.id)}
+                >
+                  被 {info?.count ?? 0} 条序列链接
+                </button>
+              </div>
+              {expanded === pose.id && info ? (
+                <div className="lib__links" onClick={(event) => event.stopPropagation()}>
+                  {info.count === 0 ? (
+                    <span className="hint">没有序列用到它</span>
                   ) : (
-                    <button
-                      type="button"
-                      className="lib__pose-name"
-                      title="点击改名"
-                      onClick={() => {
-                        setRenaming(pose.id);
-                        setRenameDraft(pose.name);
-                      }}
-                    >
-                      {pose.name}
-                    </button>
+                    info.links.map((link) => (
+                      <button
+                        key={link.sequence_id}
+                        type="button"
+                        className="lib__link"
+                        onClick={() => onSelectSequence(link.sequence_id)}
+                      >
+                        {link.sequence_name}（{link.block_count} 块）
+                      </button>
+                    ))
                   )}
-                  <button
-                    type="button"
-                    className="lib__chip"
-                    onClick={() => setExpanded(expanded === pose.id ? null : pose.id)}
-                  >
-                    被 {info?.count ?? 0} 条序列链接
-                  </button>
                 </div>
-                {expanded === pose.id && info ? (
-                  <div className="lib__links">
-                    {info.count === 0 ? (
-                      <span className="hint">没有序列用到它</span>
-                    ) : (
-                      info.links.map((link) => (
-                        <button
-                          key={link.sequence_id}
-                          type="button"
-                          className="lib__link"
-                          onClick={() => onSelectSequence(link.sequence_id)}
-                        >
-                          {link.sequence_name}（{link.block_count} 块）
-                        </button>
-                      ))
-                    )}
-                  </div>
-                ) : null}
-                <div className="lib__pose-actions">
-                  <button type="button" onClick={() => onGoto(pose)}>
-                    去这里
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!canAppend || executing || teaching || wizardOpen}
-                    title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
-                    onClick={() => onAppendPose(pose)}
-                  >
-                    ＋追加
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={executing}
-                    onClick={() => void removePose(pose)}
-                  >
-                    删除
-                  </button>
-                </div>
+              ) : null}
+              <div className="lib__pose-actions">
+                <button
+                  type="button"
+                  disabled={!canAppend || executing || teaching || wizardOpen}
+                  title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAppendPose(pose);
+                  }}
+                >
+                  ＋追加
+                </button>
               </div>
-            );
-          })}
-          <button
-            type="button"
-            className="lib__record"
-            disabled={latched || executing || teaching || wizardOpen}
-            onClick={onTeach}
-          >
-            + 录位姿
-          </button>
-        </div>
-      ) : (
-        <div className="lib__pane">
-          <p className="lib__note">
-            模板 = 结构配方（站位数 / 时长 / 标记配方 / 过渡参数），<b>不含关节角</b>。
-            「用它」进逐站位向导：每站录一个新位姿或选已有的，生成一条脱钩的普通序列。
-          </p>
-          {templates.length === 0 ? (
-            <p className="hint">还没有模板。在顶栏序列菜单里「存为模板」。</p>
-          ) : (
-            templates.map((template) => (
-              <div key={template.id} className="lib__tpl">
-                <div className="lib__tpl-name">{template.name}</div>
-                <div className="lib__tpl-desc">
-                  {template.station_count} 站位 · 预估{" "}
-                  <span className="num">{sequenceDuration(template.recipe).toFixed(1)}s</span>
-                </div>
-                <div className="lib__pose-actions">
-                  <button
-                    type="button"
-                    disabled={executing || latched || teaching || wizardOpen}
-                    onClick={() => onUseTemplate(template)}
-                  >
-                    用它
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() =>
-                      void attempt(async () => {
-                        await api.templates.remove(template.id);
-                      }, `已删除模板「${template.name}」`).then(onChanged)
-                    }
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          className="lib__record"
+          disabled={latched || executing || teaching || wizardOpen}
+          onClick={onTeach}
+        >
+          + 录位姿
+        </button>
+      </div>
 
       {confirmDelete ? (
         <Dialog label="删除位姿" onClose={() => setConfirmDelete(null)}>

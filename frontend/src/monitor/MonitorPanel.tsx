@@ -1,6 +1,7 @@
-import type { Block, ControlState, SeqPlayback } from "../types";
+import { useMemo } from "react";
+import type { Block, ControlState, Pose, SeqPlayback } from "../types";
 import { ArmView3D } from "../components/ArmView3D";
-import { blockIndexAt, sequenceDuration } from "../timeline/model";
+import { blockIndexAt } from "../timeline/model";
 import type { PreviewApi } from "../preview/usePreview";
 
 interface Props {
@@ -13,6 +14,13 @@ interface Props {
   sequenceName: string | null;
   /** The open sequence is the thing running — only then is a block "current". */
   runningSequence: boolean;
+  /** The pose library, drawn as ghost arms where they live in space. */
+  poses: Pose[];
+  /** Ghost tap — routes to the exact same goto as a card tap. */
+  onGhostClick?: (pose: Pose) => void;
+  /** Toggle the tuning panel. */
+  onToggleTuning?: () => void;
+  tuningOpen?: boolean;
 }
 
 function blockLabel(block: Block | undefined, poseName: (id: string) => string): string {
@@ -45,10 +53,38 @@ export function MonitorPanel({
   poseName,
   sequenceName,
   runningSequence,
+  poses,
+  onGhostClick,
+  onToggleTuning,
+  tuningOpen,
 }: Props) {
   const latched = state?.estop.latched ?? false;
   const executing = state?.mode === "playback" && !latched;
   const teaching = state?.mode === "teach";
+
+  /** Ghost list is derived and referentially stable — the viewer's load
+   * effect must not re-run on every 20 Hz broadcast. */
+  const ghostPoses = useMemo(
+    () => poses.map((p) => ({ id: p.id, name: p.name, joints: p.joints })),
+    [poses],
+  );
+
+  /**
+   * The pose the playhead is at — the ghost to highlight. During execution
+   * the highlight may be amber (the arm really is moving there); during
+   * preview it stays greyscale, because preview is not a machine state.
+   */
+  const targetPoseId: string | null = executing && runningSequence && playback
+    ? (() => {
+        const block = blocks[Math.min(playback.block_index, blocks.length - 1)];
+        return block?.type === "hold" ? block.pose_id : null;
+      })()
+    : preview.active && preview.playing
+      ? (() => {
+          const block = blocks[blockIndexAt(blocks, preview.t)];
+          return block?.type === "hold" ? block.pose_id : null;
+        })()
+      : null;
 
   const bannerState = latched
     ? "estop"
@@ -68,9 +104,9 @@ export function MonitorPanel({
     status = "已急停 · 臂钉在原地";
     sub = "解除急停后原地待命，不会自动继续";
   } else if (teaching) {
-    banner = "示教中 · 臂可推动";
-    status = "实况 · 臂已卸力";
-    sub = "把臂拖到位，命名并保存";
+    banner = "零重力 · 臂可推动";
+    status = "零重力 · 已卸力";
+    sub = "松手自动锁定 · 直接保存";
   } else if (executing) {
     banner = "执行中 · 臂在动";
     status = "实况 · 臂在动";
@@ -105,9 +141,8 @@ export function MonitorPanel({
   } else {
     banner = "";
     status = "实况 · 臂静止";
-    sub = sequenceName
-      ? `${sequenceName} · 预估全长 ${sequenceDuration(blocks).toFixed(1)}s`
-      : "没有序列";
+    // 总时长只出现在走带条时间码一处；这里留一行行动引导。
+    sub = sequenceName ? "执行前先「▶ 预演」走一遍计划" : "没有序列";
   }
 
   return (
@@ -115,8 +150,25 @@ export function MonitorPanel({
       {banner ? <div className="monitor__banner">{banner}</div> : null}
       <div className="monitor__status">{status}</div>
       <div className="monitor__sub">{sub}</div>
+      <div className="monitor__tuning-btn">
+        {onToggleTuning ? (
+          <button type="button" className="ghost" onClick={onToggleTuning}>
+            {tuningOpen ? "关闭调参" : "调参"}
+          </button>
+        ) : null}
+      </div>
       <div className="monitor__view">
-        <ArmView3D positions={state?.positions ?? {}} preview={preview.pose} />
+        <ArmView3D
+          positions={state?.positions ?? {}}
+          preview={preview.pose}
+          ghosts={ghostPoses}
+          targetPoseId={targetPoseId}
+          targetAmber={executing}
+          onGhostClick={(ghost) => {
+            const pose = poses.find((p) => p.id === ghost.id);
+            if (pose) onGhostClick?.(pose);
+          }}
+        />
       </div>
     </section>
   );

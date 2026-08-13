@@ -6,6 +6,8 @@ import { useToast } from "../components/Toasts";
 interface Props {
   /** Live joint angles from the control loop. */
   positions: Record<string, number>;
+  /** Prefilled name — saving without typing gets this (自动命名). */
+  autoName?: string;
   /**
    * When a sequence is open, the bar offers 「保存为站位」: capture and append
    * in one tap — the teach → assemble chain never leaves this bar.
@@ -27,9 +29,11 @@ interface Props {
  * cleanup, which exits teach — dragging against a latched arm is the one
  * combination that must be impossible to leave on screen.
  */
-export function TeachBar({ positions, onCaptureAppend, onDone }: Props) {
+export function TeachBar({ positions, autoName, onCaptureAppend, onDone }: Props) {
   const { attempt } = useToast();
-  const [name, setName] = useState("");
+  const [name, setName] = useState(autoName ?? "");
+  /** 关节读数默认折叠——示教时用户只需要「零重力可推」，不是工程数据。 */
+  const [showJoints, setShowJoints] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -72,14 +76,16 @@ export function TeachBar({ positions, onCaptureAppend, onDone }: Props) {
       </button>
 
       <div className="teach-bar__body">
-        <p className="teach-bar__step">臂已卸力，可以直接推。把臂拖到位，松手后命名并保存。</p>
-        <div className="teach-bar__readout num" aria-label="实时姿态">
-          {joints.map(([joint, value]) => (
-            <span key={joint}>
-              {joint.replace("joint", "J")} {value.toFixed(2)}
-            </span>
-          ))}
-        </div>
+        <p className="teach-bar__step">零重力 · 臂可推动，松手自动锁定——直接保存，名称自动取</p>
+        {showJoints ? (
+          <div className="teach-bar__readout num" aria-label="实时姿态">
+            {joints.map(([joint, value]) => (
+              <span key={joint}>
+                {joint.replace("joint", "J")} {value.toFixed(2)}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="teach-bar__actions">
@@ -92,8 +98,16 @@ export function TeachBar({ positions, onCaptureAppend, onDone }: Props) {
             if (event.key === "Enter" && !saving) void save();
           }}
         />
+        <button
+          type="button"
+          className="ghost"
+          disabled={saving}
+          onClick={() => setShowJoints((v) => !v)}
+        >
+          详细数据 {showJoints ? "▴" : "▾"}
+        </button>
         <button type="button" className="primary" disabled={saving} onClick={() => void save()}>
-          {saving ? "保存中…" : "保存位姿"}
+          {saving ? "保存中…" : "保存"}
         </button>
         {onCaptureAppend ? (
           <button
@@ -103,11 +117,11 @@ export function TeachBar({ positions, onCaptureAppend, onDone }: Props) {
             title="录下当前姿态并排到序列末尾，成为一个新站位"
             onClick={() => void saveAsStation()}
           >
-            {saving ? "保存中…" : "保存为站位"}
+            {saving ? "保存中…" : "保存并追加到序列"}
           </button>
         ) : null}
         <button type="button" className="ghost" disabled={saving} onClick={onDone}>
-          退出示教
+          × 取消
         </button>
       </div>
     </div>

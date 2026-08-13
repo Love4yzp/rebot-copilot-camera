@@ -10,6 +10,7 @@ import { TallyRail } from "./components/TallyRail";
 import type { TallyState } from "./components/TallyRail";
 import { Dialog } from "./components/Dialog";
 import { ModeWarning } from "./components/ModeWarning";
+import { TuningPanel } from "./components/TuningPanel";
 import { ToastProvider, useToast } from "./components/Toasts";
 import { LibraryPanel } from "./library/LibraryPanel";
 import { TeachBar } from "./library/TeachBar";
@@ -52,6 +53,7 @@ function Workspace() {
   const [sequence, setSequence] = useState<Sequence | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
   const [teachOpen, setTeachOpen] = useState(false);
+  const [tuningOpen, setTuningOpen] = useState(false);
   /** The track's face: station cards (assembly, default) or the ruler (precision). */
   const [trackDensity, setTrackDensity] = useState<TrackDensity>(() =>
     localStorage.getItem(TRACK_DENSITY_KEY) === "timeline" ? "timeline" : "stations",
@@ -65,6 +67,9 @@ function Workspace() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [dialog, setDialog] = useState<"create" | "rename" | "delete" | "template" | null>(null);
   const [nameDraft, setNameDraft] = useState("");
+  /** 新建序列的起点：空白 / 从模板（直接进逐站位向导）/ 复制现有。 */
+  const [createStart, setCreateStart] = useState<"blank" | "tpl" | "copy">("blank");
+  const [createTemplateId, setCreateTemplateId] = useState("");
 
   const blocks = useMemo<Block[]>(() => sequence?.blocks ?? [], [sequence]);
   const poseMap = useMemo(
@@ -87,6 +92,19 @@ function Workspace() {
 
   const mode = state?.mode ?? null;
   const latched = state?.estop.latched ?? false;
+
+  // 解除急停后，后端自动进入零重力示教 —— 前端必须同步打开示教条，
+  // 否则监视器写着「松手自动锁定 · 直接保存」，页面上却没有保存控件。
+  // 只在示教的上升沿打开：取消流程走「示教 → 待命」的下降沿，绝不能被
+  // 这个效应重新拉回示教条（TeachBar 挂载时的 teach(true) 是幂等的）。
+  const prevTeachRef = useRef(false);
+  useEffect(() => {
+    const wasTeach = prevTeachRef.current;
+    prevTeachRef.current = mode === "teach";
+    if (mode === "teach" && !wasTeach && !latched && !wizardTemplate) {
+      setTeachOpen(true);
+    }
+  }, [mode, latched, wizardTemplate]);
   const executing = mode === "playback" && !latched;
   const teaching = mode === "teach";
   /**
@@ -387,16 +405,36 @@ function Workspace() {
 
   const openDialog = (kind: NonNullable<typeof dialog>) => {
     setNameDraft(kind === "create" ? "" : (sequence?.name ?? ""));
+    if (kind === "create") {
+      setCreateStart("blank");
+      setCreateTemplateId(templates[0]?.id ?? "");
+    }
     setDialog(kind);
   };
 
   const submitDialog = async () => {
     const name = nameDraft.trim();
-    if (dialog === "create" && name) {
-      const created = await attempt(() => api.sequences.create(name));
-      if (created) {
-        await refreshLibrary();
-        selectSequence(created.id);
+    if (dialog === "create") {
+      // 从模板：名称由向导接管，直接进入逐站位示教。
+      if (createStart === "tpl") {
+        const tpl = templates.find((t) => t.id === createTemplateId);
+        if (tpl) {
+          // 手上在臂上时监视器不该播模拟画面。
+          preview.stop();
+          setWizardTemplate(tpl);
+          setDialog(null);
+          return;
+        }
+      }
+      if (name) {
+        const created = await attempt(() => api.sequences.create(name));
+        if (created) {
+          if (createStart === "copy" && sequence) {
+            await attempt(() => api.sequences.patch(created.id, { blocks: sequence.blocks }));
+          }
+          await refreshLibrary();
+          selectSequence(created.id);
+        }
       }
     } else if (dialog === "rename" && sequence && name && name !== sequence.name) {
       const updated = await attempt(() => api.sequences.patch(sequence.id, { name }));
@@ -453,8 +491,9 @@ function Workspace() {
           : "idle";
 
   const canEditSequences = !sequencesUnavailable;
+  // 总时长只出现在走带条时间码一处（一处信息一处措辞）；这里只报站位数。
   const meta = sequence
-    ? `${summaries.find((s) => s.id === sequence.id)?.station_count ?? 0} 站位 · 预估 ${total.toFixed(1)}s`
+    ? `${summaries.find((s) => s.id === sequence.id)?.station_count ?? 0} 站位`
     : null;
 
   return (
@@ -501,7 +540,6 @@ function Workspace() {
       <main className="main">
         <LibraryPanel
           poses={poses}
-          templates={templates}
           executing={executing}
           latched={latched}
           teaching={teaching}
@@ -513,22 +551,28 @@ function Workspace() {
           onChanged={() => void refreshLibrary()}
           onSelectSequence={selectSequence}
           onTeach={() => setTeachOpen(true)}
-          onUseTemplate={(template) => {
-            // The wizard teaches stations; a greyscale simulation on the
-            // monitor while hands are on the arm is the wrong picture.
-            preview.stop();
-            setWizardTemplate(template);
-          }}
+          appendTarget={sequence?.name ?? null}
         />
-        <MonitorPanel
-          state={state}
-          playback={playback}
-          preview={preview}
-          blocks={blocks}
-          poseName={poseName}
-          sequenceName={sequence?.name ?? null}
-          runningSequence={runningSequence}
-        />
+        <div className="monitor-area">
+          <MonitorPanel
+            state={state}
+            playback={playback}
+            preview={preview}
+            blocks={blocks}
+            poseName={poseName}
+            sequenceName={sequence?.name ?? null}
+            runningSequence={runningSequence}
+            poses={poses}
+            onGhostClick={(pose) => void gotoPose(pose)}
+            onToggleTuning={() => setTuningOpen((v) => !v)}
+            tuningOpen={tuningOpen}
+          />
+          <TuningPanel
+            visible={tuningOpen}
+            appMode={appMode}
+            onClose={() => setTuningOpen(false)}
+          />
+        </div>
       </main>
 
       <footer className="foot">
@@ -554,6 +598,7 @@ function Workspace() {
         ) : teachOpen ? (
           <TeachBar
             positions={state?.positions ?? {}}
+            autoName={`位姿 ${poses.length + 1}`}
             onCaptureAppend={
               canEditSequences && sequence !== null && !runningSequence
                 ? (pose) => void appendPoseToSequence(pose)
@@ -664,6 +709,66 @@ function Workspace() {
           </div>
           {dialog === "delete" ? (
             <p className="hint">序列删除不可撤销；它引用的位姿都保留在素材库里。</p>
+          ) : dialog === "create" ? (
+            <>
+              {createStart !== "tpl" ? (
+                <div className="sheet__field">
+                  <span className="sheet__label">名称</span>
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void submitDialog();
+                    }}
+                  />
+                </div>
+              ) : null}
+              <span className="sheet__label">从什么开始：</span>
+              <div className="create-opts">
+                <button
+                  type="button"
+                  className={createStart === "blank" ? "sel" : undefined}
+                  onClick={() => setCreateStart("blank")}
+                >
+                  空白
+                </button>
+                <button
+                  type="button"
+                  className={createStart === "tpl" ? "sel" : undefined}
+                  disabled={templates.length === 0}
+                  onClick={() => setCreateStart("tpl")}
+                >
+                  从模板
+                </button>
+                <button
+                  type="button"
+                  className={createStart === "copy" ? "sel" : undefined}
+                  disabled={!sequence}
+                  title={sequence ? "复制当前序列的结构与动作" : "先打开一条序列才能复制"}
+                  onClick={() => setCreateStart("copy")}
+                >
+                  复制现有
+                </button>
+              </div>
+              {createStart === "tpl" ? (
+                <select
+                  value={createTemplateId}
+                  onChange={(event) => setCreateTemplateId(event.target.value)}
+                  aria-label="选择模板"
+                >
+                  {templates.length === 0 ? (
+                    <option value="">（还没有模板 — 在「⋯」里存一个）</option>
+                  ) : (
+                    templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} · {t.station_count} 站位
+                      </option>
+                    ))
+                  )}
+                </select>
+              ) : null}
+            </>
           ) : (
             <div className="sheet__field">
               <span className="sheet__label">名称</span>
@@ -684,10 +789,13 @@ function Workspace() {
             <button
               type="button"
               className={dialog === "delete" ? "danger primary" : "primary"}
-              disabled={dialog !== "delete" && nameDraft.trim() === ""}
+              disabled={dialog === "delete" ? false : dialog === "create" ? (createStart === "tpl" ? templates.length === 0 : nameDraft.trim() === "") : nameDraft.trim() === ""}
               onClick={() => void submitDialog()}
             >
-              {dialog === "delete" ? "确认删除" : "确定"}
+              {dialog === "delete" ? "确认删除" : createStart === "tpl" && dialog === "create" ? "开始向导" : "确定"}
+            </button>
+            <button type="button" className="ghost" onClick={() => setDialog(null)}>
+              取消
             </button>
           </div>
         </Dialog>

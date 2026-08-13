@@ -12,6 +12,19 @@ interface Props {
   moving: boolean;
 }
 
+/** Estop reasons, in the operator's language. The backend/mock send English
+ * internal strings like "operator pressed stop [ui]" — none of that belongs on
+ * screen; the source is what the user actually cares about. */
+function reasonText(reason: string | null, source: string | null): string {
+  const r = reason ?? "";
+  if (source === "watchdog") return "看门狗自动触发急停";
+  if (source === "api") return "外部指令触发急停";
+  if (r.includes("Escape")) return "操作者按 Esc 急停";
+  if (r.includes("teach")) return "示教中操作者按下急停";
+  if (r.includes("operator")) return "操作者按下急停";
+  return "已急停";
+}
+
 /** Machine modes, named for what the operator sees rather than what the backend calls them. */
 const MODE_LABEL: Record<Mode, string> = {
   idle: "待命",
@@ -72,8 +85,7 @@ export function EstopBar({ estop, mode, connected, appMode, moving }: Props) {
         {latched ? (
           <>
             <strong>已急停</strong>
-            {estop?.reason ? ` — ${estop.reason}` : null}
-            {estop?.source ? <span className="num"> [{estop.source}]</span> : null}
+            <span> — {reasonText(estop?.reason ?? null, estop?.source ?? null)}</span>
             <span> · 解除后原地待命，不会自动继续</span>
           </>
         ) : (
