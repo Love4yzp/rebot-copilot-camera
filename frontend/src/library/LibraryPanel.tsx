@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import type { Pose, PoseLinks } from "../types";
+import type { Pose, PoseLinks, SeqTemplate } from "../types";
 import { Dialog } from "../components/Dialog";
 import { useToast } from "../components/Toasts";
 
@@ -21,6 +21,10 @@ interface Props {
   appendTarget: string | null;
   /** Tap-to-go face: the 追加 button stays hidden (no sequence on screen). */
   hideAppend?: boolean;
+  /** Template material for the edit face — absent in tap-to-go, so no tab bar. */
+  templates?: SeqTemplate[] | null;
+  /** Instantiate a template through the station wizard. */
+  onUseTemplate?: (template: SeqTemplate) => void;
   /** Append the pose as a new station at the open sequence's tail. */
   onAppendPose: (pose: Pose) => void;
   onGoto: (pose: Pose) => void;
@@ -50,6 +54,8 @@ export function LibraryPanel({
   canAppend,
   appendTarget,
   hideAppend,
+  templates,
+  onUseTemplate,
   onAppendPose,
   onGoto,
   onChanged,
@@ -60,6 +66,7 @@ export function LibraryPanel({
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<{ pose: Pose; links: PoseLinks } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [tab, setTab] = useState<"poses" | "templates">("poses");
 
   const rename = async (pose: Pose) => {
     const name = renameDraft.trim();
@@ -103,7 +110,28 @@ export function LibraryPanel({
   return (
     <aside className="lib" aria-label="素材库">
       <div className="lib__head">
-        <div className="lib__title">位姿</div>
+        {onUseTemplate ? (
+          <div className="lib__sub-tabs" role="tablist" aria-label="素材类型">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "poses"}
+              onClick={() => setTab("poses")}
+            >
+              位姿
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "templates"}
+              onClick={() => setTab("templates")}
+            >
+              模板
+            </button>
+          </div>
+        ) : (
+          <div className="lib__title">位姿</div>
+        )}
         <button
           type="button"
           className="lib__collapse"
@@ -118,7 +146,34 @@ export function LibraryPanel({
         <p className="lib__note">序列接口不可用（v2 后端未部署）—— 监视器、急停、日志仍可用。</p>
       ) : null}
 
-      {collapsed ? null : (
+      {collapsed ? null : onUseTemplate && tab === "templates" ? (
+        <div className="lib__pane">
+          {templates && templates.length > 0 ? (
+            templates.map((tpl) => (
+              <div key={tpl.id} className="lib__tpl">
+                <div className="lib__tpl-name">{tpl.name}</div>
+                <div className="lib__tpl-desc">
+                  {tpl.station_count} 站位 · 只存结构，不存关节角
+                </div>
+                <button
+                  type="button"
+                  className="lib__tpl-use"
+                  onClick={() => onUseTemplate(tpl)}
+                >
+                  用它 → 逐站位绑定位姿
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className="lib__empty">
+              <p className="lib__empty-title">还没有模板</p>
+              <p className="hint">
+                打开一条序列，点顶栏「存为模板」—— 模板只存结构（站位 / 时长 / 动作），不存关节角。
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
         <div className="lib__pane">
           {canAppend && appendTarget ? (
             <p className="lib__context">

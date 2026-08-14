@@ -395,6 +395,15 @@ function Workspace() {
     void gotoPose(firstHoldPose);
   }, [firstHoldPose, preview, gotoPose]);
 
+  /** Instantiate a template through the station wizard — the 模板 tab's verb. */
+  const useTemplate = useCallback(
+    (tpl: SeqTemplate) => {
+      preview.stop();
+      setWizardTemplate(tpl);
+    },
+    [preview],
+  );
+
   // Number keys fire the first nine poses: the operator's hands are usually
   // on the camera or the arm, and the same binding takes a foot pedal.
   const posesRef = useRef(poses);
@@ -573,7 +582,12 @@ function Workspace() {
               删除
             </button>
           </>
-        ) : null}
+        ) : (
+          <>
+            <span className="seq-bar__meta">点一张位姿卡 → 臂开过去</span>
+            <span className="seq-bar__spacer" />
+          </>
+        )}
       </header>
 
       <main className="main">
@@ -586,6 +600,8 @@ function Workspace() {
           sequencesUnavailable={sequencesUnavailable}
           canAppend={uiMode === "edit" && canEditSequences && sequence !== null && !runningSequence}
           hideAppend={uiMode === "simple"}
+          templates={uiMode === "edit" ? templates : undefined}
+          onUseTemplate={uiMode === "edit" ? useTemplate : undefined}
           onAppendPose={(pose) => void appendPoseToSequence(pose)}
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}

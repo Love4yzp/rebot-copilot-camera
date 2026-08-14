@@ -598,11 +598,35 @@ select:focus {
   display: flex;
   gap: 2px;
   border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 3px;
+  background: var(--body);
+}
+.mode-tabs button {
+  padding: 7px 16px;
+  font-size: 13.5px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--mark-dim);
+  cursor: pointer;
+}
+/* The selected face is a filled pill — the mode switch is the first thing a
+ * new operator must find, so it earns the strongest grey contrast on screen. */
+.mode-tabs button[aria-selected="true"] {
+  background: var(--mark);
+  color: var(--ink);
+  font-weight: 650;
+}
+.lib__sub-tabs {
+  display: flex;
+  gap: 2px;
+  border: 1px solid var(--edge);
   border-radius: 7px;
   padding: 2px;
 }
-.mode-tabs button {
-  padding: 5px 12px;
+.lib__sub-tabs button {
+  padding: 4px 12px;
   font-size: 12.5px;
   background: transparent;
   border: none;
@@ -610,10 +634,16 @@ select:focus {
   color: var(--mark-dim);
   cursor: pointer;
 }
-.mode-tabs button[aria-selected="true"] {
-  background: var(--body-lift);
-  color: var(--mark);
+.lib__sub-tabs button[aria-selected="true"] {
+  background: var(--mark);
+  color: var(--ink);
   font-weight: 600;
+}
+.lib__tpl-use {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 6px;
+  font-size: 12.5px;
 }
 
 /* ── library ─────────────────────────────────────────────────────────────── */
