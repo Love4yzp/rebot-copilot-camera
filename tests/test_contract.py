@@ -50,8 +50,8 @@ from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
-from backend.sequences import Block, PoseStore, SequenceStore, TemplateStore, normalize
 from backend.safety import SafetyLatch
+from backend.sequences import Block, PoseStore, SequenceStore, TemplateStore, normalize
 from backend.shutter import SimShutter
 from backend.tuning import TuningStore
 
@@ -146,6 +146,7 @@ def rig(tmp_path: Path):
         broadcaster=app.state.broadcaster,
         clock=clock,
         actions=runner,
+        tuning=app.state.tuning_store.load(),
     )
     return TestClient(app), app.state.controller
 
@@ -196,11 +197,12 @@ def mock_transcript() -> dict[str, list[dict]]:
         pytest.skip("node is not on PATH — the mock half of the contract needs it")
     if not (ROOT / "frontend" / "node_modules" / "esbuild").exists():
         pytest.skip("frontend/node_modules missing — run `npm install` in frontend/")
-    proc = subprocess.run(
+    proc = subprocess.run(  # noqa: PLW1510 — returncode is asserted below
         [node, str(RUNNER), str(CASES_DIR)],
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     assert proc.returncode == 0, f"mock runner failed:\n{proc.stderr}"
     return {t["name"]: t["entries"] for t in json.loads(proc.stdout)}

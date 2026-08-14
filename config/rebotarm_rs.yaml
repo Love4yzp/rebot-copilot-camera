@@ -40,7 +40,7 @@ end_effector_frame: "gripper_end"
 #           feedforward keeps compensating 0.8 kg that is not on the arm and
 #           the floating arm pushes itself around (assets.effective_urdf_path).
 #   true  — motor gripper attached: groups.gripper and the gripper joint apply.
-gripper: false
+gripper: true
 
 channel: can0
 rate: 500

@@ -23,6 +23,8 @@ def test_end_effector_frame_is_the_rs_gripper():
 
 
 def test_joint_names_are_in_hardware_order():
+    # Shipped config = the official full set: six arm joints plus the gripper
+    # motor on the bus. The gripper-less rig is the switch, not the default.
     assert assets.joint_names() == [
         "joint1",
         "joint2",
@@ -30,6 +32,7 @@ def test_joint_names_are_in_hardware_order():
         "joint4",
         "joint5",
         "joint6",
+        "gripper",
     ]
 
 
@@ -62,9 +65,11 @@ def test_joint_names_keep_the_gripper_when_enabled(monkeypatch):
     assert assets.joint_names()[-1] == "gripper"
 
 
-def test_effective_hardware_yaml_strips_the_gripper_when_disabled():
-    """The shipped config has the switch off: upstream must see six joints and
-    no gripper group, or connect() would register a motor that is not on the bus."""
+def test_effective_hardware_yaml_strips_the_gripper_when_disabled(monkeypatch):
+    """With the switch off, upstream must see six joints and no gripper group,
+    or connect() would register a motor that is not on the bus."""
+    cfg = {**assets.hardware_config(), "gripper": False}
+    monkeypatch.setattr(assets, "hardware_config", lambda: cfg)
     path = assets.effective_hardware_yaml()
     assert path != assets.HARDWARE_YAML
 
@@ -86,12 +91,14 @@ def test_effective_hardware_yaml_is_the_config_itself_when_enabled(monkeypatch):
     assert assets.effective_hardware_yaml() == assets.HARDWARE_YAML
 
 
-def test_effective_urdf_zeroes_gripper_link_masses_when_disabled():
-    """The shipped config has no gripper attached: its links must leave the
-    dynamics model, or the feedforward compensates for 0.8 kg that is not
-    there and the floating arm pushes itself upward."""
+def test_effective_urdf_zeroes_gripper_link_masses_when_disabled(monkeypatch):
+    """No gripper attached: its links must leave the dynamics model, or the
+    feedforward compensates for 0.8 kg that is not there and the floating arm
+    pushes itself upward."""
     import xml.etree.ElementTree as ET
 
+    cfg = {**assets.hardware_config(), "gripper": False}
+    monkeypatch.setattr(assets, "hardware_config", lambda: cfg)
     path = assets.effective_urdf_path()
     assert path != assets.urdf_path()
 
@@ -106,7 +113,7 @@ def test_effective_urdf_zeroes_gripper_link_masses_when_disabled():
     assert masses["link2"] == pytest.approx(1.552)
 
 
-def test_gripper_profile_keeps_the_mass_when_the_motor_is_off_the_bus():
+def test_gripper_profile_keeps_the_mass_when_the_motor_is_off_the_bus(monkeypatch):
     """Dead weight: profile 'gripper' with the yaml switch off must keep the
     gripper links' masses — they are physically mounted — even though the
     actuator is absent. The profile answers about mass; the switch answers
@@ -115,6 +122,8 @@ def test_gripper_profile_keeps_the_mass_when_the_motor_is_off_the_bus():
 
     from backend.tuning import PayloadProfile, PayloadTuning
 
+    cfg = {**assets.hardware_config(), "gripper": False}
+    monkeypatch.setattr(assets, "hardware_config", lambda: cfg)
     path = assets.effective_urdf_path(PayloadTuning(profile=PayloadProfile.GRIPPER))
     assert path == assets.urdf_path()
 
@@ -132,13 +141,15 @@ def test_effective_urdf_is_the_vendored_file_when_gripper_enabled(monkeypatch):
     assert assets.effective_urdf_path() == assets.urdf_path()
 
 
-def test_the_stripped_model_carries_no_gripper_gravity():
+def test_the_stripped_model_carries_no_gripper_gravity(monkeypatch):
     """The real behaviour this guards: at q=0 the vendored model demands
     +6.76 N·m on joint3, of which ~3.3 N·m is the detached gripper's phantom
     torque. The feedforward must not command it."""
     import numpy as np
     import pinocchio as pin
 
+    cfg = {**assets.hardware_config(), "gripper": False}
+    monkeypatch.setattr(assets, "hardware_config", lambda: cfg)
     full = pin.buildModelFromUrdf(str(assets.urdf_path()))
     stripped = pin.buildModelFromUrdf(str(assets.effective_urdf_path()))
 

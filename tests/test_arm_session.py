@@ -10,7 +10,9 @@ from backend import assets
 from backend.arm.session import ArmSession
 
 
-def test_session_reports_six_joints_without_the_gripper():
+def test_session_reports_six_joints_without_the_gripper(monkeypatch):
+    cfg = {**assets.hardware_config(), "gripper": False}
+    monkeypatch.setattr(assets, "hardware_config", lambda: cfg)
     session = ArmSession()
     assert list(session.joint_names) == [
         "joint1",

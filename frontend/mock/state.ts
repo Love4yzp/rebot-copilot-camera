@@ -187,8 +187,10 @@ function seedTemplate(now: number): MockTemplate {
 }
 
 /** Default tuning config matching the backend's TuningConfig defaults. */
+// Shipped rig = official full set: the gripper motor is on the bus, so the
+// payload profile is locked to "gripper" (mirrors the backend's coercion).
 const DEFAULT_TUNING: Record<string, unknown> = {
-  payload: { profile: "bare", camera: { mass: null, com: [0, 0, 0] } },
+  payload: { profile: "gripper", camera: { mass: null, com: [0, 0, 0] } },
   float: { kp: 2.0, kd: 1.0 },
   floatlock: { linear_threshold: 0.04, angular_threshold: 0.08, release_factor: 1.0, lock_factor: 0.6, min_still_s: 0.25 },
   settle: { drift_rad: 0.003, min_s: 0.15 },

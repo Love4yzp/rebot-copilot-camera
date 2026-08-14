@@ -31,6 +31,7 @@ def rig(tmp_path: Path):
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=lambda: 0.0,
+        tuning=app.state.tuning_store.load(),
     )
     return TestClient(app), arm
 
@@ -41,8 +42,9 @@ def test_get_reports_live_saved_dirty_and_options(rig):
     assert body["current"]["float"]["kp"] == 2.0
     assert body["saved"] == body["current"]
     assert body["dirty"] == []
-    assert body["gripper_motor"] is False
-    assert body["payload_options"] == ["bare", "camera", "gripper"]
+    assert body["gripper_motor"] is True
+    assert body["payload_options"] == ["gripper"]
+    assert body["current"]["payload"]["profile"] == "gripper"
 
 
 def test_put_float_gains_applies_live_and_marks_dirty(rig):
@@ -100,8 +102,9 @@ def test_put_is_refused_while_a_sequence_executes(rig, monkeypatch):
     assert "executing" in r.json()["detail"]
 
 
-def test_payload_switch_is_refused_while_floating(rig):
+def test_payload_switch_is_refused_while_floating(rig, monkeypatch):
     client, arm = rig
+    monkeypatch.setattr(assets, "has_gripper", lambda: False)
     arm.set_float(True)
     r = client.put(
         "/api/config/tuning",

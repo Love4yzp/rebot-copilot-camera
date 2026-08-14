@@ -102,11 +102,18 @@ def test_unknown_section_is_rejected():
         merge_patch(TuningConfig(), {"turbo": {"enabled": True}})
 
 
-def test_missing_file_is_defaults(tmp_path: Path):
+def test_missing_file_is_defaults(monkeypatch, tmp_path: Path):
+    """On a gripper-less rig the missing file is exactly the code defaults."""
+    from backend import assets
+
+    monkeypatch.setattr(assets, "has_gripper", lambda: False)
     assert TuningStore(tmp_path / "tuning.yaml").load() == TuningConfig()
 
 
-def test_store_roundtrip(tmp_path: Path):
+def test_store_roundtrip(monkeypatch, tmp_path: Path):
+    from backend import assets
+
+    monkeypatch.setattr(assets, "has_gripper", lambda: False)
     store = TuningStore(tmp_path / "tuning.yaml")
     cfg = merge_patch(TuningConfig(), {"float": {"kp": 3.5}})
     store.save(cfg)
