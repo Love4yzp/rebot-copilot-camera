@@ -149,7 +149,9 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 上游标定是**空载**的臂（误差 5–11%）。末端挂一台机身后负载变了，浮动手感和保持精度都会变。
 
-**现状（2026-08）**：机上无相机；夹爪已装回并**接线**（官方一整套：电机 0x07 在总线，yaml `gripper: true`，7 关节，profile 锁 `gripper`，质量走 URDF 全值）。无夹爪态 = yaml 开关 `false` + profile `bare`（0.8 kg 从动力学模型剥离，与上游标定状态一致）；死重态（装着未接线）= 开关 `false` + profile `gripper`（质量保留、执行器缺席）。**负载机制已落地**：`config/tuning.yaml` 的 `payload.profile`（bare/camera/gripper）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
+**现状（2026-08）**：机上无相机；夹爪已装回并**接线**（官方一整套：电机 0x07 在总线，yaml `gripper: true`，7 关节，profile 锁 `gripper`，质量走 URDF 全值）。
+
+**传输实测（2026-08-14，macOS）**：XCAN-USB 适配器走 MacCAN `libPCBUSB.dylib`（`~/.local/lib`），motorbridge 的 darwin 后端把 `channel: can0` 映射为 PCAN_USBBUS1；直跑 `uv run` 的脚本（零位示例、`verify_gravity.py`）须先 `export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:..."`，`dev.sh prod` 已自动注入，裸跑报 `load PCBUSB failed`。零位巡检：7 电机（j1–j6 + gripper 0x07）全部在线并已 set_zero。随动态（kp=0）夹爪手指自重漂移 0.09→0.26 rad 属预期（夹爪无重力前馈、零刚度）；后端保持态用 kp=50 钉住。**verify_gravity 首次实测（2026-08-14）**：q≈0 采样得到 joint2/joint3「FLIPPED」是**假阳性**——q=0 是机械下止点（上游 `auto_float_test` 明示「motors 2/3 rest at their lower stop q=0」），臂搁在挡块上，止点扛走全部重力，实测≈0 而模型 g(q)≠0。脚本「q≈0 有强重力信号」的指引对这条臂是错的。**正确方法 = 上游 lift-then-float**：先抬离止点，在悬空姿态重测（或直接以浮动漂移手感为最终判据——estop 解除→示教，臂若原地漂移就是前馈不准，用 `auto_float_test` 的 k/c 逐关节修正思路）。**待确认**：`verify_gravity.py` 退出走 `disconnect()→disable_all()`（按铁律 = 力矩归零），与脚本 docstring「退出不失能」矛盾——真机退出瞬间需人手扶臂，观察后回填。无夹爪态 = yaml 开关 `false` + profile `bare`（0.8 kg 从动力学模型剥离，与上游标定状态一致）；死重态（装着未接线）= 开关 `false` + profile `gripper`（质量保留、执行器缺席）。**负载机制已落地**：`config/tuning.yaml` 的 `payload.profile`（bare/camera/gripper）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
 
 相机到货后：整体称重（机身+支架）填 `camera.mass`，量出质心相对末端法兰的偏移填 `camera.com`，切到 camera profile，跑 `scripts/verify_gravity.py` 复核。次选：接受手感变差并靠位置环刚度补，或重调浮动/锁定的速度阈值（面板里就能调，上游默认线速度 `0.04 m/s`、角速度 `0.08 rad/s`）。
 

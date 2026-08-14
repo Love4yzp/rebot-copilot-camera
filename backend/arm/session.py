@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -167,7 +168,8 @@ class ArmSession:
             vlim = np.maximum(np.abs(target - current) / duration_s, 1e-3)
 
             for group in self._arm.groups.values():
-                group.send_pos_vel(target, vlim)
+                idxs = [self._index[name] for name in group.joint_names]
+                group.send_pos_vel(target[idxs], vlim[idxs])
 
     def set_float(self, enabled: bool) -> None:
         """Enter or leave zero-force float.
@@ -205,7 +207,7 @@ class ArmSession:
             self._float_kp = kp
             self._float_kd = kd
 
-    def reload_dynamics(self, payload: "PayloadTuning | None" = None) -> None:
+    def reload_dynamics(self, payload: PayloadTuning | None = None) -> None:
         """Drop the cached dynamics model so the next torque computes against
         the new payload. The rebuild happens lazily in :meth:`_dynamics_model`."""
         with self._lock:
@@ -238,14 +240,22 @@ class ArmSession:
         return target
 
     def _send_mit(self, q: np.ndarray, kp: float, kd: float) -> None:
-        n = len(q)
+        # Each group receives arrays sized to its own joints, in its own
+        # order. Upstream's JointGroup indexes pos[i]/vel[i]/kp[i]/… by the
+        # group's joint list: a full-arm array silently makes the gripper
+        # read joint1's value, and send_pos_vel walks off the end of the arm
+        # group's joint list (IndexError). The real arm pays for both; the
+        # simulator never does, because SimArm has no groups.
+        tau = self._gravity_torque(q)
         for group in self._arm.groups.values():
+            idxs = [self._index[name] for name in group.joint_names]
+            n = len(idxs)
             group.send_mit(
-                q,
+                q[idxs],
                 vel=np.zeros(n),
                 kp=np.full(n, kp),
                 kd=np.full(n, kd),
-                tau=self._gravity_torque(q),
+                tau=tau[idxs],
             )
 
     def _dynamics_model(self):
@@ -260,8 +270,8 @@ class ArmSession:
         goes in when the tuning profile says one is mounted.
         """
         if self._dyn_model is None:
-            from reBotArm_control_py.dynamics.robot_model import load_dynamics_model
             from reBotArm_control_py.dynamics.inverse_dynamics import create_data
+            from reBotArm_control_py.dynamics.robot_model import load_dynamics_model
 
             self._dyn_model = load_dynamics_model(str(assets.effective_urdf_path(self._payload)))
             self._dyn_data = create_data(self._dyn_model)
