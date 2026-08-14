@@ -143,10 +143,11 @@ export function LibraryPanel({
                 event.dataTransfer.effectAllowed = "copy";
               }}
             >
-              <div className="lib__pose-top" onClick={(event) => event.stopPropagation()}>
+              <div className="lib__pose-top">
                 {renaming === pose.id ? (
                   <input
                     autoFocus
+                    onClick={(event) => event.stopPropagation()}
                     value={renameDraft}
                     onChange={(event) => setRenameDraft(event.target.value)}
                     onBlur={() => void rename(pose)}

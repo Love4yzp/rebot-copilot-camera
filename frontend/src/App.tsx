@@ -360,6 +360,7 @@ function Workspace() {
       }
       try {
         await api.poses.goto(pose.id);
+        show("info", `臂开往「${pose.name}」…`);
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) {
           show("info", runningSequence ? "执行中 — 等当前序列完成" : "臂正忙 — 等当前动作完成");
