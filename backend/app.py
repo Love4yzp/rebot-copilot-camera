@@ -19,7 +19,6 @@ import os
 import socket
 import sys
 import time
-
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -27,14 +26,21 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
-from .agent import AgentLease
 from .actions import ActionRegistry, ShutterProvider, ThreadedRunner
-from .api import agent, config as config_api, control, estop, logs, plugins, poses, sequences, templates
+from .agent import AgentLease
+from .api import agent, control, estop, logs, plugins, poses, sequences, templates
+from .api import config as config_api
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
-from .sequences import PoseStore, SequenceStore, TemplateStore, maybe_migrate
 from .safety import SafetyLatch, Watchdog
 from .safety.kinematics import arm_model
+from .sequences import (
+    PoseStore,
+    SequenceStore,
+    TemplateStore,
+    maybe_migrate,
+    seed_demo_if_empty,
+)
 from .shutter import SimShutter, create_shutter
 from .tuning import TuningStore
 
@@ -357,6 +363,17 @@ def main() -> None:
         config.SEQUENCES_DIR,
         app.state.pose_store,
         app.state.sequence_store,
+    )
+
+    # First boot gets the reference demo: empty stores are planted with the
+    # four-station shoot once, so the full stack demos like the mock. Skipped
+    # when anything exists, when this deployment was seeded before, or when
+    # REBOT_SEED_DEMO=0.
+    seed_demo_if_empty(
+        app.state.pose_store,
+        app.state.sequence_store,
+        app.state.template_store,
+        enabled=os.environ.get("REBOT_SEED_DEMO", "1") != "0",
     )
 
     ParkOnExitServer(uvicorn.Config(app, host=args.host, port=args.port)).run()

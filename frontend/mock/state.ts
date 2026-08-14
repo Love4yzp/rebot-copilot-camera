@@ -128,11 +128,14 @@ function seedPoses(now: number): MockPose[] {
     created_at: now - age_s,
     updated_at: now - age_s,
   });
+  // Angles mirror backend/sequences/seed_demo.py — the validated set (the
+  // original mock values were outside joint3's real [0, π] limit and
+  // self-collided; the backend refused them). Change both together.
   return [
-    pose("正面", { joint2: 0.35, joint3: -0.3, joint5: 0.1, gripper: 0.02 }, 7200),
-    pose("右45°", { joint1: 0.8, joint2: 0.45, joint3: -0.5, joint6: 0.25, gripper: 0.02 }, 7000),
-    pose("侧面", { joint1: 1.4, joint2: 0.3, joint3: -0.25, joint5: -0.2, joint6: 0.5, gripper: 0.02 }, 6800),
-    pose("俯拍", { joint1: 0.15, joint2: 0.9, joint3: -0.9, joint4: 0.3, joint5: 0.4, gripper: 0.02 }, 6600),
+    pose("正面", { joint1: 0.0, joint2: 0.35, joint3: 0.3, joint4: 0.0, joint5: 0.1, joint6: 0.0, gripper: 0.02 }, 7200),
+    pose("右45°", { joint1: 0.9, joint2: 0.45, joint3: 0.5, joint4: 0.0, joint5: 0.0, joint6: 0.25, gripper: 0.02 }, 7000),
+    pose("侧面", { joint1: 1.5, joint2: 0.3, joint3: 0.25, joint4: 0.0, joint5: -0.2, joint6: 0.5, gripper: 0.02 }, 6800),
+    pose("俯拍", { joint1: 0.15, joint2: 0.9, joint3: 0.5, joint4: 0.3, joint5: 0.4, joint6: 0.0, gripper: 0.02 }, 6600),
   ];
 }
 
