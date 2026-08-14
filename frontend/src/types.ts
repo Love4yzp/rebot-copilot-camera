@@ -210,6 +210,9 @@ export interface ControlState {
   velocities: Record<string, number>;
   rate_hz: number;
   mode: Mode;
+  /** Rest: zero torque, the arm lying on its stops. Not a machine mode —
+   * the loop wakes the arm the moment it drifts or any command arrives. */
+  resting?: boolean;
   estop: EstopState;
   playback: SeqPlayback | null;
 }

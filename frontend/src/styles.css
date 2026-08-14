@@ -854,7 +854,8 @@ select:focus {
 .monitor[data-state="exec"],
 .monitor[data-state="estop"],
 .monitor[data-state="preview"],
-.monitor[data-state="teach"] {
+.monitor[data-state="teach"],
+.monitor[data-state="rest"] {
   padding-top: 46px;
 }
 .monitor[data-state="estop"] .monitor__status {

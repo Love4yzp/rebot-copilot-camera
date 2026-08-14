@@ -108,6 +108,7 @@ function Workspace() {
 
   const mode = state?.mode ?? null;
   const latched = state?.estop.latched ?? false;
+  const resting = state?.resting ?? false;
 
   // 解除急停后，后端自动进入零重力示教 —— 前端必须同步打开示教条，
   // 否则监视器写着「松手自动锁定 · 直接保存」，页面上却没有保存控件。
@@ -368,6 +369,27 @@ function Workspace() {
     else void attempt(() => api.execute.resume());
   }, [preview, attempt]);
 
+  /** Rest/wake: drop torque at the zero pose so the motors cool, or wake. */
+  const toggleRest = useCallback(() => {
+    const target = !(state?.resting ?? false);
+    if (latched) {
+      show("info", "已急停 — 先解除急停");
+      return;
+    }
+    void (async () => {
+      try {
+        await api.rest(target);
+        show("info", target ? "已休息 · 电机卸力 · 臂搁在止点上" : "已唤醒 · 臂重新保持");
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          show("info", "臂不在零位 — 先点「零位」让臂回零，再休息");
+        } else {
+          show("error", error instanceof Error ? error.message : String(error));
+        }
+      }
+    })();
+  }, [state?.resting, latched, show]);
+
   const gotoPose = useCallback(
     async (pose: Pose) => {
       if (latched) {
@@ -618,6 +640,8 @@ function Workspace() {
             sequenceName={uiMode === "edit" ? sequence?.name ?? null : null}
             runningSequence={runningSequence}
             idleHint={uiMode === "simple" ? "点一张位姿卡 → 臂开过去" : null}
+            resting={resting}
+            onToggleRest={toggleRest}
             poses={poses}
             onGhostClick={(pose) => void gotoPose(pose)}
             onToggleTuning={() => setTuningOpen((v) => !v)}

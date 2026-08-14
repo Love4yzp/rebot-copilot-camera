@@ -449,3 +449,59 @@ def test_a_finished_run_keeps_broadcasting_done_but_a_stop_goes_null(rig: Rig):
     rig.step()
     states = [m for m in rig.published if m["type"] == "state"]
     assert states[-1]["data"]["playback"] is None
+
+
+# ── rest ─────────────────────────────────────────────────────────────────────
+
+
+def test_rest_enters_at_zero_and_wakes_when_the_arm_moves(rig: Rig):
+    """Rest drops torque so the arm lies on its stops; the loop watches the
+    resting arm and re-asserts a hold the moment a hand moves it — a
+    torque-less arm must never be left where a hand put it."""
+    rig.step(2)
+    rig.controller.set_resting(True)
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["resting"] is True
+
+    rig.arm.drag({"joint1": 0.2})
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["resting"] is False
+
+
+def test_rest_is_refused_away_from_zero(rig: Rig):
+    """Zero torque anywhere but the zero pose is a free-fall, so rest must
+    refuse an arm that is not on its stops."""
+    rig.step(2)
+    rig.arm.drag({"joint1": 0.5})
+    rig.step()
+    with pytest.raises(RuntimeError):
+        rig.controller.set_resting(True)
+
+
+def test_rest_wakes_on_any_motion_command(rig: Rig):
+    """A goto (or play/teach) re-asserts torque before the arm moves."""
+    rig.step(2)
+    rig.controller.set_resting(True)
+    rig.step()
+
+    p = Pose(name="p", joints={"joint1": 0.4, "joint2": 0.0})
+    rig.controller.goto(p)
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["resting"] is False
+
+
+def test_estop_holds_a_resting_arm(rig: Rig):
+    """The latched tick holds with torque, which is exactly the wake a
+    resting arm needs — the flag clears and the freeze path runs."""
+    rig.step(2)
+    rig.controller.set_resting(True)
+    rig.step()
+
+    rig.latch.engage("operator pressed stop", LatchSource.UI)
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["estop"]["latched"] is True
+    assert states[-1]["data"]["resting"] is False

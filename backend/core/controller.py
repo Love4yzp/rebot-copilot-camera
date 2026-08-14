@@ -40,6 +40,14 @@ from .floatlock import FloatLock, FloatLockConfig
 
 log = logging.getLogger(__name__)
 
+#: How close every arm joint must be to zero before rest (zero torque) is
+#: allowed. At the zero pose the mechanical stops carry the arm; anywhere else
+#: zero torque is a free-fall.
+REST_AT_EPS = 0.03
+#: How far a resting arm may drift before the loop wakes it and re-asserts a
+#: hold — a torque-less arm must not be left lifted by a hand that lets go.
+REST_WAKE_DRIFT = 0.05
+
 
 def _floatlock_config(tuning: TuningConfig) -> FloatLockConfig:
     fl = tuning.floatlock
@@ -93,6 +101,10 @@ class Controller:
         # stop — after POST /api/execute/stop the playback field is null.
         self._executor: SequenceExecutor | None = None
         self._teaching = False
+        #: Rest: zero torque, the arm lying on its mechanical stops. Entered
+        #: only at the zero pose; the loop wakes the arm the moment it drifts.
+        self._resting = False
+        self._rest_snapshot: dict[str, float] | None = None
         self._last_state = ArmState(positions={}, velocities={})
         self._hold_target: dict[str, float] | None = None
         self._was_latched = False
@@ -238,6 +250,8 @@ class Controller:
         otherwise unanswerable after the fact.
         """
         with self._lock:
+            if self._resting:
+                self._wake_from_rest()
             if self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
             if self.is_playing:
@@ -282,6 +296,8 @@ class Controller:
             blocks=[TransitionBlock(duration_s=DEFAULT_APPROACH_S)],
         )
         with self._lock:
+            if self._resting:
+                self._wake_from_rest()
             if self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
             if self.is_playing:
@@ -386,6 +402,8 @@ class Controller:
         the same loop is the mock's 409, and the operator can stop first.
         """
         with self._lock:
+            if enabled and self._resting:
+                self._wake_from_rest()
             if enabled and self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
             if enabled and self.is_playing:
@@ -397,6 +415,52 @@ class Controller:
             self._hold_target = dict(self.arm.read_state().positions) if enabled else None
             if not enabled:
                 self.arm.set_float(False)
+
+    def set_resting(self, enabled: bool) -> None:
+        """Enter or leave rest: zero torque, the arm lying on its stops.
+
+        Entering demands the arm already be at the zero pose (within
+        ``REST_AT_EPS``): the stops carry the arm there, and anywhere else
+        zero torque is a free-fall. While resting, the loop watches for drift
+        and wakes the arm the moment something moves it, so a hand lifting it
+        never gets to drop it.
+        """
+        with self._lock:
+            if not enabled:
+                self._wake_from_rest()
+                return
+            if self.latch.is_latched:
+                raise RuntimeError("emergency stop is engaged")
+            if self.is_playing:
+                raise RuntimeError("a sequence is executing")
+            if self._teaching:
+                raise RuntimeError("cannot rest while teaching")
+            positions = self._last_state.positions
+            if not positions or any(
+                abs(positions.get(name, 0.0)) > REST_AT_EPS
+                for name in self.arm.joint_names
+            ):
+                raise RuntimeError("arm is not at the zero pose — park home first")
+            self.arm.relax()
+            self._resting = True
+            self._rest_snapshot = dict(positions)
+            log.info("rest: torque dropped — the arm lies on its stops")
+
+    def _wake_from_rest(self) -> None:
+        """Re-assert torque at wherever the arm is, then clear the rest state.
+
+        A wake is a hold: MIT at hold gains with gravity feedforward at the
+        current position, so the arm cannot drop when rest ends.
+        """
+        if not self._resting:
+            return
+        self._resting = False
+        self._rest_snapshot = None
+        positions = self._last_state.positions
+        if positions:
+            self.arm.hold(dict(positions))
+            self._hold_target = dict(positions)
+        log.info("rest ended: holding at the current position")
 
     # ── the loop ─────────────────────────────────────────────────────────────
 
@@ -424,6 +488,9 @@ class Controller:
         with self._lock:
             latched = self.latch.is_latched
             if latched:
+                # The latched tick holds with torque, which is the wake.
+                self._resting = False
+                self._rest_snapshot = None
                 self._tick_latched(state)
             else:
                 if self._was_latched and self.watchdog is not None:
@@ -472,6 +539,9 @@ class Controller:
         self._hold_target = dict(frozen)
 
     def _tick_running(self) -> None:
+        if self._resting:
+            self._tick_resting()
+            return
         if self._teaching:
             self._tick_teaching()
             return
@@ -481,6 +551,23 @@ class Controller:
             # against a hold, never against a moving target.
             self._hold_target = None
             return
+        self._hold_target = None
+
+    def _tick_resting(self) -> None:
+        """While resting, watch that the arm stays on its stops.
+
+        The instant any joint leaves its rest snapshot by more than
+        ``REST_WAKE_DRIFT`` something is touching the arm — wake it and hold,
+        because a torque-less arm must never be left where a hand put it.
+        """
+        state = self._last_state
+        snapshot = self._rest_snapshot or {}
+        if any(
+            abs(state.positions.get(name, 0.0) - snapshot.get(name, 0.0)) > REST_WAKE_DRIFT
+            for name in self.arm.joint_names
+        ):
+            log.warning("rest: the arm moved off its stops — waking and holding")
+            self._wake_from_rest()
         self._hold_target = None
 
     def _tick_teaching(self) -> None:
@@ -545,6 +632,7 @@ class Controller:
                     "velocities": dict(state.velocities),
                     "rate_hz": self.rate_hz,
                     "mode": self.mode,
+                    "resting": self._resting,
                     "estop": {
                         "latched": latch.latched,
                         "reason": latch.reason,

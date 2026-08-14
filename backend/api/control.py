@@ -118,6 +118,27 @@ def set_teaching(body: TeachRequest, request: Request) -> PlaybackState:
     return playback_state(_controller(request))
 
 
+# ── rest ─────────────────────────────────────────────────────────────────────
+
+
+class RestRequest(BaseModel):
+    enabled: bool
+
+
+@router.post(
+    "/api/rest", response_model=PlaybackState, dependencies=[Depends(require_arm_available)]
+)
+def set_resting(body: RestRequest, request: Request) -> PlaybackState:
+    """Rest: drop torque at the zero pose — the arm lies on its stops and the
+    motors stop burning current. Gated: resting changes what the motors are
+    commanded, and waking re-asserts a hold."""
+    try:
+        _controller(request).set_resting(body.enabled)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return playback_state(_controller(request))
+
+
 # ── websocket ────────────────────────────────────────────────────────────────
 
 

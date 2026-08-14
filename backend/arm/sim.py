@@ -124,6 +124,14 @@ class SimArm:
             raise ValueError("duration_s must be positive")
         self.hold(q_target)
 
+    def relax(self) -> None:
+        """Recorded, not applied: the simulator has no torque loop to drop.
+
+        The controller's rest logic (zero-pose gate, drift wake-up) exercises
+        against the same positions either way."""
+        with self._lock:
+            self._floating = False
+
     def set_float(self, enabled: bool) -> None:
         """Enter or leave float. Leaving re-targets wherever the arm now is.
 

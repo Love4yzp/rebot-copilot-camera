@@ -75,6 +75,8 @@ export interface MockState {
   positions: Record<string, number>;
   velocities: Record<string, number>;
   mode: MockMode;
+  /** Rest: zero torque, the arm lying on its stops (mirrors ControlState.resting). */
+  resting: boolean;
   estop: MockEstop;
   playback: MockSeqPlayback | null;
   /**
@@ -206,6 +208,7 @@ export function createState(options: { seed?: boolean } = {}): MockState {
     positions: zeroPose(),
     velocities: zeroPose(),
     mode: "idle",
+    resting: false,
     // Paired, so the ordinary preview flow is one step. Set false to walk the
     // setup path an operator meets on a machine they have never used.
     camera: true,

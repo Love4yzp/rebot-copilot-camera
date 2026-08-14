@@ -199,6 +199,26 @@ class ArmSession:
             setpoint = q0 + (tgt - q0) * frac
             self._send_mit(setpoint, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
 
+    def relax(self) -> None:
+        """Zero-gain MIT at the current position: the motors command no torque
+        and the arm rests on its stops. The bus stays up — the next hold or
+        move re-asserts torque immediately. Only legal at the zero pose; the
+        caller gates that (zero torque anywhere else is a free-fall)."""
+        with self._lock:
+            self._floating = False
+            self._motion = None
+            q, _, _ = self._arm.get_state()
+            for group in self._arm.groups.values():
+                idxs = [self._index[name] for name in group.joint_names]
+                n = len(idxs)
+                group.send_mit(
+                    q[idxs],
+                    vel=np.zeros(n),
+                    kp=np.zeros(n),
+                    kd=np.zeros(n),
+                    tau=np.zeros(n),
+                )
+
     def set_float(self, enabled: bool) -> None:
         """Enter or leave zero-force float.
 

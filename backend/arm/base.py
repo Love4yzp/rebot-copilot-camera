@@ -94,6 +94,18 @@ class ArmDriver(Protocol):
         """
         ...
 
+    def relax(self) -> None:
+        """Drop torque at the zero pose so the arm rests on its stops.
+
+        MIT at zero gains and zero feedforward: the motors command nothing and
+        the mechanical stops carry the arm, so an arm left parked stops
+        burning current. Not a disable — the bus stays up and any later
+        :meth:`hold` / :meth:`move_to` re-asserts torque immediately. Callers
+        must gate this on the arm being at (within eps of) the zero pose:
+        zero torque anywhere else is a free-fall.
+        """
+        ...
+
     def set_float(self, enabled: bool) -> None:
         """Enter or leave zero-force float, for drag teaching.
 

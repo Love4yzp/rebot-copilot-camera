@@ -304,6 +304,7 @@ function broadcastState(state: MockState, clients: Set<WebSocket>): void {
     velocities: { ...state.velocities },
     rate_hz: RATE_HZ,
     mode: state.mode,
+    resting: state.resting,
     estop: {
       latched: state.estop.latched,
       reason: state.estop.reason,

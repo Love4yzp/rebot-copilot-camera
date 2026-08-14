@@ -521,6 +521,16 @@ export function handleApi(
     return json(200, playbackState(state));
   }
 
+  // ── rest ──────────────────────────────────────────────────────────────────
+  if (pathname === "/api/rest" && method === "POST") {
+    if (state.estop.latched) return estopConflict(state);
+    if (reqBody.enabled && state.mode === "playback") {
+      return conflict("cannot rest while a sequence is executing");
+    }
+    state.resting = !!reqBody.enabled;
+    return json(200, playbackState(state));
+  }
+
   // ── plugins ───────────────────────────────────────────────────────────────
   // Only the shutter, and always healthy: the preview has no serial port and
   // no way to install a package. The shape must match backend/api/plugins.py

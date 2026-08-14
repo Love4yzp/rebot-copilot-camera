@@ -145,8 +145,10 @@ export const api = {
     probe: () => post<ProviderInfo[]>("/api/plugins/probe"),
   },
 
-  // ── teach + shutter ─────────────────────────────────────────────────────
+  // ── teach + rest + shutter ─────────────────────────────────────────────
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
+  /** Rest: zero torque at the zero pose, arm lying on its stops. */
+  rest: (enabled: boolean) => post<PlaybackState>("/api/rest", { enabled }),
   testShutter: (shoot: boolean) => post<ShutterResult>(`/api/shutter/test?shoot=${shoot}`),
   /**
    * Attach the camera over BLE. Slow — the board scans for thirty seconds

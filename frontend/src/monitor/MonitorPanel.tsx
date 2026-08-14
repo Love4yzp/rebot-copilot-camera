@@ -16,6 +16,9 @@ interface Props {
   runningSequence: boolean;
   /** Override for the idle hint — the tap-to-go face points at the pose cards. */
   idleHint?: string | null;
+  /** Rest: zero torque, the arm lying on its stops. */
+  resting?: boolean;
+  onToggleRest?: () => void;
   /** The pose library, drawn as ghost arms where they live in space. */
   poses: Pose[];
   /** Ghost tap — routes to the exact same goto as a card tap. */
@@ -56,6 +59,8 @@ export function MonitorPanel({
   sequenceName,
   runningSequence,
   idleHint,
+  resting,
+  onToggleRest,
   poses,
   onGhostClick,
   onToggleTuning,
@@ -95,9 +100,11 @@ export function MonitorPanel({
       ? "exec"
       : teaching
         ? "teach"
-        : preview.active
-          ? "preview"
-          : "idle";
+        : resting
+          ? "rest"
+          : preview.active
+            ? "preview"
+            : "idle";
 
   let banner: string;
   let status: string;
@@ -106,6 +113,10 @@ export function MonitorPanel({
     banner = "已急停";
     status = "已急停 · 臂钉在原地";
     sub = "解除急停后原地待命，不会自动继续";
+  } else if (resting) {
+    banner = "休息中 · 已卸力";
+    status = "电机已卸力 · 臂搁在止点上";
+    sub = "点「唤醒」或任何位姿卡自动恢复保持 · 急停随时有效";
   } else if (teaching) {
     banner = "零重力 · 臂可推动";
     status = "零重力 · 已卸力";
@@ -154,6 +165,11 @@ export function MonitorPanel({
       <div className="monitor__status">{status}</div>
       <div className="monitor__sub">{sub}</div>
       <div className="monitor__tuning-btn">
+        {onToggleRest ? (
+          <button type="button" className="ghost" onClick={onToggleRest}>
+            {resting ? "唤醒" : "休息"}
+          </button>
+        ) : null}
         {onToggleTuning ? (
           <button type="button" className="ghost" onClick={onToggleTuning}>
             {tuningOpen ? "关闭调参" : "调参"}
