@@ -374,6 +374,11 @@ class Controller:
         if self.latch.is_latched:
             log.warning("stop latch engaged — holding the frozen pose, not parking")
             return None
+        if self._resting:
+            # Already lying on the stops with torque dropped — the best exit
+            # state there is. Parking would wake the arm just to re-park it.
+            log.info("arm is resting on its stops — exiting without parking")
+            return None
         if self.is_teaching:
             self.set_teaching(False)
         self.stop_playback("process shutdown — parking at zero")

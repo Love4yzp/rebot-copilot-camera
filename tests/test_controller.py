@@ -505,3 +505,16 @@ def test_estop_holds_a_resting_arm(rig: Rig):
     states = [m for m in rig.published if m["type"] == "state"]
     assert states[-1]["data"]["estop"]["latched"] is True
     assert states[-1]["data"]["resting"] is False
+
+
+def test_park_home_skips_a_resting_arm(rig: Rig):
+    """A resting arm is already in the best exit state — on its stops with
+    torque dropped. Parking would wake it just to re-park it."""
+    rig.step(2)
+    rig.controller.set_resting(True)
+    rig.step()
+
+    assert rig.controller.park_home() is None
+    rig.step()
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["resting"] is True
