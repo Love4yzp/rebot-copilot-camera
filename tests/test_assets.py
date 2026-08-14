@@ -106,6 +106,26 @@ def test_effective_urdf_zeroes_gripper_link_masses_when_disabled():
     assert masses["link2"] == pytest.approx(1.552)
 
 
+def test_gripper_profile_keeps_the_mass_when_the_motor_is_off_the_bus():
+    """Dead weight: profile 'gripper' with the yaml switch off must keep the
+    gripper links' masses — they are physically mounted — even though the
+    actuator is absent. The profile answers about mass; the switch answers
+    about the bus."""
+    import xml.etree.ElementTree as ET
+
+    from backend.tuning import PayloadProfile, PayloadTuning
+
+    path = assets.effective_urdf_path(PayloadTuning(profile=PayloadProfile.GRIPPER))
+    assert path == assets.urdf_path()
+
+    masses = {
+        link.get("name"): float(link.find("inertial/mass").get("value"))
+        for link in ET.parse(path).getroot().iter("link")
+        if link.find("inertial/mass") is not None
+    }
+    assert masses["gripper_end"] == pytest.approx(0.65, abs=1e-3)
+
+
 def test_effective_urdf_is_the_vendored_file_when_gripper_enabled(monkeypatch):
     cfg = {**assets.hardware_config(), "gripper": True}
     monkeypatch.setattr(assets, "hardware_config", lambda: cfg)

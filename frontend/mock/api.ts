@@ -636,7 +636,7 @@ export function handleApi(
       saved,
       dirty,
       gripper_motor: false,
-      payload_options: ["bare", "camera"],
+      payload_options: ["bare", "camera", "gripper"],
     };
   }
 

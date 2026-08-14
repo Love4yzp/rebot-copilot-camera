@@ -23,17 +23,16 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shutter import ShutterProvider
-from ..arm.base import ArmDriver
-from ..sequences.models import Pose, Sequence, TransitionBlock
-from ..arm.base import ArmState
+from ..arm.base import ArmDriver, ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS
+from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..shutter.base import ShutterDriver
-from ..tuning import PayloadProfile, TuningConfig, TuningRejected
+from ..tuning import TuningConfig, TuningRejected
 from . import events
 from .broadcaster import Broadcaster
 from .executor import DEFAULT_APPROACH_S, SequenceExecutor
@@ -156,23 +155,15 @@ class Controller:
         - float gains are safe mid-float: the follow target is the arm's own
           position, so the position error — and the torque jump — is zero.
         """
-        from .. import assets
-
         with self._lock:
             if self.is_playing:
                 raise TuningRejected("a sequence is executing — stop it before retuning")
             payload_changed = config.payload != self._tuning.payload
-            if payload_changed:
-                if config.payload.profile is PayloadProfile.GRIPPER and not assets.has_gripper():
-                    raise TuningRejected(
-                        "profile 'gripper' but the gripper motor is off the bus — "
-                        "a profile cannot hot-add a motor"
-                    )
-                if self.arm.is_floating:
-                    raise TuningRejected(
-                        "the arm is floating — let it lock before changing the payload; "
-                        "the gravity feedforward jumps when the payload does"
-                    )
+            if payload_changed and self.arm.is_floating:
+                raise TuningRejected(
+                    "the arm is floating — let it lock before changing the payload; "
+                    "the gravity feedforward jumps when the payload does"
+                )
             self._tuning = config
             self._floatlock.config = _floatlock_config(config)
             self._push_tuning_to_arm(rebuild_dynamics=payload_changed)

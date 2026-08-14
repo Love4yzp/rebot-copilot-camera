@@ -42,7 +42,7 @@ def test_get_reports_live_saved_dirty_and_options(rig):
     assert body["saved"] == body["current"]
     assert body["dirty"] == []
     assert body["gripper_motor"] is False
-    assert body["payload_options"] == ["bare", "camera"]
+    assert body["payload_options"] == ["bare", "camera", "gripper"]
 
 
 def test_put_float_gains_applies_live_and_marks_dirty(rig):
@@ -121,8 +121,11 @@ def test_float_gains_may_change_mid_float(rig):
     assert arm._float_gains == (4.0, 1.0)
 
 
-def test_gripper_profile_is_refused_without_the_motor(rig):
+def test_gripper_profile_without_the_motor_is_dead_weight(rig):
+    """A mounted-but-unwired gripper is a legal payload: its mass hangs off
+    the arm even though no motor is on the bus to answer for it. The profile
+    says what mass hangs; the yaml switch says whether the motor is wired."""
     client, _ = rig
     r = client.put("/api/config/tuning", json={"payload": {"profile": "gripper"}})
-    assert r.status_code == 409
-    assert "off the bus" in r.json()["detail"]
+    assert r.status_code == 200
+    assert r.json()["current"]["payload"]["profile"] == "gripper"

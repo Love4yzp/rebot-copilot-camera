@@ -42,9 +42,17 @@ class TuningRejected(RuntimeError):
 
 
 class PayloadProfile(str, Enum):
-    """What hangs off the end flange. ``gripper`` exists only when the gripper
-    motor is on the bus (the hardware yaml's switch) — you cannot hot-add a
-    motor. ``bare`` and ``camera`` are both motor-less; they differ only in
+    """What *mass* hangs off the end flange — orthogonal to the hardware yaml's
+    ``gripper`` switch, which answers a different question: whether the
+    gripper *motor* is on the bus.
+
+    ``gripper`` means the gripper assembly's mass hangs off the end, motor
+    wired or not. With the motor off the bus it is dead weight: the dynamics
+    model carries its mass (it is physically there) while the actuator is
+    absent. With the motor on, this is the only legal profile — a wired motor
+    cannot be hot-added.
+
+    ``bare`` and ``camera`` are motor-less either way; they differ only in
     what the gravity model carries."""
 
     BARE = "bare"
@@ -70,7 +78,7 @@ class PayloadTuning(BaseModel):
     camera: CameraPayload = Field(default_factory=CameraPayload)
 
     @model_validator(mode="after")
-    def camera_profile_requires_a_weighed_mass(self) -> "PayloadTuning":
+    def camera_profile_requires_a_weighed_mass(self) -> PayloadTuning:
         if self.profile is PayloadProfile.CAMERA and self.camera.mass is None:
             raise ValueError(
                 "profile 'camera' requires camera.mass — weigh the body and "
@@ -94,7 +102,7 @@ class FloatLockTuning(BaseModel):
     min_still_s: float = Field(0.25, gt=0, le=2.0)
 
     @model_validator(mode="after")
-    def hysteresis_band_stays_positive(self) -> "FloatLockTuning":
+    def hysteresis_band_stays_positive(self) -> FloatLockTuning:
         if self.lock_factor > self.release_factor:
             raise ValueError(
                 "lock_factor must not exceed release_factor — that inverts "
@@ -128,7 +136,7 @@ class TuningConfig(BaseModel):
     def dump(self) -> dict[str, Any]:
         return self.model_dump(mode="json", by_alias=True)
 
-    def dirty_sections(self, saved: "TuningConfig") -> list[str]:
+    def dirty_sections(self, saved: TuningConfig) -> list[str]:
         mine, theirs = self.dump(), saved.dump()
         return [name for name in SECTIONS if mine[name] != theirs[name]]
 

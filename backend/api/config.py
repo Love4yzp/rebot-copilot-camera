@@ -38,6 +38,8 @@ class TuningState(BaseModel):
     dirty: list[str] = Field(default_factory=list)
     #: Whether the gripper motor is on the bus (hardware yaml). When it is,
     #: the payload profile is fixed to "gripper" — a motor cannot be hot-added.
+    #: When it is not, "gripper" is still a legal profile: the assembly mounted
+    #: without wiring is dead weight, and the profile answers about the mass.
     gripper_motor: bool
     payload_options: list[str]
 
@@ -66,7 +68,9 @@ def _payload_options(gripper_motor: bool):
 
     if gripper_motor:
         return [PayloadProfile.GRIPPER]
-    return [PayloadProfile.BARE, PayloadProfile.CAMERA]
+    # Motor off the bus: the profile still answers "what mass hangs off the
+    # end", and a mounted-but-unwired gripper is a legal answer (dead weight).
+    return [PayloadProfile.BARE, PayloadProfile.CAMERA, PayloadProfile.GRIPPER]
 
 
 def _apply(request: Request, config: TuningConfig) -> TuningState:

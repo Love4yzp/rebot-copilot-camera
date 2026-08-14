@@ -133,7 +133,7 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 每关节库仑摩擦只有 0.2–0.5 N·m（#5），幻影力矩是它的 6–15 倍，什么都盖不住。浮动 kp=2 的位置环要对抗 3.26 N·m 需要偏出 1.6 rad —— 等于完全不设防。「点录制姿态臂就自己往上抬」的主嫌疑就是它（follow 修复见 #10，两者叠加）。
 
-对策：`assets.effective_urdf_path()` —— `gripper: false` 时生成剥掉夹爪连杆 `<inertial>` 质量的临时 URDF（与 `effective_hardware_yaml()` 同款手法），只供动力学模型用；运动学/碰撞仍用 vendor 原文件（幻影几何是保守方向）。`ArmSession._dynamics_model()` 与 `scripts/verify_gravity.py` 都走它。负载配置已产品化为 `config/tuning.yaml` 的 payload profile（bare/camera）+ 调参面板（`backend/tuning.py`），camera 档位把称出的相机质量/质心注入 `gripper_end`。注意 joint2 的幻影是**反向**的（夹爪质心在 -x 侧，原本起着配重作用），摘掉后 j2 重力需求反而上升 —— 别凭直觉猜符号，以差分表为准。
+对策：`assets.effective_urdf_path()` —— `gripper: false` 时生成剥掉夹爪连杆 `<inertial>` 质量的临时 URDF（与 `effective_hardware_yaml()` 同款手法），只供动力学模型用；运动学/碰撞仍用 vendor 原文件（幻影几何是保守方向）。`ArmSession._dynamics_model()` 与 `scripts/verify_gravity.py` 都走它。负载配置已产品化为 `config/tuning.yaml` 的 payload profile（bare/camera/gripper）+ 调参面板（`backend/tuning.py`），camera 档位把称出的相机质量/质心注入 `gripper_end`。**profile 回答「挂什么质量」、yaml 开关回答「电机在不在总线」是正交的两件事**：夹爪装着但没接线 = profile `gripper` 死重态（`effective_urdf_path` 返回 vendor 原文件，0.8 kg 质量保留、执行器缺席）；无夹爪出厂态 = profile `bare`（质量剥离）；电机接上后 profile 被锁为 `gripper`。注意 joint2 的幻影是**反向**的（夹爪质心在 -x 侧，原本起着配重作用），摘掉后 j2 重力需求反而上升 —— 别凭直觉猜符号，以差分表为准。
 
 ---
 
@@ -149,7 +149,7 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 上游标定是**空载**的臂（误差 5–11%）。末端挂一台机身后负载变了，浮动手感和保持精度都会变。
 
-**现状（2026-08）**：机上无相机、无夹爪。夹爪的 0.8 kg 已从动力学模型剥离（#11，`effective_urdf_path()`），当前模型 = 纯裸臂，与上游标定状态一致。**负载机制已落地**：`config/tuning.yaml` 的 `payload.profile`（bare/camera）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
+**现状（2026-08）**：机上无相机；夹爪已装回但**未接线**（死重状态，profile 选 `gripper` 即表达此态——质量保留、执行器缺席）；无夹爪出厂态 = profile `bare`（0.8 kg 从动力学模型剥离，与上游标定状态一致）。**负载机制已落地**：`config/tuning.yaml` 的 `payload.profile`（bare/camera）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
 
 相机到货后：整体称重（机身+支架）填 `camera.mass`，量出质心相对末端法兰的偏移填 `camera.com`，切到 camera profile，跑 `scripts/verify_gravity.py` 复核。次选：接受手感变差并靠位置环刚度补，或重调浮动/锁定的速度阈值（面板里就能调，上游默认线速度 `0.04 m/s`、角速度 `0.08 rad/s`）。
 

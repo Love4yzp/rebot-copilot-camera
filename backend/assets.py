@@ -145,7 +145,7 @@ def effective_hardware_yaml() -> Path:
         return Path(f.name)
 
 
-def effective_urdf_path(payload: "PayloadTuning | None" = None) -> Path:
+def effective_urdf_path(payload: PayloadTuning | None = None) -> Path:
     """The URDF to hand dynamics loaders (gravity feedforward).
 
     With the gripper attached this is simply :func:`urdf_path`. Without it,
@@ -164,6 +164,9 @@ def effective_urdf_path(payload: "PayloadTuning | None" = None) -> Path:
       camera mounts where the gripper did). Only mass and com are replaced;
       the inertia tensor stays the link's own, because gravity feedforward
       does not read it and inventing a tensor would be a made-up number.
+    - ``gripper``: the assembly's mass stays — a mounted-but-unwired gripper
+      is dead weight the feedforward must carry. Same file as the motor-on
+      case, because the mass facts are identical; only the bus differs.
 
     Geometry caveat: the copy edits only ``<inertial>`` values and lives in
     a temp dir, so its relative ``meshes/...`` paths no longer resolve. Use
@@ -178,10 +181,13 @@ def effective_urdf_path(payload: "PayloadTuning | None" = None) -> Path:
 
     profile = payload.profile if payload is not None else PayloadProfile.BARE
     if profile is PayloadProfile.GRIPPER:
-        raise ValueError(
-            "payload profile 'gripper' but the gripper motor is off the bus "
-            "(hardware yaml gripper: false) — a profile cannot hot-add a motor"
-        )
+        # Dead weight: the gripper assembly is bolted on but its motor is not
+        # wired, so it has no group on the bus (effective_hardware_yaml strips
+        # it) — yet its 0.8 kg hangs off the arm for real, and the gravity
+        # model must carry it. The profile answers "what mass hangs off the
+        # end"; the yaml switch answers "is the motor on the bus". Two
+        # orthogonal facts, and this profile is the mass answer.
+        return urdf_path()
 
     import tempfile
     import xml.etree.ElementTree as ET
