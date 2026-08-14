@@ -19,6 +19,8 @@ interface Props {
   canAppend: boolean;
   /** Name of the open sequence — the 追加 target, stated once, in one place. */
   appendTarget: string | null;
+  /** Tap-to-go face: the 追加 button stays hidden (no sequence on screen). */
+  hideAppend?: boolean;
   /** Append the pose as a new station at the open sequence's tail. */
   onAppendPose: (pose: Pose) => void;
   onGoto: (pose: Pose) => void;
@@ -47,6 +49,7 @@ export function LibraryPanel({
   sequencesUnavailable,
   canAppend,
   appendTarget,
+  hideAppend,
   onAppendPose,
   onGoto,
   onChanged,
@@ -162,17 +165,19 @@ export function LibraryPanel({
                 )}
               </div>
               <div className="lib__pose-actions">
-                <button
-                  type="button"
-                  disabled={!canAppend || executing || teaching || wizardOpen}
-                  title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onAppendPose(pose);
-                  }}
-                >
-                  ＋追加
-                </button>
+                {!hideAppend ? (
+                  <button
+                    type="button"
+                    disabled={!canAppend || executing || teaching || wizardOpen}
+                    title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onAppendPose(pose);
+                    }}
+                  >
+                    ＋追加
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={(event) => {

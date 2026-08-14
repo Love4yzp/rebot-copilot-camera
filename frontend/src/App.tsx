@@ -27,6 +27,9 @@ const LAST_SEQUENCE_KEY = "rebot:last-sequence";
 /** The track's face survives reloads too: stations for assembly, the ruler for precision. */
 const TRACK_DENSITY_KEY = "rebot:track-density";
 
+/** Which face the interface wears: simple tap-to-go, or the clip editor. */
+const UI_MODE_KEY = "rebot:ui-mode";
+
 /** A shutter marker reads as a white flash for this long after crossing. */
 const SHUTTER_FLASH_S = 0.5;
 
@@ -62,6 +65,10 @@ function Workspace() {
     setTrackDensity(next);
     localStorage.setItem(TRACK_DENSITY_KEY, next);
   };
+  /** The interface face: tap-to-go is the daily driver, the clip editor is for arranging. */
+  const [uiMode, setUiMode] = useState<"simple" | "edit">(() =>
+    localStorage.getItem(UI_MODE_KEY) === "edit" ? "edit" : "simple",
+  );
   /** The template being instantiated through the station wizard, if any. */
   const [wizardTemplate, setWizardTemplate] = useState<SeqTemplate | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -89,6 +96,15 @@ function Workspace() {
   }, [state?.positions]);
 
   const preview = usePreview(blocks, poseMap, approachFromRef);
+
+  /** Switching back to tap-to-go drops the plan simulation — preview belongs
+   * to the clip editor, and a hidden preview is a hidden half-state. A real
+   * execution is left alone: it is arm motion, not a view. */
+  const switchMode = (next: "simple" | "edit") => {
+    setUiMode(next);
+    localStorage.setItem(UI_MODE_KEY, next);
+    if (next === "simple") preview.stop();
+  };
 
   const mode = state?.mode ?? null;
   const latched = state?.estop.latched ?? false;
@@ -503,39 +519,61 @@ function Workspace() {
       <EstopBar estop={state?.estop ?? null} mode={mode} connected={connected} appMode={appMode} moving={executing} />
 
       <header className="seq-bar">
-        <span className="engrave seq-bar__tag">序列</span>
-        <select
-          value={selectedId ?? ""}
-          disabled={!canEditSequences || summaries.length === 0}
-          onChange={(event) => selectSequence(event.target.value || null)}
-          aria-label="选择序列"
-        >
-          {summaries.length === 0 ? <option value="">—</option> : null}
-          {summaries.map((summary) => (
-            <option key={summary.id} value={summary.id}>
-              {summary.name}
-            </option>
-          ))}
-        </select>
-        {meta ? <span className="seq-bar__meta num">{meta}</span> : null}
-        <span className="seq-bar__spacer" />
-        <button type="button" className="ghost" disabled={!canEditSequences} onClick={() => openDialog("create")}>
-          新建
-        </button>
-        <button type="button" className="ghost" disabled={!sequence} onClick={() => openDialog("rename")}>
-          改名
-        </button>
-        <button
-          type="button"
-          className="ghost"
-          disabled={!sequence || sequence.blocks.length === 0}
-          onClick={() => openDialog("template")}
-        >
-          存为模板
-        </button>
-        <button type="button" className="ghost" disabled={!sequence || executing} onClick={() => openDialog("delete")}>
-          删除
-        </button>
+        <div className="mode-tabs" role="tablist" aria-label="界面模式">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={uiMode === "simple"}
+            onClick={() => switchMode("simple")}
+          >
+            点哪去哪
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={uiMode === "edit"}
+            onClick={() => switchMode("edit")}
+          >
+            剪辑
+          </button>
+        </div>
+        {uiMode === "edit" ? (
+          <>
+            <span className="engrave seq-bar__tag">序列</span>
+            <select
+              value={selectedId ?? ""}
+              disabled={!canEditSequences || summaries.length === 0}
+              onChange={(event) => selectSequence(event.target.value || null)}
+              aria-label="选择序列"
+            >
+              {summaries.length === 0 ? <option value="">—</option> : null}
+              {summaries.map((summary) => (
+                <option key={summary.id} value={summary.id}>
+                  {summary.name}
+                </option>
+              ))}
+            </select>
+            {meta ? <span className="seq-bar__meta num">{meta}</span> : null}
+            <span className="seq-bar__spacer" />
+            <button type="button" className="ghost" disabled={!canEditSequences} onClick={() => openDialog("create")}>
+              新建
+            </button>
+            <button type="button" className="ghost" disabled={!sequence} onClick={() => openDialog("rename")}>
+              改名
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={!sequence || sequence.blocks.length === 0}
+              onClick={() => openDialog("template")}
+            >
+              存为模板
+            </button>
+            <button type="button" className="ghost" disabled={!sequence || executing} onClick={() => openDialog("delete")}>
+              删除
+            </button>
+          </>
+        ) : null}
       </header>
 
       <main className="main">
@@ -546,7 +584,8 @@ function Workspace() {
           teaching={teaching}
           wizardOpen={wizardTemplate !== null}
           sequencesUnavailable={sequencesUnavailable}
-          canAppend={canEditSequences && sequence !== null && !runningSequence}
+          canAppend={uiMode === "edit" && canEditSequences && sequence !== null && !runningSequence}
+          hideAppend={uiMode === "simple"}
           onAppendPose={(pose) => void appendPoseToSequence(pose)}
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}
@@ -560,8 +599,9 @@ function Workspace() {
             preview={preview}
             blocks={blocks}
             poseName={poseName}
-            sequenceName={sequence?.name ?? null}
+            sequenceName={uiMode === "edit" ? sequence?.name ?? null : null}
             runningSequence={runningSequence}
+            idleHint={uiMode === "simple" ? "点一张位姿卡 → 臂开过去" : null}
             poses={poses}
             onGhostClick={(pose) => void gotoPose(pose)}
             onToggleTuning={() => setTuningOpen((v) => !v)}
@@ -575,6 +615,7 @@ function Workspace() {
         </div>
       </main>
 
+      {uiMode === "edit" || wizardTemplate || teachOpen ? (
       <footer className="foot">
         {/* The wizard and teaching both replace the transport rather than
           * covering it — the run controls mean nothing while a human is
@@ -600,7 +641,7 @@ function Workspace() {
             positions={state?.positions ?? {}}
             autoName={`位姿 ${poses.length + 1}`}
             onCaptureAppend={
-              canEditSequences && sequence !== null && !runningSequence
+              uiMode === "edit" && canEditSequences && sequence !== null && !runningSequence
                 ? (pose) => void appendPoseToSequence(pose)
                 : undefined
             }
@@ -628,6 +669,8 @@ function Workspace() {
             showApproaching={showApproaching}
           />
         )}
+        {uiMode === "edit" ? (
+        <>
         <div className="trk-tabs" role="tablist" aria-label="编排密度">
           <button
             type="button"
@@ -674,7 +717,10 @@ function Workspace() {
             />
           ) : null}
         </div>
+        </>
+        ) : null}
       </footer>
+      ) : null}
 
       <LogDrawer rateHz={state?.rate_hz ?? 0} />
 

@@ -591,6 +591,30 @@ select:focus {
   padding: 4px 12px;
   font-size: 13px;
 }
+/* Two faces, one toggle: tap-to-go (daily) vs the clip editor (arranging).
+ * Grey selection only — a status colour here would pollute the channel. */
+.mode-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  padding: 2px;
+}
+.mode-tabs button {
+  padding: 5px 12px;
+  font-size: 12.5px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--mark-dim);
+  cursor: pointer;
+}
+.mode-tabs button[aria-selected="true"] {
+  background: var(--body-lift);
+  color: var(--mark);
+  font-weight: 600;
+}
 
 /* ── library ─────────────────────────────────────────────────────────────── */
 /* Always on screen: dragging a pose onto the ruler is the most frequent
