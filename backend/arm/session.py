@@ -84,6 +84,12 @@ class ArmSession:
         self._float_kp = FLOAT_KP
         self._float_kd = FLOAT_KD
 
+        #: Active point-to-point profile: (q0, target, t0, duration_s).
+        #: The real arm stays in MIT mode for its whole life (see connect),
+        #: so a move is a MIT ramp streamed every tick — the executor
+        #: re-issues move_to and this re-computes the interpolated setpoint.
+        self._motion: tuple[np.ndarray, np.ndarray, float, float] | None = None
+
     def _verify_joint_names(self) -> None:
         expected = tuple(assets.joint_names())
         if self._names != expected:
@@ -107,6 +113,14 @@ class ArmSession:
     def connect(self) -> None:
         with self._lock:
             self._arm.connect()
+            # The firmware latches its control mode at enable: MIT must be
+            # set BEFORE enable_all, and runtime mode switches are ignored —
+            # proved on the real arm, where a post-enable mode_pos_vel left
+            # POS_VEL frames inert and the estop freeze soft. So the arm
+            # lives in MIT: motion is a MIT ramp, hold is a MIT pin, float
+            # is a MIT follow.
+            for group in self._arm.groups.values():
+                group.mode_mit()
             self._arm.enable_all()
             self._connected = True
             log.info("arm connected: %d joints at %.0f Hz", self._arm.num_joints, self._arm.rate)
@@ -144,19 +158,23 @@ class ArmSession:
         """Pin the arm at ``q_target`` with MIT stiffness plus gravity feedforward.
 
         Also the emergency-stop path. Every tick under an engaged stop calls
-        this with the frozen pose, which is what keeps the arm up.
+        this with the frozen pose, which is what keeps the arm up. Clears any
+        active motion profile: a freeze replaces the ramp, not the other way
+        around.
         """
         with self._lock:
             self._floating = False
+            self._motion = None
             self._send_mit(self._to_array(q_target), kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
 
     def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
-        """Travel to ``q_target`` over roughly ``duration_s``.
+        """One tick of a point-to-point move toward ``q_target``.
 
-        Uses POS_VEL with the velocity limit derived from the distance and the
-        time, rather than trajectory planning: playback poses are already
-        collision-checked as a sequence, and a velocity-limited point-to-point
-        move is what the hardware does natively.
+        The firmware latches its mode at enable and ignores runtime switches,
+        so the arm never leaves MIT: a move is a ramp whose setpoint this
+        method interpolates from the profile's start time, and the executor
+        re-issues it every tick until arrival. The same call with the same
+        target continues the profile; a new target starts a new one.
         """
         if duration_s <= 0:
             raise ValueError("duration_s must be positive")
@@ -164,12 +182,14 @@ class ArmSession:
         with self._lock:
             self._floating = False
             target = self._to_array(q_target)
-            current, _, _ = self._arm.get_state()
-            vlim = np.maximum(np.abs(target - current) / duration_s, 1e-3)
-
-            for group in self._arm.groups.values():
-                idxs = [self._index[name] for name in group.joint_names]
-                group.send_pos_vel(target[idxs], vlim[idxs])
+            now = self._clock()
+            if self._motion is None or not np.array_equal(self._motion[1], target):
+                current, _, _ = self._arm.get_state()
+                self._motion = (np.array(current, dtype=float), target, now, float(duration_s))
+            q0, tgt, t0, dur = self._motion
+            frac = min(max((now - t0) / dur, 0.0), 1.0)
+            setpoint = q0 + (tgt - q0) * frac
+            self._send_mit(setpoint, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
 
     def set_float(self, enabled: bool) -> None:
         """Enter or leave zero-force float.
@@ -183,6 +203,7 @@ class ArmSession:
         """
         with self._lock:
             self._floating = enabled
+            self._motion = None
             if not enabled:
                 q, _, _ = self._arm.get_state()
                 self._send_mit(q, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)

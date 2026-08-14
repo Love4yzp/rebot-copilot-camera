@@ -38,10 +38,21 @@ def test_session_reports_the_gripper_when_enabled(monkeypatch):
 class _FakeGroup:
     """Captures what a real JointGroup would receive, sized by its joints."""
 
-    def __init__(self, names: list[str]) -> None:
+    def __init__(self, name: str, names: list[str]) -> None:
+        self.name = name
         self.joint_names = list(names)
         self.mit: list[dict] = []
         self.pos_vel: list[dict] = []
+        self.mode = "mit"
+        self.mode_calls: list[str] = []
+
+    def mode_mit(self, kp=None, kd=None) -> None:
+        self.mode = "mit"
+        self.mode_calls.append("mit")
+
+    def mode_pos_vel(self, vlim=None) -> None:
+        self.mode = "pos_vel"
+        self.mode_calls.append("pos_vel")
 
     def send_mit(self, pos, vel=None, kp=None, kd=None, tau=None) -> None:
         self.mit.append(
@@ -68,8 +79,8 @@ class _FakeArm:
         self._names = list(names)
         arm_names = [n for n in names if n != "gripper"]
         self.groups = {
-            "arm": _FakeGroup(arm_names),
-            "gripper": _FakeGroup(["gripper"]) if "gripper" in names else _FakeGroup([]),
+            "arm": _FakeGroup("arm", arm_names),
+            "gripper": _FakeGroup("gripper", ["gripper"]) if "gripper" in names else _FakeGroup("gripper", []),
         }
 
     @property
@@ -81,24 +92,37 @@ class _FakeArm:
         return z, z.copy(), z.copy()
 
 
-def test_commands_are_sized_to_each_group(monkeypatch):
-    """The real arm pays for full-arm arrays where the simulator does not:
-    upstream's JointGroup indexes by its own joint list, so send_pos_vel
-    crashes with IndexError past the arm group's six joints, and send_mit
-    would make the gripper read joint1's value. This pins the per-group
-    slicing that fixes both."""
-    session = ArmSession()
+def test_move_is_a_mit_ramp_and_commands_stay_group_sized(monkeypatch):
+    """Two real-arm facts the simulator never shows, pinned together:
+
+    - The firmware latches its control mode at enable and ignores runtime
+      switches (a post-enable mode_pos_vel left POS_VEL inert on the real
+      arm), so a move is a MIT ramp interpolated by clock time — the
+      executor re-issues move_to every tick and the setpoint advances.
+    - Upstream's JointGroup indexes by its own joint list, so arrays must be
+      sliced per group: full-arm arrays crash send_pos_vel and make the
+      gripper read joint1's value.
+    """
+    t = [0.0]
+    session = ArmSession(clock=lambda: t[0])
     arm = _FakeArm(session.joint_names)
     monkeypatch.setattr(session, "_arm", arm)
 
     q = {name: 0.1 * (i + 1) for i, name in enumerate(session.joint_names)}
-    session.move_to(q, duration_s=2.0)
-
     arm_group, grip_group = arm.groups["arm"], arm.groups["gripper"]
-    assert arm_group.pos_vel[-1]["pos"].shape == (6,)
-    assert arm_group.pos_vel[-1]["pos"][0] == pytest.approx(0.1)
-    assert grip_group.pos_vel[-1]["pos"].shape == (1,)
-    assert grip_group.pos_vel[-1]["pos"][0] == pytest.approx(0.7)
+
+    session.move_to(q, duration_s=2.0)  # t=0: ramp start
+    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.0, abs=1e-9)
+    t[0] = 1.0
+    session.move_to(q, duration_s=2.0)  # halfway
+    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.05, abs=1e-9)
+    t[0] = 2.0
+    session.move_to(q, duration_s=2.0)  # arrived: setpoint = target
+    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.1, abs=1e-9)
+
+    # No runtime mode switching anywhere: MIT from connect to hold.
+    assert arm_group.mode_calls == []
+    assert grip_group.mode_calls == []
 
     session.hold(q)
     assert arm_group.mit[-1]["pos"].shape == (6,)

@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import BaseModel
 
@@ -51,6 +51,7 @@ from ..actions.runner import ActionRunner, Job
 from ..actions.shutter import SHUTTER_PROVIDER_ID, ShutterParams
 from ..arm.base import ArmDriver
 from ..sequences.models import (
+    DEFAULT_TRANSITION_S,
     WAIT_KIND,
     Block,
     EventMarker,
@@ -204,6 +205,7 @@ class SequenceExecutor:
         #: approaching its pose — a hold's time does not run before arrival.
         self._timing_started_at: float | None = None
         self._arrival_deadline = 0.0
+        self._move_duration_s = DEFAULT_TRANSITION_S
         #: Whether the current transition's target has been reached.
         self._arrived = False
         #: Settle dwell bookkeeping: when the arm first entered the arrival
@@ -437,6 +439,7 @@ class SequenceExecutor:
                 # teaching left it, so the move is speed-limited (v1 parity).
                 self._timing_started_at = None
                 duration = self._move_duration(DEFAULT_APPROACH_S, pose.joints)
+                self._move_duration_s = duration
                 self._arrival_deadline = now + max(
                     ARRIVAL_TIMEOUT_FLOOR_S, duration * ARRIVAL_TIMEOUT_FACTOR
                 )
@@ -452,6 +455,7 @@ class SequenceExecutor:
         self._block_pose = target
         self._timing_started_at = now
         duration = self._move_duration(block.duration_s, target.joints)
+        self._move_duration_s = duration
         self._arrival_deadline = now + max(
             ARRIVAL_TIMEOUT_FLOOR_S, duration * ARRIVAL_TIMEOUT_FACTOR
         )
@@ -557,11 +561,17 @@ class SequenceExecutor:
             pose = self._block_pose
             if pose is not None and self._has_arrived(pose.joints):
                 self._begin_hold_timing()
-            elif self._clock() >= self._arrival_deadline:
-                self.abort(
-                    f"block {self._block_index}: pose "
-                    f"{pose.name if pose else block.pose_id!r} not reached in time"
-                )
+            elif pose is not None:
+                # The real arm's move is a MIT ramp that only exists while
+                # streamed: re-issue every tick until arrival (SimArm's
+                # move_to is an idempotent retarget, so this is a no-op there).
+                if self._clock() < self._arrival_deadline:
+                    self._arm.move_to(pose.joints, self._move_duration_s)
+                else:
+                    self.abort(
+                        f"block {self._block_index}: pose "
+                        f"{pose.name if pose else block.pose_id!r} not reached in time"
+                    )
             return
 
         # Transition: arrival is confirmed by position, not by the clock.
@@ -569,11 +579,15 @@ class SequenceExecutor:
             target = self._block_pose
             if target is not None and self._has_arrived(target.joints):
                 self._arrived = True
-            elif self._clock() >= self._arrival_deadline:
-                self.abort(
-                    f"block {self._block_index}: pose "
-                    f"{target.name if target else '?'!r} not reached in time"
-                )
+            elif target is not None:
+                # Stream the MIT ramp every tick (see the hold-approach note).
+                if self._clock() < self._arrival_deadline:
+                    self._arm.move_to(target.joints, self._move_duration_s)
+                else:
+                    self.abort(
+                        f"block {self._block_index}: pose "
+                        f"{target.name if target else '?'!r} not reached in time"
+                    )
 
     def _has_arrived(self, target: Mapping[str, float]) -> bool:
         """Position inside the eps window, *held still* for the settle dwell.
