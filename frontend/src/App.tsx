@@ -549,7 +549,6 @@ function Workspace() {
           onAppendPose={(pose) => void appendPoseToSequence(pose)}
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}
-          onSelectSequence={selectSequence}
           onTeach={() => setTeachOpen(true)}
           appendTarget={sequence?.name ?? null}
         />

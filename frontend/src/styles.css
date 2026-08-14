@@ -2195,12 +2195,42 @@ select:focus {
 /* ── library v2: the card is the destination ────────────────────────────── */
 /* No tab bar anymore — poses are the only material; templates live in the
  * new-sequence dialog. */
-.lib__title {
+.lib__head {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 2px;
+}
+.lib__title {
   font-size: 13px;
   font-weight: 650;
   color: var(--mark);
-  padding: 10px 12px 2px;
+}
+.lib__collapse {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--mark-dim);
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lib__collapse:hover {
+  color: var(--mark);
+}
+.lib__empty {
+  padding: 10px 8px;
+  text-align: center;
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius);
+}
+.lib__empty-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--mark);
 }
 .lib__context {
   font-size: 11.5px;

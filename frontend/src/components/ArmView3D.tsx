@@ -50,7 +50,7 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
   const [follow, setFollow] = useState(false);
   const followRef = useRef(follow);
   followRef.current = follow;
-  const [showGhosts, setShowGhosts] = useState(true);
+  const [showGhosts, setShowGhosts] = useState(false);
   const onClickRef = useRef(onGhostClick);
   onClickRef.current = onGhostClick;
   /** The pose the drawn arm should glide toward — preview wins over live. */
