@@ -698,6 +698,7 @@ def test_the_approach_to_the_first_pose_is_speed_limited():
     """Later poses start from the previous one, so their stored duration was
     chosen against a known pose. The first starts from wherever teaching left
     the arm, and honouring a short duration there would fling it."""
+    from backend.arm.base import EASE_PEAK
     from backend.core.executor import FIRST_APPROACH_MAX_SPEED
 
     far = pose(2.0)
@@ -707,7 +708,9 @@ def test_the_approach_to_the_first_pose_is_speed_limited():
     h.executor.start()
 
     commanded = h.executor._arrival_deadline - h.clock.now
-    assert commanded >= (2.0 / FIRST_APPROACH_MAX_SPEED) * 3 * 0.99
+    assert commanded == pytest.approx(
+        EASE_PEAK * 2.0 / FIRST_APPROACH_MAX_SPEED * 3
+    )
 
 
 def test_a_short_first_hop_keeps_the_base_approach_duration():

@@ -49,7 +49,7 @@ from pydantic import BaseModel
 from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
 from ..actions.shutter import SHUTTER_PROVIDER_ID, ShutterParams
-from ..arm.base import ArmDriver
+from ..arm.base import ArmDriver, EASE_PEAK
 from ..sequences.models import (
     DEFAULT_TRANSITION_S,
     WAIT_KIND,
@@ -471,12 +471,16 @@ class SequenceExecutor:
         return self._goto
 
     def _move_duration(self, base: float, target: Mapping[str, float]) -> float:
-        """Stretch the run's first move so no joint exceeds a safe speed.
+        """Stretch the run's first move so no joint exceeds a safe *peak* speed.
 
         Later moves start from the previous pose, so their stored duration was
         chosen against a known starting pose. The first starts from wherever
         the arm happens to be — often across the workspace — and using the
         stored duration there would fling it.
+
+        The real arm's ramp is eased (smoothstep), whose peak velocity is
+        ``EASE_PEAK``× the linear average, so the linear duration is multiplied
+        by that factor to hold the peak at ``first_approach_max_speed``.
         """
         if self._block_index != 0:
             return base
@@ -485,7 +489,7 @@ class SequenceExecutor:
             (abs(positions.get(name, q) - q) for name, q in target.items()),
             default=0.0,
         )
-        needed = largest_move / self._first_approach_max_speed
+        needed = EASE_PEAK * largest_move / self._first_approach_max_speed
         if needed > base:
             log.info(
                 "stretching approach to first pose: %.1fs -> %.1fs (%.2f rad to cover)",

@@ -173,8 +173,11 @@ class ArmSession:
         The firmware latches its mode at enable and ignores runtime switches,
         so the arm never leaves MIT: a move is a ramp whose setpoint this
         method interpolates from the profile's start time, and the executor
-        re-issues it every tick until arrival. The same call with the same
-        target continues the profile; a new target starts a new one.
+        re-issues it every tick until arrival. The ramp is eased (smoothstep)
+        so the arm accelerates and decelerates instead of jerking at the ends;
+        its peak velocity is ``EASE_PEAK``× the linear average. The same call
+        with the same target continues the profile; a new target starts a new
+        one.
         """
         if duration_s <= 0:
             raise ValueError("duration_s must be positive")
@@ -188,6 +191,11 @@ class ArmSession:
                 self._motion = (np.array(current, dtype=float), target, now, float(duration_s))
             q0, tgt, t0, dur = self._motion
             frac = min(max((now - t0) / dur, 0.0), 1.0)
+            # Ease in/out (smoothstep): zero setpoint velocity at both ends, so
+            # the arm does not jerk off the line or slam to a stop the way a
+            # linear ramp does. Peak velocity is EASE_PEAK× the average — the
+            # executor stretches speed-limited moves to keep that peak legal.
+            frac = frac * frac * (3.0 - 2.0 * frac)
             setpoint = q0 + (tgt - q0) * frac
             self._send_mit(setpoint, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
 

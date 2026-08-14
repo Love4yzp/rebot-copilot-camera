@@ -113,6 +113,9 @@ def test_move_is_a_mit_ramp_and_commands_stay_group_sized(monkeypatch):
 
     session.move_to(q, duration_s=2.0)  # t=0: ramp start
     assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.0, abs=1e-9)
+    t[0] = 0.5
+    session.move_to(q, duration_s=2.0)  # quarter: eased, below the linear 0.025
+    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.1 * 0.15625, abs=1e-6)
     t[0] = 1.0
     session.move_to(q, duration_s=2.0)  # halfway
     assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.05, abs=1e-9)

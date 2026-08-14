@@ -23,6 +23,18 @@ if TYPE_CHECKING:
     from ..tuning import PayloadTuning
 
 
+#: Peak joint speed of an eased move, as a multiple of the linear average.
+#:
+#: ``ArmSession.move_to`` eases its setpoint ramp with smoothstep, whose peak
+#: velocity is 1.5× its average. A duration computed from a safe-speed *limit*
+#: therefore lets the eased ramp briefly reach 1.5× that limit. The executor
+#: stretches speed-limited first approaches by this factor so the *peak* stays
+#: at the limit — easing alone would silently raise it. User-chosen transition
+#: durations are not stretched: the operator already picked that time, and the
+#: easing still removes the start/stop jerk.
+EASE_PEAK = 1.5
+
+
 @dataclass(frozen=True)
 class ArmState:
     """One sample of the arm, as of ``t``."""

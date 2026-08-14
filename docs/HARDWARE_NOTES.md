@@ -135,6 +135,12 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 对策：`assets.effective_urdf_path()` —— `gripper: false` 时生成剥掉夹爪连杆 `<inertial>` 质量的临时 URDF（与 `effective_hardware_yaml()` 同款手法），只供动力学模型用；运动学/碰撞仍用 vendor 原文件（幻影几何是保守方向）。`ArmSession._dynamics_model()` 与 `scripts/verify_gravity.py` 都走它。负载配置已产品化为 `config/tuning.yaml` 的 payload profile（bare/camera/gripper）+ 调参面板（`backend/tuning.py`），camera 档位把称出的相机质量/质心注入 `gripper_end`。**profile 回答「挂什么质量」、yaml 开关回答「电机在不在总线」是正交的两件事**：夹爪装着但没接线 = profile `gripper` 死重态（`effective_urdf_path` 返回 vendor 原文件，0.8 kg 质量保留、执行器缺席）；无夹爪出厂态 = profile `bare`（质量剥离）；电机接上后 profile 被锁为 `gripper`。注意 joint2 的幻影是**反向**的（夹爪质心在 -x 侧，原本起着配重作用），摘掉后 j2 重力需求反而上升 —— 别凭直觉猜符号，以差分表为准。
 
+### 12. 线性 MIT 斜坡在起停处猛冲，必须缓动
+
+真臂实测（2026-08-14）：`move_to` 用**线性**斜坡（匀速插值 setpoint）时，kp=50 位置环把 setpoint 的速度阶跃直接传给臂 —— 起步瞬间加速、到位瞬间急停，操作者感觉「猛的一下过去、没有任何保护」。匀速斜坡的速度在两端不连续（无限 jerk）。
+
+对策：`ArmSession.move_to` 改用 **smoothstep 缓动**（setpoint 两端速度为零），起停不再猛冲；其峰值速度是匀速平均值的 1.5×（`EASE_PEAK`，定义在 `backend/arm/base.py`）。因此执行器对「限速的首段进站 / goto」把时长乘 `EASE_PEAK` 补偿，峰值仍压在 `first_approach_max_speed`（0.25 rad/s）；用户自选的过渡时长不补偿 —— 时长是操作者定的，缓动只去掉起停猛冲。
+
 ---
 
 ## 待实测 —— 上真机前不要当事实用
