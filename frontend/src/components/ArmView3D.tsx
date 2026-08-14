@@ -8,6 +8,11 @@ const URDF_URL = `${URDF_PACKAGE_ROOT}/urdf/00-arm-rs_asm-v3.urdf`;
 
 const GHOST_OPACITY = 0.35;
 const GHOST_TARGET_OPACITY = 0.85;
+//: Display-side follow time constant, seconds. The live arm streams at 20 Hz;
+//: setting joint values directly makes the monitor step between samples. A
+//: one-pole follow at 60 Hz glides the drawn arm between samples (and tweens
+//: preview/pose switches) without touching the control loop's timing.
+const SMOOTH_TAU = 0.06;
 
 export interface GhostPose {
   id: string;
@@ -45,8 +50,12 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
   const [follow, setFollow] = useState(false);
   const followRef = useRef(follow);
   followRef.current = follow;
+  const [showGhosts, setShowGhosts] = useState(true);
   const onClickRef = useRef(onGhostClick);
   onClickRef.current = onGhostClick;
+  /** The pose the drawn arm should glide toward — preview wins over live. */
+  const targetJointsRef = useRef<Record<string, number> | null>(null);
+  targetJointsRef.current = preview ?? positions;
   const prevTargetRef = useRef<string | null>(null);
   /** Loads are never cancelled by effect re-runs (20 Hz broadcasts rebuild the
    * deps array); only unmount cancels. */
@@ -253,8 +262,28 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
     };
 
     let frame = 0;
+    let displayJoints: Record<string, number | undefined> | null = null;
+    let lastNow = performance.now();
     const tick = () => {
       frame = requestAnimationFrame(tick);
+      const now = performance.now();
+      const dt = Math.min((now - lastNow) / 1000, 0.1);
+      lastNow = now;
+
+      const loaded = robot.current;
+      const target = targetJointsRef.current;
+      if (loaded && target) {
+        if (!displayJoints) displayJoints = { ...target };
+        const alpha = dt > 0 ? 1 - Math.exp(-dt / SMOOTH_TAU) : 1;
+        for (const [name, value] of Object.entries(target)) {
+          if (!loaded.joints[name]) continue;
+          const cur = displayJoints[name] ?? value;
+          const next = cur + (value - cur) * alpha;
+          displayJoints[name] = next;
+          loaded.setJointValue(name, next);
+        }
+      }
+
       if (frameEntry && frameEntry.end) {
         frameEntry.end.getWorldPosition(targetPos);
         const offset = new THREE.Vector3(0.75, 0.85, 0.75).multiplyScalar(radius);
@@ -296,7 +325,7 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
   } | null>(null);
 
   useEffect(() => {
-    const list = ghosts ?? [];
+    const list = showGhosts ? ghosts ?? [] : [];
     activeIdsRef.current = new Set(list.map((g) => g.id));
 
     // Drop ghosts whose pose no longer exists.
@@ -355,7 +384,7 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
           setStatus((prev) => (prev ? prev : "部分位姿模型加载失败 — 检查 submodule 是否 init 过"));
         });
     }
-  }, [ghosts]);
+  }, [ghosts, showGhosts]);
 
   useEffect(() => {
     const hooks = ghostHooksRef.current;
@@ -371,16 +400,6 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
     if (followRef.current) ctlRef.current?.frameGhost(entry);
   }, [targetPoseId, targetAmber]);
 
-  useEffect(() => {
-    const loaded = robot.current;
-    if (!loaded) return;
-
-    const pose = preview ?? positions;
-    for (const [name, value] of Object.entries(pose)) {
-      if (loaded.joints[name]) loaded.setJointValue(name, value);
-    }
-  }, [positions, preview]);
-
   return (
     <div className="viewer" ref={mount}>
       <div className="viewer__ctl">
@@ -392,6 +411,9 @@ export function ArmView3D({ positions, preview, ghosts, targetPoseId, targetAmbe
           onClick={() => setFollow((v) => !v)}
         >
           {follow ? "跟随目标：开" : "跟随目标：关"}
+        </button>
+        <button type="button" onClick={() => setShowGhosts((v) => !v)}>
+          {showGhosts ? "幽灵位姿：开" : "幽灵位姿：关"}
         </button>
       </div>
       {status ? <div className="overlay">{status}</div> : null}
