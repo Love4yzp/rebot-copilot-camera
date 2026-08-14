@@ -121,6 +121,19 @@ def test_float_gains_may_change_mid_float(rig):
     assert arm._float_gains == (4.0, 1.0)
 
 
+def test_non_gripper_profile_is_refused_when_the_motor_is_wired(rig, monkeypatch):
+    """Motor on the bus: the gripper's mass is physically on the arm whatever
+    the profile claims, so 'gripper' is the only legal answer."""
+    client, _ = rig
+    monkeypatch.setattr(assets, "has_gripper", lambda: True)
+    r = client.put("/api/config/tuning", json={"payload": {"profile": "bare"}})
+    assert r.status_code == 409
+    assert "must be 'gripper'" in r.json()["detail"]
+
+    ok = client.put("/api/config/tuning", json={"payload": {"profile": "gripper"}})
+    assert ok.status_code == 200
+
+
 def test_gripper_profile_without_the_motor_is_dead_weight(rig):
     """A mounted-but-unwired gripper is a legal payload: its mass hangs off
     the arm even though no motor is on the bus to answer for it. The profile

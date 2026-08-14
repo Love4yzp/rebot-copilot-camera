@@ -32,7 +32,7 @@ from ..safety import LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS
 from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..shutter.base import ShutterDriver
-from ..tuning import TuningConfig, TuningRejected
+from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
 from .broadcaster import Broadcaster
 from .executor import DEFAULT_APPROACH_S, SequenceExecutor
@@ -158,6 +158,16 @@ class Controller:
         with self._lock:
             if self.is_playing:
                 raise TuningRejected("a sequence is executing — stop it before retuning")
+            from .. import assets  # local: keep the gate readable in one place
+
+            if assets.has_gripper() and config.payload.profile is not PayloadProfile.GRIPPER:
+                # The motor is wired: the gripper's mass is physically on the
+                # arm whatever the profile claims, and this is the only legal
+                # answer. The options list steers the UI; this is the server
+                # refusing the illegal one outright.
+                raise TuningRejected(
+                    "the gripper motor is on the bus — profile must be 'gripper'"
+                )
             payload_changed = config.payload != self._tuning.payload
             if payload_changed and self.arm.is_floating:
                 raise TuningRejected(

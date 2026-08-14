@@ -26,12 +26,15 @@ from the code it feeds.
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+log = logging.getLogger(__name__)
 
 #: Section names as they appear on the wire (the PUT patch, the dirty list).
 SECTIONS = ("payload", "float", "floatlock", "settle", "approach")
@@ -173,9 +176,23 @@ class TuningStore:
 
     def load(self) -> TuningConfig:
         if not self._path.exists():
-            return TuningConfig()
-        data = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
-        return TuningConfig.model_validate(data)
+            config = TuningConfig()
+        else:
+            data = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
+            config = TuningConfig.model_validate(data)
+        # Hardware truth beats a stale file: with the gripper motor on the bus
+        # the profile must be "gripper" — the mass hangs off the arm whether
+        # the file says so or not. A rig that was saved as bare/camera and
+        # then got the motor wired must not come up inconsistent.
+        from . import assets  # local: tuning must not hard-depend on assets
+
+        if assets.has_gripper() and config.payload.profile is not PayloadProfile.GRIPPER:
+            log.warning(
+                "gripper motor is on the bus — coercing payload profile %s -> gripper",
+                config.payload.profile.value,
+            )
+            config.payload.profile = PayloadProfile.GRIPPER
+        return config
 
     def save(self, config: TuningConfig) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

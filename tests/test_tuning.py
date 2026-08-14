@@ -48,6 +48,28 @@ def test_wire_format_uses_the_float_alias():
     assert "float_" not in dumped
 
 
+def test_load_coerces_stale_profile_when_the_motor_is_wired(monkeypatch, tmp_path):
+    """A rig saved as bare/camera and later wired must not come up
+    inconsistent: the motor on the bus means the mass is on the arm."""
+    import yaml
+
+    from backend import assets
+    from backend.tuning import PayloadProfile
+
+    path = tmp_path / "tuning.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"payload": {"profile": "camera", "camera": {"mass": 0.74}}},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(assets, "has_gripper", lambda: True)
+    config = TuningStore(path).load()
+    assert config.payload.profile is PayloadProfile.GRIPPER
+    assert config.payload.camera.mass == 0.74  # kept, just not selected
+
+
 def test_camera_profile_requires_a_weighed_mass():
     with pytest.raises(ValidationError, match="camera.mass"):
         merge_patch(TuningConfig(), {"payload": {"profile": "camera"}})
