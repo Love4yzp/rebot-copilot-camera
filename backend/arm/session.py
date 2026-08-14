@@ -83,6 +83,10 @@ class ArmSession:
         self._payload: PayloadTuning | None = None
         self._float_kp = FLOAT_KP
         self._float_kd = FLOAT_KD
+        #: Per-joint gravity feedforward correction (tau = scale * g + bias),
+        #: mirroring upstream auto_float_test's --k/--c. Empty = identity.
+        self._gravity_scale: dict[str, float] = {}
+        self._gravity_bias: dict[str, float] = {}
 
         #: Active point-to-point profile: (q0, target, t0, duration_s).
         #: The real arm stays in MIT mode for its whole life (see connect),
@@ -250,6 +254,16 @@ class ArmSession:
             q, _, _ = self._arm.get_state()
             self._send_mit(q, kp=self._float_kp, kd=self._float_kd)
 
+    def set_gravity_correction(
+        self, scale: Mapping[str, float], bias: Mapping[str, float]
+    ) -> None:
+        """Apply the per-joint correction to the gravity feedforward. Called by
+        the controller when tuning changes; the arm must not be floating (the
+        feedforward jumps with the correction)."""
+        with self._lock:
+            self._gravity_scale = dict(scale)
+            self._gravity_bias = dict(bias)
+
     def set_float_gains(self, kp: float, kd: float) -> None:
         """Retune the float gains live — see :class:`~backend.arm.base.ArmDriver`."""
         with self._lock:
@@ -347,5 +361,7 @@ class ArmSession:
 
         tau = np.zeros(len(self._names), dtype=float)
         for position, name in enumerate(ARM_JOINTS):
-            tau[self._index[name]] = float(g[position])
+            value = float(g[position])
+            value = self._gravity_scale.get(name, 1.0) * value + self._gravity_bias.get(name, 0.0)
+            tau[self._index[name]] = value
         return tau

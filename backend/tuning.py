@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 log = logging.getLogger(__name__)
 
 #: Section names as they appear on the wire (the PUT patch, the dirty list).
-SECTIONS = ("payload", "float", "floatlock", "settle", "approach")
+SECTIONS = ("payload", "float", "floatlock", "settle", "approach", "gravity")
 
 
 class TuningRejected(RuntimeError):
@@ -127,6 +127,38 @@ class ApproachTuning(BaseModel):
     first_max_speed: float = Field(0.25, gt=0, le=1.0)
 
 
+class GravityTuning(BaseModel):
+    """Per-joint correction of the gravity feedforward, mirroring upstream's
+    ``auto_float_test`` ``--k/--c`` knobs:
+
+        tau_sent = scale[joint] * g_model(q)[joint] + bias[joint]
+
+    Missing joints are identity (1.0 / 0.0). This is the operator's lever for
+    the vendor model's residual error — the j2 over-compensation that floats
+    the arm up at extended poses is corrected by a scale below 1 on joint2.
+    Only the six arm joints are legal keys; the gripper has no calibrated
+    mapping and stays at zero feedforward.
+    """
+
+    scale: dict[str, float] = Field(default_factory=dict)
+    bias: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def keys_are_arm_joints_and_ranges_sane(self) -> GravityTuning:
+        from .safety.kinematics import ARM_JOINTS  # local: keep the import boundary
+
+        for name in set(self.scale) | set(self.bias):
+            if name not in ARM_JOINTS:
+                raise ValueError(f"gravity correction key {name!r} is not an arm joint")
+        for name, value in self.scale.items():
+            if not 0.2 <= value <= 2.0:
+                raise ValueError(f"gravity scale for {name} out of range: {value}")
+        for name, value in self.bias.items():
+            if not -5.0 <= value <= 5.0:
+                raise ValueError(f"gravity bias for {name} out of range: {value}")
+        return self
+
+
 class TuningConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -135,6 +167,7 @@ class TuningConfig(BaseModel):
     floatlock: FloatLockTuning = Field(default_factory=FloatLockTuning)
     settle: SettleTuning = Field(default_factory=SettleTuning)
     approach: ApproachTuning = Field(default_factory=ApproachTuning)
+    gravity: GravityTuning = Field(default_factory=GravityTuning)
 
     def dump(self) -> dict[str, Any]:
         return self.model_dump(mode="json", by_alias=True)

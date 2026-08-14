@@ -156,6 +156,14 @@ class SimArm:
             if self._floating:
                 self._q_target = dict(self._q)
 
+    def set_gravity_correction(
+        self, scale: Mapping[str, float], bias: Mapping[str, float]
+    ) -> None:
+        """Recorded, not applied: the simulator carries no gravity model, but
+        the correction must land here exactly as it lands on hardware."""
+        with self._lock:
+            self._gravity_correction = (dict(scale), dict(bias))
+
     def set_float_gains(self, kp: float, kd: float) -> None:
         """Recorded, not applied: the simulator has no torque loop to retune,
         but the call must land here exactly as it does on hardware."""

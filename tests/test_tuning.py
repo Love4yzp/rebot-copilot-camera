@@ -27,6 +27,28 @@ from backend.tuning import (
 )
 
 
+def test_gravity_correction_defaults_and_validation():
+    """The correction is identity by default, and only the six arm joints
+    with sane ranges are legal keys — a typo'd key or a wild value must fail
+    at the wire, not show up as a phantom torque on the arm."""
+    t = TuningConfig()
+    assert t.gravity.scale == {}
+    assert t.gravity.bias == {}
+
+    ok = TuningConfig.model_validate(
+        {"gravity": {"scale": {"joint2": 0.6}, "bias": {"joint2": -0.5}}}
+    )
+    assert ok.gravity.scale["joint2"] == 0.6
+    assert ok.gravity.bias["joint2"] == -0.5
+
+    with pytest.raises(ValidationError):
+        TuningConfig.model_validate({"gravity": {"scale": {"gripper": 0.5}}})
+    with pytest.raises(ValidationError):
+        TuningConfig.model_validate({"gravity": {"scale": {"joint2": 0.1}}})
+    with pytest.raises(ValidationError):
+        TuningConfig.model_validate({"gravity": {"bias": {"joint3": 6.0}}})
+
+
 def test_defaults_mirror_the_code_constants():
     t = TuningConfig()
     assert t.float_.kp == arm_session.FLOAT_KP

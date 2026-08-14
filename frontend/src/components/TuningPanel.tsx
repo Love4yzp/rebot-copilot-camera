@@ -38,9 +38,17 @@ const FIELD_SECTION: Record<string, string> = {
   drift_rad: "settle",
   min_s: "settle",
   first_max_speed: "approach",
+  g2s: "gravity",
+  g2b: "gravity",
+  g3s: "gravity",
+  g3b: "gravity",
+  g4s: "gravity",
+  g4b: "gravity",
+  g5s: "gravity",
+  g5b: "gravity",
 };
 
-const SECTION_ORDER = ["payload", "float", "floatlock", "settle", "approach"];
+const SECTION_ORDER = ["payload", "float", "floatlock", "settle", "approach", "gravity"];
 
 const SECTION_LABELS: Record<string, string> = {
   payload: "负载",
@@ -48,6 +56,7 @@ const SECTION_LABELS: Record<string, string> = {
   floatlock: "浮动/锁定",
   settle: "到位判定",
   approach: "进站",
+  gravity: "重力修正",
 };
 
 // ── param holders (mutated by Tweakpane, read by change handlers) ────────────
@@ -68,6 +77,14 @@ interface Params {
   drift_rad: number;
   min_s: number;
   first_max_speed: number;
+  g2s: number;
+  g2b: number;
+  g3s: number;
+  g3b: number;
+  g4s: number;
+  g4b: number;
+  g5s: number;
+  g5b: number;
 }
 
 function defaultsFromState(state: TuningState): Params {
@@ -88,6 +105,14 @@ function defaultsFromState(state: TuningState): Params {
     drift_rad: c.settle.drift_rad,
     min_s: c.settle.min_s,
     first_max_speed: c.approach.first_max_speed,
+    g2s: c.gravity.scale.joint2 ?? 1,
+    g2b: c.gravity.bias.joint2 ?? 0,
+    g3s: c.gravity.scale.joint3 ?? 1,
+    g3b: c.gravity.bias.joint3 ?? 0,
+    g4s: c.gravity.scale.joint4 ?? 1,
+    g4b: c.gravity.bias.joint4 ?? 0,
+    g5s: c.gravity.scale.joint5 ?? 1,
+    g5b: c.gravity.bias.joint5 ?? 0,
   };
 }
 
@@ -138,6 +163,14 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
       p.drift_rad = c.settle.drift_rad;
       p.min_s = c.settle.min_s;
       p.first_max_speed = c.approach.first_max_speed;
+      p.g2s = c.gravity.scale.joint2 ?? 1;
+      p.g2b = c.gravity.bias.joint2 ?? 0;
+      p.g3s = c.gravity.scale.joint3 ?? 1;
+      p.g3b = c.gravity.bias.joint3 ?? 0;
+      p.g4s = c.gravity.scale.joint4 ?? 1;
+      p.g4b = c.gravity.bias.joint4 ?? 0;
+      p.g5s = c.gravity.scale.joint5 ?? 1;
+      p.g5b = c.gravity.bias.joint5 ?? 0;
     }
     const dirty = new Set(state.dirty);
     for (const section of SECTION_ORDER) {
@@ -168,6 +201,16 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
         patch = { payload: { camera: { mass: value as number } } };
       } else if (key === "profile") {
         patch = { payload: { profile: value as string } };
+      } else if (key.startsWith("g")) {
+        // The merge replaces the whole scale/bias dicts, so send all joints.
+        const p = paramsRef.current;
+        if (!p) return;
+        patch = {
+          gravity: {
+            scale: { joint2: p.g2s, joint3: p.g3s, joint4: p.g4s, joint5: p.g5s },
+            bias: { joint2: p.g2b, joint3: p.g3b, joint4: p.g4b, joint5: p.g5b },
+          },
+        };
       } else {
         patch = { [section]: { [key]: value } };
       }
@@ -299,6 +342,26 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
         step: 0.01,
       })
       .on("change", on("first_max_speed"));
+
+    // ── 重力修正 ────────────────────────────────────────────────────────────
+    const gravityFolder = pane.addFolder({ title: "重力修正" });
+    foldersRef.current.gravity = gravityFolder;
+    const scaleBinding = (key: keyof Params, label: string) =>
+      gravityFolder
+        .addBinding(params, key, { label: `${label} 比例`, min: 0.2, max: 2, step: 0.01 })
+        .on("change", on(key));
+    const biasBinding = (key: keyof Params, label: string) =>
+      gravityFolder
+        .addBinding(params, key, { label: `${label} 偏置 N·m`, min: -5, max: 5, step: 0.05 })
+        .on("change", on(key));
+    scaleBinding("g2s", "J2");
+    biasBinding("g2b", "J2");
+    scaleBinding("g3s", "J3");
+    biasBinding("g3b", "J3");
+    scaleBinding("g4s", "J4");
+    biasBinding("g4b", "J4");
+    scaleBinding("g5s", "J5");
+    biasBinding("g5b", "J5");
 
     // Initial dirty markers.
     const dirty = new Set(state.dirty);

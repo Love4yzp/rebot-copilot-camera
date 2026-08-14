@@ -125,6 +125,19 @@ class ArmDriver(Protocol):
         """
         ...
 
+    def set_gravity_correction(
+        self, scale: Mapping[str, float], bias: Mapping[str, float]
+    ) -> None:
+        """Per-joint correction of the gravity feedforward:
+
+            tau_sent = scale[j] * g_model(q)[j] + bias[j]
+
+        Missing joints are identity. This rides the same risk class as a
+        payload switch — it moves the feedforward by newton-metres at once —
+        so callers gate it on the arm not floating (``Controller.apply_tuning``).
+        """
+        ...
+
     def set_float_gains(self, kp: float, kd: float) -> None:
         """Retune the float stiffness/damping, live.
 

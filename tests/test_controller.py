@@ -507,6 +507,24 @@ def test_estop_holds_a_resting_arm(rig: Rig):
     assert states[-1]["data"]["resting"] is False
 
 
+def test_gravity_correction_is_refused_mid_float(rig: Rig, monkeypatch):
+    """The correction moves the feedforward by N·m at once — like a payload
+    switch, it is refused while the arm floats."""
+    from backend import assets
+    from backend.tuning import TuningConfig, TuningRejected
+
+    monkeypatch.setattr(assets, "has_gripper", lambda: False)
+
+    rig.controller.set_teaching(True)
+    rig.arm.drag({"joint1": 0.4})
+    rig.step(2)
+    assert rig.arm.is_floating is True
+
+    changed = TuningConfig.model_validate({"gravity": {"scale": {"joint2": 0.8}}})
+    with pytest.raises(TuningRejected):
+        rig.controller.apply_tuning(changed)
+
+
 def test_park_home_skips_a_resting_arm(rig: Rig):
     """A resting arm is already in the best exit state — on its stops with
     torque dropped. Parking would wake it just to re-park it."""

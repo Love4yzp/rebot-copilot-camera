@@ -134,3 +134,28 @@ def test_move_is_a_mit_ramp_and_commands_stay_group_sized(monkeypatch):
     # The gripper carries no gravity feedforward — no calibrated mapping
     # exists from finger travel to motor torque, and zero is the honest value.
     assert grip_group.mit[-1]["tau"][0] == 0.0
+
+
+def test_gravity_correction_scales_and_biases_the_feedforward(monkeypatch):
+    """The per-joint k/c correction mirrors upstream auto_float_test: the
+    torque sent is scale * g_model + bias. Measured against the identity,
+    so the assertion holds whatever the vendor model returns."""
+    t = [0.0]
+    session = ArmSession(clock=lambda: t[0])
+    arm = _FakeArm(session.joint_names)
+    monkeypatch.setattr(session, "_arm", arm)
+
+    q = {name: 0.0 for name in session.joint_names}
+    q["joint2"], q["joint3"] = 0.3, 0.4
+    session.hold(q)
+    identity = arm.groups["arm"].mit[-1]["tau"]
+
+    session.set_gravity_correction(scale={"joint3": 0.5}, bias={"joint3": 1.0})
+    session.hold(q)
+    corrected = arm.groups["arm"].mit[-1]["tau"]
+
+    arm_index = session.joint_names.index("joint3")
+    assert corrected[arm_index] == pytest.approx(0.5 * identity[arm_index] + 1.0, abs=1e-6)
+    for i in (0, 1, 3, 4, 5):
+        assert corrected[i] == pytest.approx(identity[i], abs=1e-9)
+    assert arm.groups["gripper"].mit[-1]["tau"][0] == 0.0

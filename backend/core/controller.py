@@ -186,12 +186,19 @@ class Controller:
                     "the arm is floating — let it lock before changing the payload; "
                     "the gravity feedforward jumps when the payload does"
                 )
+            gravity_changed = config.gravity != self._tuning.gravity
+            if gravity_changed and self.arm.is_floating:
+                raise TuningRejected(
+                    "the arm is floating — let it lock before changing the gravity "
+                    "correction; the feedforward jumps when the correction does"
+                )
             self._tuning = config
             self._floatlock.config = _floatlock_config(config)
             self._push_tuning_to_arm(rebuild_dynamics=payload_changed)
 
     def _push_tuning_to_arm(self, rebuild_dynamics: bool = True) -> None:
         self.arm.set_float_gains(self._tuning.float_.kp, self._tuning.float_.kd)
+        self.arm.set_gravity_correction(self._tuning.gravity.scale, self._tuning.gravity.bias)
         if rebuild_dynamics:
             self.arm.reload_dynamics(self._tuning.payload)
 

@@ -197,6 +197,7 @@ const DEFAULT_TUNING: Record<string, unknown> = {
   floatlock: { linear_threshold: 0.04, angular_threshold: 0.08, release_factor: 1.0, lock_factor: 0.6, min_still_s: 0.25 },
   settle: { drift_rad: 0.003, min_s: 0.15 },
   approach: { first_max_speed: 0.25 },
+  gravity: { scale: {}, bias: {} },
 };
 
 export function createState(options: { seed?: boolean } = {}): MockState {

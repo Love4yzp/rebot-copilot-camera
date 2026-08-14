@@ -272,12 +272,20 @@ export interface ApproachTuning {
   first_max_speed: number;
 }
 
+/** Per-joint gravity feedforward correction: tau = scale * g_model + bias.
+ * Missing joints are identity (1.0 / 0.0). */
+export interface GravityTuning {
+  scale: Record<string, number>;
+  bias: Record<string, number>;
+}
+
 export interface TuningConfig {
   payload: PayloadTuning;
   float: FloatTuning;
   floatlock: FloatLockTuning;
   settle: SettleTuning;
   approach: ApproachTuning;
+  gravity: GravityTuning;
 }
 
 export interface TuningState {
