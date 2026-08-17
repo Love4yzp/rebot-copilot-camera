@@ -1,7 +1,7 @@
 # 10 三张文档图落地
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 02, 03
 
 ## Question
@@ -18,3 +18,7 @@ Blocked by: 02, 03
 6. 每件事只写一处：三张表只进 ARCHITECTURE.md，AGENTS.md 只链接。
 
 **验收**：两文档措辞一致；`uv run pytest` 全绿（文档改动不应影响代码）；PROGRESS.md 同 commit。
+
+## Answer
+
+（2026-08-17，commit c796532）三张表 + 内核边界表已写进 `docs/ARCHITECTURE.md` 新章节「内核边界与部件关系」（唯一家）；AGENTS.md 代码地图顶部加分层速览一行、只链不抄。事件表以 `events.py` 与各 emit 调用点核实（executor 发序列/动作/到位，controller 发急停，capture 端点发 teach.captured）。接口表核实了 ShutterDriver 的方法集（is_connected/ping/focus/shoot/pair/pair_smart/camera_connected/camera_status）与 ActionProvider 的 fields/probe/run。

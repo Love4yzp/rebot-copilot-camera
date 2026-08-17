@@ -18,14 +18,19 @@
 - [01 五档清理方案总批](issues/01-five-tier-cleanup-plan.md) — 全部照单：五档 + R0-R9 按推荐接受；05–09、11 解锁。
 - [02 DSH 借/不借矩阵](issues/02-dsh-borrow-matrix.md) — 7 借 5 不借照单；三张图写进 ARCHITECTURE.md 一个锚点；10 解锁，04 经 10。
 - [03 臂接口内核行与安全姿势](issues/03-arm-kernel-row-safety.md) — Q-F=a（接口表内核行）；Q-G=a（外置闩锁、单点耦合）。
+- [04 backend 物理重排投票](issues/04-backend-layout-vote.md) — 选 a：目录不动、分层显形在文档（操作者「一步到位」委托采纳推荐；想重排可重开本票）。
 - [05 档 0 纯删除](issues/05-tier0-deletions.md) — 完成，commit 135e13e；两处历史记录保留提及（票内 Answer 有偏差记录）。
 - [06 档 1 v1 退役](issues/06-tier1-v1-retirement.md) — 完成，commit 64946c1；无残留端点；`ActionContext.routine_id` 词残留留档 3 再议。
+- [07 档 2 数据归位](issues/07-tier2-data-dir.md) — 完成，commit 208be35；`data/` + 单一 `REBOT_DATA_DIR`；撞名消灭。
+- [08 档 3 架构手术](issues/08-tier3-api-boundary.md) — 完成，commit b41908c；api 越界回正 + 单一搬臂路径 + 环/级联修复 + 种子镜像被契约钉死（当场抓出漂移）。
+- [09 档 4 前端拆分](issues/09-tier4-frontend-split.md) — 完成，commit 1176f34；App.tsx 拆三块；TimelineView 刻意不拆（票内记录理由）；待操作者人眼验收。
+- [10 三张文档图落地](issues/10-doc-tables.md) — 完成，commit c796532；内核边界/接口三件套/事件与归属/新行为归属四张表进 ARCHITECTURE.md。
+- [11 代码地图对齐与速查表](issues/11-code-map-alignment.md) — 完成，commit 3643b56；AGENTS.md 地图补全 + README 两版分区表 + 测试数 464。
 
 ## Not yet specified
 
-- 档 3 的落刀级清单（08 认领时细化；若 04 通过则按新目录重写）。
-- 档 4 的拆分方案（09 认领时在票内评论区贴方案要点）。
-- 契约 `seed:true` 用例的字段级设计（08 内的子任务）。
+- TimelineView 剩余拆分（09 票刻意不动的那一半）：需要操作者 `npm run dev` 人眼验收的专门一轮。
+- 档 3 遗留：`ActionContext.routine_id/routine_name` 改名为 `sequence_id/sequence_name`（插件 API 面变更，另开票）。
 
 ## Out of scope
 
