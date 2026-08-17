@@ -26,7 +26,6 @@ Environment=PYTHONUNBUFFERED=1
 # layer and this service can move a 48 V arm.
 Environment=REBOT_HOST=127.0.0.1
 Environment=REBOT_PORT=18790
-Environment=REBOT_ROUTINES_DIR=/opt/rebot-copilot-camera/routines
 
 # Deliberately NOT KillSignal=SIGKILL. The shutdown path first moves the arm
 # slowly back to the zero pose (worst case ~37 s, budgeted 45 s), then

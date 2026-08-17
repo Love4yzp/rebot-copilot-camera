@@ -38,7 +38,6 @@ from .sequences import (
     PoseStore,
     SequenceStore,
     TemplateStore,
-    maybe_migrate,
     seed_demo_if_empty,
 )
 from .shutter import SimShutter, create_shutter
@@ -355,15 +354,6 @@ def main() -> None:
         log.info(
             "action %r: %s", status.id, "ok" if status.available else f"DOWN — {status.reason}"
         )
-
-    # Migrate v1 routines before serving: only when the v2 library is empty
-    # and v1 data exists. Originals are left in routines/ as the backup.
-    maybe_migrate(
-        config.ROUTINES_DIR,
-        config.SEQUENCES_DIR,
-        app.state.pose_store,
-        app.state.sequence_store,
-    )
 
     # First boot gets the reference demo: empty stores are planted with the
     # four-station shoot once, so the full stack demos like the mock. Skipped

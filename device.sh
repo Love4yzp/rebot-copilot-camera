@@ -65,18 +65,16 @@ cmd_push() {
 
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
 	# --delete 保证远端代码干净；但必须保护数据目录（包含操作员现场示教出来的点位数据，绝不能删）。
-	# 带前导斜杠挂在根路径锚点上，防止误杀路径中同名的 Python 包目录（如 backend/routines/）。
+	# 带前导斜杠挂在根路径锚点上，防止误杀路径中同名的 Python 包目录。
 	rsync -az --delete \
 		--exclude '.git/' \
 		--exclude '.venv/' \
 		--exclude 'node_modules/' \
 		--exclude '__pycache__/' \
-		--exclude '/routines/' \
 		--exclude '/poses/' \
 		--exclude '/sequences/' \
 		--exclude '/templates/' \
 		--exclude '.pio/' \
-		--filter 'protect /routines/' \
 		--filter 'protect /poses/' \
 		--filter 'protect /sequences/' \
 		--filter 'protect /templates/' \

@@ -1,7 +1,7 @@
 # 06 档 1 v1 退役
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 01
 
 ## Question

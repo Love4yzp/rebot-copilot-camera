@@ -1,7 +1,6 @@
-# runtime data — teach/playback routines live here, never committed
-# (root-anchored: an unanchored "routines/" also swallows backend/routines/)
-/routines/
-# v2 libraries — same operator-data treatment as /routines/
+# runtime data — operator's teach/playback libraries live here, never committed
+# (root-anchored: an unanchored name also swallows a same-named package dir)
+# v2 libraries
 /poses/
 /sequences/
 /templates/

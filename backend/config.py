@@ -13,12 +13,8 @@ from pathlib import Path
 
 from .assets import REPO_ROOT
 
-#: One JSON per routine. Gitignored — this is operator data, not source.
-#: Kept as the v1 migration source; new writes go to the v2 stores below.
-ROUTINES_DIR = Path(os.environ.get("REBOT_ROUTINES_DIR", REPO_ROOT / "routines"))
-
 #: The v2 libraries: pose library, block/marker sequences, sequence templates.
-#: Same treatment as routines/ — operator data, one JSON per document.
+#: Operator data, one JSON per document, gitignored.
 POSES_DIR = Path(os.environ.get("REBOT_POSES_DIR", REPO_ROOT / "poses"))
 SEQUENCES_DIR = Path(os.environ.get("REBOT_SEQUENCES_DIR", REPO_ROOT / "sequences"))
 TEMPLATES_DIR = Path(os.environ.get("REBOT_TEMPLATES_DIR", REPO_ROOT / "templates"))

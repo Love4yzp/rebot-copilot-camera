@@ -104,7 +104,6 @@ backend/
     models.py       Pose / EventMarker / Hold+Transition 块（判别式联合）/ Sequence / SeqTemplate
     normalize.py    normalize 的 Python 实现（TS 端是 frontend/src/timeline/model.ts），写入前必跑
     store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
-    migrate.py      v1 routines/ → v2 一次性迁移，幂等；不删原文件
 
   shutter/
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报

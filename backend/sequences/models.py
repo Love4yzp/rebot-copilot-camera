@@ -31,7 +31,7 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field, field_validator
 
 #: Bumped when a stored document's shape changes incompatibly. v1 was the
-#: waypoint-list Routine; the migration into this model lives in migrate.py.
+#: waypoint-list Routine; it has been retired without migration.
 SCHEMA_VERSION = 2
 
 #: Defaults for an auto-generated transition: slow and smooth beats fast.

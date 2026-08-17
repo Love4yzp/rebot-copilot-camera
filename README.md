@@ -164,7 +164,6 @@ One exception: **if the emergency stop is latched, shutdown does not park** — 
 |---|---|---|
 | `REBOT_HOST` | `127.0.0.1` | Listen address. **Setting `0.0.0.0` opens arm control to the whole network — this project has no auth layer** |
 | `REBOT_PORT` | `18790` | Port |
-| `REBOT_ROUTINES_DIR` | `./routines` | Routines directory, one JSON per routine |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
 | `REBOT_TUNING_FILE` | `./config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
@@ -206,7 +205,7 @@ Device on a reComputer, other hosts on the same LAN opening the UI directly: cha
 
 Untrusted network plus remote access: don't expose the service directly — put an authenticating reverse proxy in front of the localhost service (Caddy / nginx basic auth is enough), or go through a private network with ACLs (WireGuard / Tailscale). Auth is the deployment layer's job, not this application's — such configs belong to the deployment site and stay out of the repo.
 
-`push` **never deletes `routines/` on the device** — those were dragged out one by one and exist only there.
+`push` never deletes `poses/`, `sequences/` or `templates/` on the device — those hold the operator's taught poses and sequences and exist only there.
 
 ---
 
