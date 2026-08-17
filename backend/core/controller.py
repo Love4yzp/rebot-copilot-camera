@@ -27,9 +27,10 @@ from collections.abc import Callable, Mapping
 
 from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shutter import ShutterProvider
+from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
-from ..safety.kinematics import ARM_JOINTS
+from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..shutter.base import ShutterDriver
 from ..tuning import PayloadProfile, TuningConfig, TuningRejected
@@ -212,6 +213,33 @@ class Controller:
             {"type": events.TOPIC, "data": events.envelope(name, data, self._clock())}
         )
 
+    # ── pre-flight ──────────────────────────────────────────────────────────
+    #
+    # Everything checked before the arm moves routes through here, so the API
+    # layer talks to the controller instead of reaching into safety/actions
+    # for validators. The checks themselves stay where they belong — the
+    # controller only owns the single doorway.
+
+    def preflight_pose(self, joints: Mapping[str, float]) -> list[str]:
+        """Joint limits + self-collision for one pose. Empty list = safe."""
+        return validate_pose(joints)
+
+    def preflight_path(self, joints_in_order: list[Mapping[str, float]]) -> list[str]:
+        """Limits + collision along the straight-line path between poses.
+
+        Two legal poses can have an illegal line between them; this is the
+        check that finds out before the arm does.
+        """
+        return validate_sequence(joints_in_order)
+
+    def preflight_marker_params(self, blocks, plugins) -> list[str]:
+        """Every marker's params against its provider's own field model."""
+        return validate_marker_params(blocks, plugins)
+
+    def preflight_providers(self, blocks, plugins) -> list[str]:
+        """Every marker's provider is installed and healthy."""
+        return validate_providers(blocks, plugins)
+
     # ── playback ─────────────────────────────────────────────────────────────
 
     @property
@@ -276,7 +304,7 @@ class Controller:
                 settle_drift=self._tuning.settle.drift_rad,
                 first_approach_max_speed=self._tuning.approach.first_max_speed,
                 on_progress=lambda p: self.broadcaster.publish(
-                    {"type": "playback", "data": _progress_payload(p)}
+                    {"type": "playback", "data": progress_payload(p)}
                 ),
                 on_event=self.emit_event,
             )
@@ -297,10 +325,38 @@ class Controller:
         tapped) and stop-latch abort all come from the executor unchanged. The
         ephemeral sequence is never stored.
         """
+        return self.move_joints(
+            pose.joints,
+            DEFAULT_APPROACH_S,
+            source,
+            pose_id=pose.id,
+            display_name=f"位姿 · {pose.name}",
+        )
+
+    def move_joints(
+        self,
+        joints: Mapping[str, float],
+        duration_s: float,
+        source: str = "ui",
+        *,
+        pose_id: str | None = None,
+        display_name: str | None = None,
+    ) -> SequenceExecutor:
+        """Move to raw joint targets, through the same ephemeral-sequence path
+        :meth:`goto` uses — arrival checking, the first-approach speed limit and
+        stop-latch abort all apply. This is the *only* move path from outside
+        the loop; a caller that reaches around it to ``arm.move_to`` skips the
+        executor's protections.
+        """
+        target = Pose(
+            id=pose_id or "agent-joints",
+            name=display_name or "关节指令",
+            joints=dict(joints),
+        )
         ephemeral = Sequence(
-            id=pose.id,
-            name=f"位姿 · {pose.name}",
-            blocks=[TransitionBlock(duration_s=DEFAULT_APPROACH_S)],
+            id=target.id,
+            name=target.name,
+            blocks=[TransitionBlock(duration_s=duration_s)],
         )
         with self._lock:
             if self._resting:
@@ -314,8 +370,8 @@ class Controller:
 
             executor = SequenceExecutor(
                 ephemeral,
-                {pose.id: pose},
-                goto=pose,
+                {target.id: target},
+                goto=target,
                 arm=self.arm,
                 actions=self.actions,
                 clock=self._clock,
@@ -323,12 +379,12 @@ class Controller:
                 settle_drift=self._tuning.settle.drift_rad,
                 first_approach_max_speed=self._tuning.approach.first_max_speed,
                 on_progress=lambda p: self.broadcaster.publish(
-                    {"type": "playback", "data": _progress_payload(p)}
+                    {"type": "playback", "data": progress_payload(p)}
                 ),
                 on_event=self.emit_event,
             )
             self._playback_source = source
-            log.info("goto pose %r at the request of %r", pose.name, source)
+            log.info("goto %r at the request of %r", target.name, source)
             executor.start()
             self._executor = executor
             return executor
@@ -652,7 +708,7 @@ class Controller:
                         "engaged_at": latch.engaged_at,
                         "freeze_pose": dict(latch.freeze_pose) if latch.freeze_pose else None,
                     },
-                    "playback": _progress_payload(executor.progress()) if executor else None,
+                    "playback": progress_payload(executor.progress()) if executor else None,
                     "source": self._playback_source if executor else None,
                 },
             }
@@ -718,7 +774,7 @@ class Controller:
                 next_tick = time.monotonic()  # fell behind; do not pile up
 
 
-def _progress_payload(progress) -> dict:
+def progress_payload(progress) -> dict:
     """The SeqPlayback wire shape — field for field what the frontend reads."""
     return {
         "sequence_id": progress.sequence_id,

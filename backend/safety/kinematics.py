@@ -39,8 +39,9 @@ log = logging.getLogger(__name__)
 LIMIT_TOLERANCE_RAD = 0.02
 
 #: Hardware joints that map one-to-one onto URDF joints of the same name.
-#: ``gripper`` is absent on purpose — see the module docstring.
-ARM_JOINTS = ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
+#: ``gripper`` is absent on purpose — see the module docstring. Derived from
+#: the hardware yaml (via assets) so the six names live in exactly one place.
+ARM_JOINTS = tuple(assets.arm_joint_names())
 
 #: How many intermediate poses to test between two waypoints. Two waypoints can
 #: each be perfectly legal while the straight line between them passes through

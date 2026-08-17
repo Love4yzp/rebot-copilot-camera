@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from pydantic import BaseModel, Field
 
 from ..core import Broadcaster, Controller, events
+from ..core.controller import progress_payload
 from ..shutter import (
     CAMERA_STATUS_DISCONNECTED,
     CAMERA_STATUS_UNPAIRED,
@@ -56,15 +57,13 @@ class TriggerRequest(BaseModel):
 
 def playback_state(controller: Controller) -> PlaybackState:
     """The PlaybackState the motion endpoints answer with."""
-    from ..core.controller import _progress_payload
-
     executor = controller.executor
     return PlaybackState(
         mode=controller.mode,
         playing=controller.is_playing,
         teaching=controller.is_teaching,
         rate_hz=controller.rate_hz,
-        playback=_progress_payload(executor.progress()) if executor else None,
+        playback=progress_payload(executor.progress()) if executor else None,
         source=controller.playback_source if executor else None,
     )
 

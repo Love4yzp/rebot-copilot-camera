@@ -1,0 +1,11 @@
+{
+  "name": "seeded-library",
+  "kind": "rest",
+  "seed": true,
+  "steps": [
+    { "method": "GET", "path": "/api/poses" },
+    { "method": "GET", "path": "/api/sequences" },
+    { "method": "GET", "path": "/api/sequences/demo-seq-four" },
+    { "method": "GET", "path": "/api/templates" }
+  ]
+}

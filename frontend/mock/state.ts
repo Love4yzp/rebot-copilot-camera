@@ -123,28 +123,32 @@ function transWith(
 }
 
 function seedPoses(now: number): MockPose[] {
-  const pose = (name: string, joints: Partial<Record<string, number>>, age_s: number): MockPose => ({
-    id: newId(),
+  const pose = (id: string, name: string, joints: Partial<Record<string, number>>, age_s: number): MockPose => ({
+    id,
     name,
     joints: { ...zeroPose(), ...joints } as Record<string, number>,
     created_at: now - age_s,
     updated_at: now - age_s,
   });
-  // Angles mirror backend/sequences/seed_demo.py — the validated set (the
-  // original mock values were outside joint3's real [0, π] limit and
-  // self-collided; the backend refused them). Change both together.
+  // The whole seed mirrors backend/sequences/seed_demo.py — ids included,
+  // pinned by the seeded-library contract case. The original mock values were
+  // outside joint3's real [0, π] limit and self-collided; the backend refused
+  // them and this validated set was derived in its place. Change both together.
   return [
-    pose("正面", { joint1: 0.0, joint2: 0.35, joint3: 0.3, joint4: 0.0, joint5: 0.1, joint6: 0.0, gripper: 0.02 }, 7200),
-    pose("右45°", { joint1: 0.9, joint2: 0.45, joint3: 0.5, joint4: 0.0, joint5: 0.0, joint6: 0.25, gripper: 0.02 }, 7000),
-    pose("侧面", { joint1: 1.5, joint2: 0.3, joint3: 0.25, joint4: 0.0, joint5: -0.2, joint6: 0.5, gripper: 0.02 }, 6800),
-    pose("俯拍", { joint1: 0.15, joint2: 0.9, joint3: 0.5, joint4: 0.3, joint5: 0.4, joint6: 0.0, gripper: 0.02 }, 6600),
+    pose("demo-pose-front", "正面", { joint1: 0.0, joint2: 0.35, joint3: 0.3, joint4: 0.0, joint5: 0.1, joint6: 0.0, gripper: 0.02 }, 7200),
+    pose("demo-pose-right45", "右45°", { joint1: 0.9, joint2: 0.45, joint3: 0.5, joint4: 0.0, joint5: 0.0, joint6: 0.25, gripper: 0.02 }, 7000),
+    pose("demo-pose-side", "侧面", { joint1: 1.5, joint2: 0.3, joint3: 0.25, joint4: 0.0, joint5: -0.2, joint6: 0.5, gripper: 0.02 }, 6800),
+    pose("demo-pose-top", "俯拍", { joint1: 0.15, joint2: 0.9, joint3: 0.5, joint4: 0.3, joint5: 0.4, joint6: 0.0, gripper: 0.02 }, 6600),
   ];
 }
 
 /**
  * The demo sequence from `docs/TIMELINE.md`: 20.5 s on the plan ruler, with a
  * wait marker at t=8 s that suspends both preview and execution until the
- * operator taps 继续.
+ * operator taps 继续. Block for block the backend's seed_demo.py demo — the
+ * decoration markers the mock used to carry (record/fill_light) have no
+ * provider on the backend and would be refused at write time, so the mirror
+ * no longer seeds them.
  */
 function seedDemoSequence(poses: MockPose[], now: number): MockSequence {
   const [front, right, side, top] = poses;
@@ -152,19 +156,14 @@ function seedDemoSequence(poses: MockPose[], now: number): MockSequence {
     holdWith(front.id, 3),
     transWith(2, "ease_in_out"),
     holdWith(right.id, 5, [shutterMarker(2), makeMarker("wait", 3, {}, 0), shutterMarker(4)]),
-    transWith(1.5, "linear", [
-      // Record start/stop bracketing the move: the "duration" is carried by
-      // the start marker's estimate, displayed as a translucent span.
-      makeMarker("record_start", 0, {}, 1.5),
-      makeMarker("record_stop", 1, {}, 0.3),
-    ]),
+    transWith(1.5, "linear"),
     holdWith(side.id, 3),
-    transWith(2, "ease_in_out", [makeMarker("fill_light", 0.4, {}, 0.3)]),
+    transWith(2, "ease_in_out"),
     holdWith(top.id, 4),
   ]);
   return {
     schema_version: 2,
-    id: "mockdemo000001",
+    id: "demo-seq-four",
     name: "四方位拍摄",
     created_at: now - 3600,
     updated_at: now - 600,
@@ -180,7 +179,7 @@ function seedTemplate(now: number): MockTemplate {
     recipe.push(holdWith(`slot:${slot}`, 3, [shutterMarker(2)]));
   }
   return {
-    id: newId(),
+    id: "demo-tpl-four",
     name: "四方位",
     created_at: now - 3000,
     station_count: 4,
@@ -217,19 +216,7 @@ export function createState(options: { seed?: boolean } = {}): MockState {
     playback: null,
     playback_source: null,
     poses,
-    sequences: seed
-      ? [
-          seedDemoSequence(poses, now),
-          {
-            schema_version: 2,
-            id: "mockempty00002",
-            name: "空序列",
-            created_at: now - 1200,
-            updated_at: now - 1200,
-            blocks: [],
-          },
-        ]
-      : [],
+    sequences: seed ? [seedDemoSequence(poses, now)] : [],
     templates: seed ? [seedTemplate(now)] : [],
     goto: null,
     tuning_current: structuredClone(DEFAULT_TUNING),

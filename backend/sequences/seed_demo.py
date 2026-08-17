@@ -45,7 +45,9 @@ log = logging.getLogger(__name__)
 SEED_MARKER = ".seeded-demo"
 
 #: Demo poses: name and joint offsets from the all-zero pose. Mirrored by
-#: the mock (frontend/mock/state.ts seedPoses) — change both together.
+#: the mock (frontend/mock/state.ts seedPoses) and pinned by the
+#: `seeded-library` contract case — ids, angles, blocks and the template all
+#: change together or the contract goes red.
 #:
 #: The mock's original angles were chosen for the 3D view, and the real
 #: backend refused them: joint3 was negative against a [0, π] URDF limit, and

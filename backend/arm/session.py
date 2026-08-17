@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .. import assets
-from ..safety.kinematics import ARM_JOINTS
 from .base import ArmState
 
 if TYPE_CHECKING:
@@ -356,11 +355,11 @@ class ArmSession:
         # Pass only the arm joints; upstream pads the gripper fingers out to the
         # model's eight DOFs. Handing it all seven hardware values would put the
         # gripper motor angle where a finger's metre-valued travel belongs.
-        arm_q = np.array([q[self._index[name]] for name in ARM_JOINTS], dtype=float)
+        arm_q = np.array([q[self._index[name]] for name in assets.arm_joint_names()], dtype=float)
         g = compute_generalized_gravity(model, arm_q, self._dyn_data)
 
         tau = np.zeros(len(self._names), dtype=float)
-        for position, name in enumerate(ARM_JOINTS):
+        for position, name in enumerate(assets.arm_joint_names()):
             value = float(g[position])
             value = self._gravity_scale.get(name, 1.0) * value + self._gravity_bias.get(name, 0.0)
             tau[self._index[name]] = value

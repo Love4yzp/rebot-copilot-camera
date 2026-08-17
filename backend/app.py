@@ -38,8 +38,8 @@ from .sequences import (
     PoseStore,
     SequenceStore,
     TemplateStore,
-    seed_demo_if_empty,
 )
+from .sequences.seed_demo import seed_demo_if_empty
 from .shutter import SimShutter, create_shutter
 from .tuning import TuningStore
 

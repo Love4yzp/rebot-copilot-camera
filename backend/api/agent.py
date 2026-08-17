@@ -15,16 +15,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..agent import AgentLease, LeaseInfo
-from ..actions import validate_providers
-from ..sequences import (
-    HoldBlock,
-    Pose,
-    PoseNotFound,
-    SequenceNotFound,
-    SequenceStore,
-)
-from ..safety.kinematics import validate_pose, validate_sequence
+from ..sequences import SequenceNotFound, SequenceStore
 from .gate import require_arm_available
+from .preflight import preflight_play, resolve_poses
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -89,7 +82,7 @@ def acquire(body: AcquireRequest | None, request: Request) -> AcquireResponse:
         token = lease.acquire((body or AcquireRequest()).owner)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-    return AcquireResponse(token=token, idle_timeout_s=lease._idle_ttl)
+    return AcquireResponse(token=token, idle_timeout_s=lease.idle_timeout_s)
 
 
 @router.post("/release", response_model=LeaseInfo)
@@ -138,7 +131,7 @@ def command_joints(body: JointCommand, request: Request) -> dict:
     """
     controller = request.app.state.controller
 
-    unsafe = validate_pose(body.joints)
+    unsafe = controller.preflight_pose(body.joints)
     if unsafe:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe}
@@ -167,7 +160,13 @@ def command_joints(body: JointCommand, request: Request) -> dict:
             status.HTTP_409_CONFLICT, f"arm is busy: {controller.mode}"
         )
 
-    controller.arm.move_to(body.joints, body.duration_s)
+    # Move through the controller's ephemeral-sequence path — arrival checking,
+    # the first-approach speed limit and stop-latch abort — never around it.
+    owner = _lease(request).info().owner or "agent"
+    try:
+        controller.move_joints(body.joints, body.duration_s, source=owner)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return {"ok": True, "mode": controller.mode}
 
 
@@ -198,32 +197,17 @@ def play_sequence(rid: str, request: Request) -> dict:
     if not sequence.blocks:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "sequence has no blocks")
 
-    pose_store = request.app.state.pose_store
-    poses: dict[str, Pose] = {}
-    missing: list[str] = []
-    for index, block in enumerate(sequence.blocks):
-        if not isinstance(block, HoldBlock):
-            continue
-        try:
-            poses[block.pose_id] = pose_store.get(block.pose_id)
-        except PoseNotFound:
-            missing.append(f"block {index}: no pose {block.pose_id!r}")
-    if missing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_poses", "reasons": missing}
-        )
+    poses = resolve_poses(request, sequence)
 
-    joints_in_order = [poses[b.pose_id].joints for b in sequence.blocks if isinstance(b, HoldBlock)]
-    unsafe = validate_sequence(joints_in_order)
-    if unsafe:
+    # The same pre-flight as /api/sequences/{id}/execute, approach included.
+    problems = preflight_play(request, sequence, poses)
+    if problems["unsafe"]:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": unsafe}
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": problems["unsafe"]}
         )
-
-    unavailable = validate_providers(sequence.blocks, request.app.state.plugins)
-    if unavailable:
+    if problems["missing"]:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": unavailable}
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": problems["missing"]}
         )
 
     owner = _lease(request).info().owner or "agent"

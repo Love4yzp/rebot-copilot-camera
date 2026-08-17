@@ -17,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ValidationError
 
 from ..core import Controller, events
-from ..safety.kinematics import validate_pose, validate_sequence
 from ..sequences import Pose, PoseNotFound, PoseStore, SequenceStore
 from .control import PlaybackState, TriggerRequest, playback_state
 from .gate import require_arm_available
@@ -46,9 +45,9 @@ def _load(request: Request, pose_id: str) -> Pose:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no pose {pose_id!r}") from None
 
 
-def _checked_joints(joints: dict[str, float]) -> dict[str, float]:
+def _checked_joints(controller: Controller, joints: dict[str, float]) -> dict[str, float]:
     """Shape first (422), then this arm's limits and collision model (400)."""
-    unsafe = validate_pose(joints)
+    unsafe = controller.preflight_pose(joints)
     if unsafe:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe})
     return joints
@@ -88,7 +87,7 @@ def create_pose(body: CreatePose, request: Request) -> Pose:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, exc.errors(include_url=False)
         ) from None
-    _checked_joints(pose.joints)
+    _checked_joints(_controller(request), pose.joints)
     return _store(request).save(pose)
 
 
@@ -113,7 +112,7 @@ def capture_pose(request: Request, body: CapturePose | None = None) -> Pose:
     # model calls it unsafe, the model and reality disagree — a bad URDF, a
     # miscalibrated zero — and that is worth saying out loud before playback
     # trusts the same model to pre-flight the sequence.
-    unsafe = validate_pose(joints)
+    unsafe = controller.preflight_pose(joints)
     if unsafe:
         log.warning("captured a pose the model considers unsafe: %s", "; ".join(unsafe))
 
@@ -141,7 +140,7 @@ def patch_pose(pose_id: str, body: PatchPose, request: Request) -> Pose:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, exc.errors(include_url=False)
             ) from None
-        _checked_joints(pose.joints)
+        _checked_joints(_controller(request), pose.joints)
     pose.touch()
     return _store(request).save(pose)
 
@@ -191,7 +190,7 @@ def goto_pose(
     # Pre-flight the path from wherever the arm is now. Two legal poses can
     # have an illegal line between them; nothing has moved yet at this point.
     current = dict(controller.arm.read_state().positions)
-    unsafe = validate_sequence([current, pose.joints])
+    unsafe = controller.preflight_path([current, pose.joints])
     if unsafe:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_path", "reasons": unsafe}

@@ -34,6 +34,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from . import assets
+from .safety.kinematics import ARM_JOINTS
+
 log = logging.getLogger(__name__)
 
 #: Section names as they appear on the wire (the PUT patch, the dirty list).
@@ -145,8 +148,6 @@ class GravityTuning(BaseModel):
 
     @model_validator(mode="after")
     def keys_are_arm_joints_and_ranges_sane(self) -> GravityTuning:
-        from .safety.kinematics import ARM_JOINTS  # local: keep the import boundary
-
         for name in set(self.scale) | set(self.bias):
             if name not in ARM_JOINTS:
                 raise ValueError(f"gravity correction key {name!r} is not an arm joint")
@@ -217,8 +218,6 @@ class TuningStore:
         # the profile must be "gripper" — the mass hangs off the arm whether
         # the file says so or not. A rig that was saved as bare/camera and
         # then got the motor wired must not come up inconsistent.
-        from . import assets  # local: tuning must not hard-depend on assets
-
         if assets.has_gripper() and config.payload.profile is not PayloadProfile.GRIPPER:
             log.warning(
                 "gripper motor is on the bus — coercing payload profile %s -> gripper",

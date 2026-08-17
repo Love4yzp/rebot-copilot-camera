@@ -25,6 +25,11 @@
  *
  * Dict keys are traversed in sorted order so the id numbering does not depend
  * on either side's insertion order.
+ *
+ * A case may set `"seed": true` to run against the first-boot demo library:
+ * the state is created with `seed: true` while the backend half calls
+ * `seed_demo_if_empty`, so the seeded poses, sequence and template are
+ * compared field by field like everything else.
  */
 
 import { handleApi } from "../mock/api";
@@ -48,6 +53,8 @@ export interface CaseStep {
 export interface GoldenCase {
   name: string;
   kind: "rest" | "normalize";
+  /** Run against the first-boot demo library (createState seed:true). */
+  seed?: boolean;
   steps?: CaseStep[];
   blocks?: unknown[];
 }
@@ -110,9 +117,9 @@ function runCase(golden: GoldenCase): TranscriptEntry[] {
     return [{ blocks: canon(out, ids) }];
   }
 
-  // Fresh, empty state per case: the backend side starts from empty stores,
-  // so the preview seeds (demo poses and the 四方位 sequence) stay out.
-  const state = createState({ seed: false });
+  // Fresh state per case: the backend side starts from empty stores, so the
+  // preview seeds stay out unless the case asks for them with seed:true.
+  const state = createState({ seed: golden.seed === true });
   const vars: Record<string, unknown> = {};
   const entries: TranscriptEntry[] = [];
 

@@ -14,7 +14,6 @@ from .models import (
     TransitionBlock,
 )
 from .normalize import nearest_hold, normalize, pair_key, sequence_duration
-from .seed_demo import demo_poses, demo_sequence, demo_template, seed_demo_if_empty
 from .store import (
     PoseNotFound,
     PoseStore,
@@ -44,12 +43,8 @@ __all__ = [
     "TemplateNotFound",
     "TemplateStore",
     "TransitionBlock",
-    "demo_poses",
-    "demo_sequence",
-    "demo_template",
     "nearest_hold",
     "normalize",
     "pair_key",
-    "seed_demo_if_empty",
     "sequence_duration",
 ]

@@ -139,6 +139,11 @@ class AgentLease:
             self._expire_if_stale()
             return self._token is not None
 
+    @property
+    def idle_timeout_s(self) -> float:
+        """The idle TTL, public so the acquire response can state it outright."""
+        return self._idle_ttl
+
     # ── internals ────────────────────────────────────────────────────────────
 
     def _expire_if_stale(self) -> None:

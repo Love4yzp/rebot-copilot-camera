@@ -16,15 +16,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from ..actions import validate_marker_params, validate_providers
 from ..core import Controller
-from ..safety.kinematics import validate_sequence
 from ..sequences import (
     Block,
-    HoldBlock,
-    Pose,
-    PoseNotFound,
-    PoseStore,
     Sequence,
     SequenceNotFound,
     SequenceStore,
@@ -33,16 +27,13 @@ from ..sequences import (
 )
 from .control import PlaybackState, TriggerRequest, playback_state
 from .gate import require_arm_available
+from .preflight import preflight_play, resolve_poses
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
 
 
 def _store(request: Request) -> SequenceStore:
     return request.app.state.sequence_store
-
-
-def _poses(request: Request) -> PoseStore:
-    return request.app.state.pose_store
 
 
 def _controller(request: Request) -> Controller:
@@ -60,26 +51,6 @@ def _is_executing(request: Request, sid: str) -> bool:
     """A live run holds a structural claim on its sequence — TIMELINE rule 5."""
     controller = _controller(request)
     return controller.is_playing and controller.playback_sequence_id == sid
-
-
-def _resolve_poses(request: Request, sequence: Sequence) -> dict[str, Pose]:
-    """Read every hold's pose out of the library, here at the API boundary —
-    the executor never touches a store."""
-    store = _poses(request)
-    poses: dict[str, Pose] = {}
-    missing: list[str] = []
-    for index, block in enumerate(sequence.blocks):
-        if not isinstance(block, HoldBlock):
-            continue
-        try:
-            poses[block.pose_id] = store.get(block.pose_id)
-        except PoseNotFound:
-            missing.append(f"block {index}: no pose {block.pose_id!r}")
-    if missing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_poses", "reasons": missing}
-        )
-    return poses
 
 
 class CreateSequence(BaseModel):
@@ -127,7 +98,7 @@ def patch_sequence(sid: str, body: PatchSequence, request: Request) -> Sequence:
         blocks = normalize(body.blocks)
         # And the same for marker params, against each provider's own model: a
         # bad param found now is a typo; found mid-run it is an aborted shoot.
-        bad = validate_marker_params(blocks, request.app.state.plugins)
+        bad = _controller(request).preflight_marker_params(blocks, request.app.state.plugins)
         if bad:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, {"error": "bad_marker_params", "reasons": bad}
@@ -167,30 +138,20 @@ def execute_sequence(
     if not sequence.blocks:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "sequence has no blocks")
 
-    poses = _resolve_poses(request, sequence)
-
+    poses = resolve_poses(request, sequence)
     controller = _controller(request)
 
     # Pre-flight the whole sequence, including the approach from wherever the
-    # arm is now. Two legal poses can have an illegal path between them, and
-    # discovering that by watching the arm reach it is the expensive way to
-    # find out. Nothing has moved yet at this point.
-    current = dict(controller.arm.read_state().positions)
-    joints_in_order = [poses[b.pose_id].joints for b in sequence.blocks if isinstance(b, HoldBlock)]
-    unsafe = validate_sequence([current, *joints_in_order])
-    if unsafe:
+    # arm is now — limits, self-collision along the straight-line paths, and
+    # every marker's provider. Nothing has moved yet at this point.
+    problems = preflight_play(request, sequence, poses)
+    if problems["unsafe"]:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": unsafe}
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": problems["unsafe"]}
         )
-
-    # And pre-flight the markers the same way. A sequence outlives the plugin
-    # it was written against — packages get uninstalled, boards get unplugged —
-    # and an unavailable provider means walking the whole set to deliver
-    # nothing, which is the failure the abort-by-default policy exists for.
-    missing = validate_providers(sequence.blocks, request.app.state.plugins)
-    if missing:
+    if problems["missing"]:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": missing}
+            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": problems["missing"]}
         )
 
     try:

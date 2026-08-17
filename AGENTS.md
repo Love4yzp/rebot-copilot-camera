@@ -143,7 +143,8 @@ vendor/reBotArm_control_py/  git submodule，锁 d540405
 ## 不能破的约定
 
 **层级边界**
-- `backend/api/*` 只调 controller 和 store，不直接动内部状态
+- `backend/api/*` 只调 controller 和 store，不直接动内部状态。所有运动前校验走 `Controller.preflight_*` 那道门（`backend/api/preflight.py` 是共用预检），不许直接 import `safety.kinematics.validate_*` / `actions.validate_*`
+- **例外**：`api/gate.py` 与 `api/estop.py` 直接碰 `app.state.latch` —— 闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环；`api/plugins.py` 只读 `ActionRegistry` —— 插件登记处的自述端点。都是刻意的前门，不是越界
 - `backend/core/executor.py` 纯逻辑，不碰 FastAPI、不碰真实时间、**不知道闩锁存在**（控制循环看到闩锁后调它的 `abort()`，这样执行器结构上不可能自己决定恢复）
 - `backend/arm/*` 只薄封装上游，不实现运动学
 - `SafetyLatch` 是横切闩锁，**不是模式机里的模式**（做成模式的话每加一个模式都要重审所有切换是否会绕过它）

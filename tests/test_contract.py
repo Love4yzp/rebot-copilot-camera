@@ -32,6 +32,11 @@ Deliberately out of scope (the case files never ask for them):
 - mid-run playback progress: the mock applies control-loop effects inside the
   request handler while the real loop applies them on the next tick, so a run
   is only ever observed at rest points (started, aborted, stopped)
+
+A case may set ``"seed": true`` to run against the first-boot demo library:
+both sides plant the same demo (``seed_demo_if_empty`` on the backend,
+``createState({seed: true})`` on the mock) so the seeded poses, sequence and
+template are compared field by field like everything else.
 """
 
 from __future__ import annotations
@@ -52,6 +57,7 @@ from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.safety import SafetyLatch
 from backend.sequences import Block, PoseStore, SequenceStore, TemplateStore, normalize
+from backend.sequences.seed_demo import seed_demo_if_empty
 from backend.shutter import SimShutter
 from backend.tuning import TuningStore
 
@@ -159,6 +165,15 @@ def run_case_on_backend(rig, case: dict) -> list[dict]:
         blocks = TypeAdapter(list[Block]).validate_python(case["blocks"])
         out = normalize(blocks)
         return [{"blocks": canon([b.model_dump(mode="json") for b in out], ids)}]
+
+    if case.get("seed"):
+        # The mock side passes seed:true to createState; this is the backend's
+        # same half — the first-boot demo into the empty stores.
+        seed_demo_if_empty(
+            app.state.pose_store,
+            app.state.sequence_store,
+            app.state.template_store,
+        )
 
     variables: dict[str, object] = {}
     entries = []

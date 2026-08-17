@@ -99,6 +99,17 @@ def joint_names() -> list[str]:
     return [n for n in names if n not in gripper]
 
 
+def arm_joint_names() -> list[str]:
+    """The six arm joints in hardware order — everything except the gripper.
+
+    The gravity model, the kinematics validator and the simulator all want the
+    arm joints regardless of the gripper switch; this is the one place that
+    knows which names those are.
+    """
+    gripper = set(_gripper_joint_names())
+    return [n for n in joint_names() if n not in gripper]
+
+
 def has_gripper() -> bool:
     """Whether a motor gripper is attached (the ``gripper`` switch in the yaml).
 
@@ -177,10 +188,11 @@ def effective_urdf_path(payload: PayloadTuning | None = None) -> Path:
     if has_gripper():
         return urdf_path()
 
-    from .tuning import PayloadProfile  # local: assets must not hard-depend on tuning
-
-    profile = payload.profile if payload is not None else PayloadProfile.BARE
-    if profile is PayloadProfile.GRIPPER:
+    # No runtime import from .tuning: the payload arrives typed for the docs
+    # but is consumed by its enum *value*, so assets never hard-depends on the
+    # tuning model (and the import cycle assets <-> tuning stays closed).
+    profile = payload.profile if payload is not None else None
+    if profile is not None and profile.value == "gripper":
         # Dead weight: the gripper assembly is bolted on but its motor is not
         # wired, so it has no group on the bus (effective_hardware_yaml strips
         # it) — yet its 0.8 kg hangs off the arm for real, and the gravity
@@ -200,7 +212,7 @@ def effective_urdf_path(payload: PayloadTuning | None = None) -> Path:
         mass = link.find("inertial/mass")
         if mass is None:
             continue
-        if profile is PayloadProfile.CAMERA and name == "gripper_end":
+        if profile is not None and profile.value == "camera" and name == "gripper_end":
             camera = payload.camera
             mass.set("value", str(camera.mass))
             origin = link.find("inertial/origin")
@@ -210,7 +222,11 @@ def effective_urdf_path(payload: PayloadTuning | None = None) -> Path:
             mass.set("value", "0.0")
 
     with tempfile.NamedTemporaryFile(
-        "w", prefix=f"rebotarm_rs_{profile.value}_", suffix=".urdf", delete=False, encoding="utf-8"
+        "w",
+        prefix=f"rebotarm_rs_{profile.value if profile is not None else 'bare'}_",
+        suffix=".urdf",
+        delete=False,
+        encoding="utf-8",
     ) as f:
         f.write(ET.tostring(tree.getroot(), encoding="unicode"))
         return Path(f.name)
