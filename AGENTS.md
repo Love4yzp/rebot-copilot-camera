@@ -66,6 +66,8 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 
 ## 代码地图
 
+**分层速览（四张表的细节只在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)「内核边界与部件关系」，这里不抄）：内核 = arm/ + safety/ + core/controller.py；编排引擎 = core/（executor/floatlock/broadcaster/events）+ sequences/；插件层 = actions/ + shutter/；入口层 = api/。**
+
 ```
 backend/
   app.py            FastAPI 入口。静态挂载必须在所有路由之后 —— mount("/") 匹配一切
