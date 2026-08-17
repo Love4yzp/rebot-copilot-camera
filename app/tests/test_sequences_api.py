@@ -399,3 +399,37 @@ def test_a_finished_run_releases_the_sequence(rig):
     run_loop(controller, arm, clock)
 
     assert set_blocks(client, sid, [hold(a, 0.4)]).status_code == 200
+
+
+# ── marker position validation ───────────────────────────────────────────────
+
+
+def test_patch_rejects_marker_beyond_hold_duration(client: TestClient):
+    """A marker pinned past its hold's end fires late or never — the editor
+    clamps `at`, but the endpoint does not trust the editor."""
+    pose = make_pose(client, 0.3)
+    sid = make_sequence(client)
+    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[shutter(at=1.5)])])
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "marker_out_of_range"
+
+
+def test_patch_rejects_marker_beyond_transition_proportion(client: TestClient):
+    a = make_pose(client, 0.3)
+    b = make_pose(client, -0.3, name="侧面")
+    sid = make_sequence(client)
+    r = set_blocks(client, sid, [
+        hold(a, 1.0),
+        {"type": "transition", "duration_s": 2.0, "easing": "linear",
+         "markers": [{"kind": "wait", "params": {}, "at": 1.5, "estimate_s": 0.0}]},
+        hold(b, 1.0),
+    ])
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "marker_out_of_range"
+
+
+def test_patch_accepts_marker_at_block_boundary(client: TestClient):
+    pose = make_pose(client, 0.3)
+    sid = make_sequence(client)
+    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[shutter(at=1.0)])])
+    assert r.status_code == 200, r.text

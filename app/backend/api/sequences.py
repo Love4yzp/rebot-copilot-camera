@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from ..core import Controller
 from ..sequences import (
     Block,
+    HoldBlock,
     Sequence,
     SequenceNotFound,
     SequenceStore,
@@ -51,6 +52,22 @@ def _is_executing(request: Request, sid: str) -> bool:
     """A live run holds a structural claim on its sequence — TIMELINE rule 5."""
     controller = _controller(request)
     return controller.is_playing and controller.playback_sequence_id == sid
+
+
+def _marker_position_problems(blocks: list[Block]) -> list[str]:
+    """A marker's ``at`` must live inside its parent block: seconds within a
+    hold's duration, a 0..1 proportion within a transition. The editor clamps
+    this, but the endpoint does not trust the editor — an out-of-range marker
+    fires late or never, which is the empty-frames class of failure."""
+    problems: list[str] = []
+    for index, block in enumerate(blocks):
+        limit = block.duration_s if isinstance(block, HoldBlock) else 1.0
+        for marker in block.markers:
+            if marker.at > limit:
+                problems.append(
+                    f"block {index} ({block.type}): marker {marker.kind!r} at out of range"
+                )
+    return problems
 
 
 class CreateSequence(BaseModel):
@@ -96,6 +113,14 @@ def patch_sequence(sid: str, body: PatchSequence, request: Request) -> Sequence:
         # Write-side normalization: transitions are automatic and undeletable,
         # so they are rebuilt here rather than trusted from the client.
         blocks = normalize(body.blocks)
+        # A marker pinned outside its parent block fires late or never — the
+        # editor clamps `at`, but the endpoint does not trust the editor.
+        out_of_range = _marker_position_problems(blocks)
+        if out_of_range:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                {"error": "marker_out_of_range", "reasons": out_of_range},
+            )
         # And the same for marker params, against each provider's own model: a
         # bad param found now is a typo; found mid-run it is an aborted shoot.
         bad = _controller(request).preflight_marker_params(blocks, request.app.state.plugins)

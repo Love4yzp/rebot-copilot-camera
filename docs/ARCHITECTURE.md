@@ -127,7 +127,7 @@
 
 | 层 | 目录 | 内容 |
 |---|---|---|
-| **内核 Kernel**(物理地基,永不动) | `app/backend/arm/` + `app/backend/safety/` + `app/backend/core/controller.py` | 动词集:hold(急停走的就是它)/ move_to / settle / relax / set_float / follow;前置件:SafetyLatch + 运动闸门 |
+| **内核 Kernel**(物理地基,永不动) | `app/backend/arm/` + `app/backend/safety/` + `app/backend/core/controller.py` | 动词集:hold(急停走的就是它)/ move_to / relax / set_float / follow;前置件:SafetyLatch + 运动闸门。settle(到位判定)不是臂动词 —— 它是编排引擎层的驻留判据(executor 的 SETTLE_* + tuning 的 SettleTuning) |
 | **时空编排引擎** | `app/backend/core/`(executor / floatlock / broadcaster / events)+ `app/backend/sequences/` | 位姿 / 序列 / 模板 / 时间轴 + 执行器 |
 | **插件层** | `app/backend/actions/` + `app/backend/shutter/` | 动作插件框架与快门实现;插件够不到臂 |
 | **入口层** | `app/backend/api/` | HTTP / WS 入口,只调 controller 与 store |
@@ -136,7 +136,7 @@
 
 | 接口 | 动作集 | 实现 | 使用者 |
 |---|---|---|---|
-| **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例)。前置件:SafetyLatch + 运动闸门。失败语义:出声回落 + SIM 徽章 |
+| **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例;API 层仅只读状态——capture / 预检,不下运动指令)。前置件:SafetyLatch + 运动闸门。失败语义:出声回落 + SIM 徽章 |
 | **ShutterDriver** | is_connected / ping / focus / shoot / pair / pair_smart / camera_connected / camera_status;失败**抛异常**不回布尔(「继续拍」还是「停整条」必须当场可辨) | `Esp32Shutter`(真板)、`SimShutter` | runner worker(经 ShutterProvider)+ 快门自检。**永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到 |
 | **ActionProvider** | fields(触发表单)/ probe(健康)/ run(执行,阻塞常态) | entry_points + `app/plugins/` 目录两条发现路径 | runner worker,每 provider 一条;`ActionContext` 里**没有 arm** |
 | **ActionContext** | 只读:sequence id/name、waypoint 位置与备注、触发时刻关节角、`emit()` 单向事件 | — | 动作插件 |
@@ -145,7 +145,7 @@
 
 | 事件 | 生产方 | 消费方 |
 |---|---|---|
-| `sequence.started` / `sequence.done` / `sequence.aborted` | executor(块遍历) | `/ws` 的 `event` 主题订阅者(外部集成);前端状态走 state 流,不吃 event 流 |
+| `sequence.started` / `sequence.done` / `sequence.aborted` | executor(块遍历) | `/api/events` 的 `event` 主题订阅者(外部集成);前端状态走 state 流,不吃 event 流 |
 | `pose.arrived` | executor(进站到位) | 同上 |
 | `action.started` / `action.done` / `action.failed` | executor(provider 结果) | 同上 |
 | `estop.engaged` / `estop.cleared` | 控制循环(它看见闩锁) | 同上 |

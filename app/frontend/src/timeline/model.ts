@@ -253,16 +253,26 @@ export function poseAtTime(blocks: Block[], poses: PoseMap, t: number): Record<s
 
 // ── approach (first-block) helpers ─────────────────────────────────────────────
 //
-// These constants mirror backend/core/executor.py:
+// These constants mirror backend/core/executor.py and backend/arm/base.py:
 //   DEFAULT_APPROACH_S  = 2.0
 //   FIRST_APPROACH_MAX_SPEED = 0.25
+//   EASE_PEAK = 1.5
 // They are deliberately duplicated (the repo already has this pattern for
-// normalize rules in model.ts vs normalize.py).  Keep them in sync.
+// normalize rules in model.ts vs normalize.py).  Keep them in sync —
+// tests/test_cross_lang_constants.py reads this file and fails on drift.
 
 /** Base duration for the approach to the first block's pose. */
 export const DEFAULT_APPROACH_S = 2.0;
 /** Ceiling on joint speed for the approach to the first pose, rad/s. */
 export const FIRST_APPROACH_MAX_SPEED = 0.25;
+/**
+ * Peak joint speed of an eased move as a multiple of its linear average
+ * (smoothstep peaks at 1.5×). The executor stretches the first approach by
+ * this factor so the eased *peak* stays at FIRST_APPROACH_MAX_SPEED — the
+ * preview must plan with the same duration or the plan ruler lies about the
+ * approach. Mirrors EASE_PEAK in backend/arm/base.py.
+ */
+export const EASE_PEAK = 1.5;
 
 /** Largest single-joint delta between two poses (rad). */
 export function maxJointDelta(

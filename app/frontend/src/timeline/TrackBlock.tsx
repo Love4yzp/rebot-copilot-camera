@@ -94,7 +94,7 @@ export function TrackBlock({
             className={`mk ${fired ? "fired" : ""} ${markerSelected ? "sel" : ""}`}
             style={{ left: `${(atSeconds / block.duration_s) * 100}%` }}
             title={`${markerLabel(marker.kind, providers)} · t=${absT.toFixed(1)}s${
-              marker.kind === "wait" ? " · 播放到此暂停" : ""
+              marker.kind === "wait" ? " · 到此暂停" : ""
             }`}
             onClick={(event) => {
               event.stopPropagation();

@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from backend import assets
+from backend.arm.base import EASE_PEAK
 from backend.core.executor import DEFAULT_APPROACH_S, FIRST_APPROACH_MAX_SPEED
 from backend.sequences.models import WAIT_KIND
 
@@ -34,6 +35,9 @@ def test_approach_constants_match_executor():
     text = MODEL_TS.read_text(encoding="utf-8")
     assert _ts_const(text, "DEFAULT_APPROACH_S") == repr(DEFAULT_APPROACH_S)
     assert _ts_const(text, "FIRST_APPROACH_MAX_SPEED") == repr(FIRST_APPROACH_MAX_SPEED)
+    # EASE_PEAK lives in arm/base.py: the executor stretches the first approach
+    # by it, so the preview must plan with it or the plan ruler lies.
+    assert _ts_const(text, "EASE_PEAK") == repr(EASE_PEAK)
 
 
 def test_wait_kind_matches_models():

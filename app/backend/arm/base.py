@@ -90,7 +90,10 @@ class ArmDriver(Protocol):
         is what playback uses. Collapsing them would make a stop indistinguishable
         from a very fast move.
 
-        On real hardware this defers to upstream's trajectory planner.
+        On real hardware this is a smoothstep MIT ramp implemented in
+        ``ArmSession`` — the firmware locks the control mode, so upstream's
+        planner cannot run (docs/HARDWARE_NOTES.md #12). It is the one
+        sanctioned exception to the "call upstream, never reimplement" rule.
         """
         ...
 

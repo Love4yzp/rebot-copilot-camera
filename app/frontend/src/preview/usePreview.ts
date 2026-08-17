@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import type { Block, HoldBlock } from "../types";
 import {
   DEFAULT_APPROACH_S,
+  EASE_PEAK,
   FIRST_APPROACH_MAX_SPEED,
   lerpPose,
   markerSchedule,
@@ -111,7 +112,7 @@ export function usePreview(
       if (to) {
         const delta = maxJointDelta(raw, to);
         if (delta > 0.01) {
-          const duration = Math.max(DEFAULT_APPROACH_S, delta / FIRST_APPROACH_MAX_SPEED);
+          const duration = Math.max(DEFAULT_APPROACH_S, (EASE_PEAK * delta) / FIRST_APPROACH_MAX_SPEED);
           approachFrom_.current = raw;
           approachDuration_.current = duration;
           approachElapsed_.current = 0;

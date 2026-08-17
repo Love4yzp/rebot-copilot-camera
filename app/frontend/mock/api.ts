@@ -365,6 +365,21 @@ export function handleApi(
         // Write-side normalization: transitions are automatic and undeletable,
         // so they are rebuilt here rather than trusted from the client.
         sequence.blocks = normalize(reqBody.blocks as Block[]);
+        // Same write-side check as the backend: a marker's `at` must live
+        // inside its parent block (seconds in a hold, a 0..1 proportion in a
+        // transition). The editor clamps this; the endpoint does not trust it.
+        const markerProblems: string[] = [];
+        sequence.blocks.forEach((b, i) => {
+          const limit = b.type === "hold" ? b.duration_s : 1.0;
+          for (const m of b.markers) {
+            if (m.at > limit) {
+              markerProblems.push(`block ${i} (${b.type}): marker '${m.kind}' at out of range`);
+            }
+          }
+        });
+        if (markerProblems.length > 0) {
+          return json(400, { detail: { error: "marker_out_of_range", reasons: markerProblems } });
+        }
       }
       if (reqBody.name !== undefined) {
         const name = typeof reqBody.name === "string" ? reqBody.name.trim() : "";

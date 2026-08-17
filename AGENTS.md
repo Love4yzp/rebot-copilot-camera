@@ -63,6 +63,8 @@ cd app/frontend && npm run dev                   # 热更新，proxy 到 18790
 
 FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](https://github.com/Seeed-Projects/reBotArm_control_py)，**只调不写**。它是这套硬件的官方实现，重力模型已标定。
 
+**唯一例外**：`move_to` 的 smoothstep MIT 斜坡是项目内实现（`app/backend/arm/session.py`）—— 固件锁控制模式，上游规划器跑不了，这是实测驱动的决定，见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #12。
+
 **这四条的源码级证据、以及其它硬件事实（自由度错位、限位边界、碰撞对、关节映射）全在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。** 碰硬件相关代码前读那份。
 
 ---
@@ -94,7 +96,7 @@ app/backend/
     base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
     runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上，probe 走同一条队列
     registry.py     entry_points + app/plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
-    validate.py     写入时与播放前两道校验，让错误离开 ACTING 阶段
+    validate.py     写入时与执行前两道校验，让错误离开 ACTING 阶段
     shutter.py      ShutterProvider —— 第一个 provider
     check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
 
@@ -119,7 +121,7 @@ app/backend/
     sim.py          SimShutter，可脚本化失败
 
   api/
-    preflight.py    序列 / agent 共用的播放预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
+    preflight.py    序列 / agent 共用的执行预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
     estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
@@ -155,7 +157,7 @@ app/tests/               测试自成「测试」章节，不在地图里复述
 **层级边界**
 - `app/backend/api/*` 只调 controller 和 store，不直接动内部状态。所有运动前校验走 `Controller.preflight_*` 那道门（`app/backend/api/preflight.py` 是共用预检），不许直接 import `safety.kinematics.validate_*` / `actions.validate_*`
 - **例外**：`api/gate.py` 与 `api/estop.py` 直接碰 `app.state.latch` —— 闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环；`api/plugins.py` 只读 `ActionRegistry` —— 插件登记处的自述端点。都是刻意的前门，不是越界
-- `app/backend/core/executor.py` 纯逻辑，不碰 FastAPI、不碰真实时间、**不知道闩锁存在**（控制循环看到闩锁后调它的 `abort()`，这样执行器结构上不可能自己决定恢复）
+- `app/backend/core/executor.py` 纯逻辑，不碰 FastAPI、不碰真实时间、**不 import、不引用闩锁**（模块 docstring 的解释性提及除外；控制循环看到闩锁后调它的 `abort()`，这样执行器结构上不可能自己决定恢复）
 - `app/backend/arm/*` 只薄封装上游，不实现运动学
 - `SafetyLatch` 是横切闩锁，**不是模式机里的模式**（做成模式的话每加一个模式都要重审所有切换是否会绕过它）
 
