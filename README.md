@@ -174,7 +174,7 @@ CLI: `--sim` / `--host` / `--port`.
 
 **Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `config/tuning.yaml`, and「恢复已保存」reverts to the last save.
 
-**After mounting the camera**: weigh the body + mount, enter the mass under「负载 → 相机质量」and the centre-of-mass offset as com, switch to the camera profile, then re-verify the gravity model with `scripts/verify_gravity.py`. No code constants to edit anymore.
+**After mounting the camera**: weigh the body + mount, enter the mass under「负载 → 相机质量」and the centre-of-mass offset as com, switch to the camera profile, then verify by float-drift feel — release the estop, the backend drops into zero-force teach, and the arm should stay put; drift means the gravity feedforward is off (per-joint correction workflow in `docs/HARDWARE_NOTES.md` #B2). No code constants to edit anymore.
 
 ---
 
