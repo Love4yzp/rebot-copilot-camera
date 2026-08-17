@@ -115,7 +115,7 @@
 
 **产品身份词的分层**:「参考方案」是产品身份;「示教回放」是产品线名 / 行业词;「动作录制与回放」是白话故事主语。场景层(如摄影)可以用自己的术语,替换只发生在文案层,不做术语引擎。
 
-**负载(payload)** 是调参面板面向操作者的词:末端挂的是什么。工程词是 **payload profile**,三态枚举 —— `bare`(裸臂,无夹爪无相机)/ `camera`(相机装在夹爪位,需称重填质量)/ `gripper`(夹爪组件质量在末端——**无论电机是否接线**;电机接线与否由硬件 yaml 的开关回答)。**两个正交事实**:profile 回答「挂什么质量」,yaml 开关回答「电机在不在总线」。出厂配置 = 官方一整套(`gripper: true`,profile 锁 `gripper`);夹爪装着但没接线 = 开关 false + profile `gripper` 的死重态(质量保留、执行器缺席);无夹爪 = 开关 false + `bare`(0.8 kg 剥离)。见 `backend/tuning.py`、`docs/HARDWARE_NOTES.md` #11。
+**负载(payload)** 是调参面板面向操作者的词:末端挂的是什么。工程词是 **payload profile**,三态枚举 —— `bare`(裸臂,无夹爪无相机)/ `camera`(相机装在夹爪位,需称重填质量)/ `gripper`(夹爪组件质量在末端——**无论电机是否接线**;电机接线与否由硬件 yaml 的开关回答)。**两个正交事实**:profile 回答「挂什么质量」,yaml 开关回答「电机在不在总线」。出厂配置 = 官方一整套(`gripper: true`,profile 锁 `gripper`);夹爪装着但没接线 = 开关 false + profile `gripper` 的死重态(质量保留、执行器缺席);无夹爪 = 开关 false + `bare`(0.8 kg 剥离)。见 `app/backend/tuning.py`、`docs/HARDWARE_NOTES.md` #11。
 
 **「锚点」一词退役。** 它曾是最小单元的名字,但那套房子同时指素材和序列里的引用 —— 两种东西共用一个词正是混淆的来源。现在素材叫位姿、序列里的块叫保持块,各回各家。
 
@@ -127,10 +127,10 @@
 
 | 层 | 目录 | 内容 |
 |---|---|---|
-| **内核 Kernel**(物理地基,永不动) | `backend/arm/` + `backend/safety/` + `backend/core/controller.py` | 动词集:hold(急停走的就是它)/ move_to / settle / relax / set_float / follow;前置件:SafetyLatch + 运动闸门 |
-| **时空编排引擎** | `backend/core/`(executor / floatlock / broadcaster / events)+ `backend/sequences/` | 位姿 / 序列 / 模板 / 时间轴 + 执行器 |
-| **插件层** | `backend/actions/` + `backend/shutter/` | 动作插件框架与快门实现;插件够不到臂 |
-| **入口层** | `backend/api/` | HTTP / WS 入口,只调 controller 与 store |
+| **内核 Kernel**(物理地基,永不动) | `app/backend/arm/` + `app/backend/safety/` + `app/backend/core/controller.py` | 动词集:hold(急停走的就是它)/ move_to / settle / relax / set_float / follow;前置件:SafetyLatch + 运动闸门 |
+| **时空编排引擎** | `app/backend/core/`(executor / floatlock / broadcaster / events)+ `app/backend/sequences/` | 位姿 / 序列 / 模板 / 时间轴 + 执行器 |
+| **插件层** | `app/backend/actions/` + `app/backend/shutter/` | 动作插件框架与快门实现;插件够不到臂 |
+| **入口层** | `app/backend/api/` | HTTP / WS 入口,只调 controller 与 store |
 
 ### 接口三件套(每个可替换部件:动作集 / 实现 / 使用者)
 
@@ -138,7 +138,7 @@
 |---|---|---|---|
 | **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例)。前置件:SafetyLatch + 运动闸门。失败语义:出声回落 + SIM 徽章 |
 | **ShutterDriver** | is_connected / ping / focus / shoot / pair / pair_smart / camera_connected / camera_status;失败**抛异常**不回布尔(「继续拍」还是「停整条」必须当场可辨) | `Esp32Shutter`(真板)、`SimShutter` | runner worker(经 ShutterProvider)+ 快门自检。**永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到 |
-| **ActionProvider** | fields(触发表单)/ probe(健康)/ run(执行,阻塞常态) | entry_points + `plugins/` 目录两条发现路径 | runner worker,每 provider 一条;`ActionContext` 里**没有 arm** |
+| **ActionProvider** | fields(触发表单)/ probe(健康)/ run(执行,阻塞常态) | entry_points + `app/plugins/` 目录两条发现路径 | runner worker,每 provider 一条;`ActionContext` 里**没有 arm** |
 | **ActionContext** | 只读:sequence id/name、waypoint 位置与备注、触发时刻关节角、`emit()` 单向事件 | — | 动作插件 |
 
 ### 事件生产/消费映射
@@ -151,18 +151,18 @@
 | `estop.engaged` / `estop.cleared` | 控制循环(它看见闩锁) | 同上 |
 | `teach.captured` | 位姿 capture 端点(经 controller.emit_event) | 同上 |
 
-事件三条铁律(全文见 `backend/core/events.py`):**单向不可否决**;有界队列、慢订阅者丢旧包(不拖停控制循环);**事实在知道它的地方发** —— 执行器发序列/动作、控制循环发急停。
+事件三条铁律(全文见 `app/backend/core/events.py`):**单向不可否决**;有界队列、慢订阅者丢旧包(不拖停控制循环);**事实在知道它的地方发** —— 执行器发序列/动作、控制循环发急停。
 
 ### 新行为归属位置
 
 | 要加的东西 | 挂到哪 | 闸门 |
 |---|---|---|
-| 让臂动的 HTTP 端点 | `backend/api/` 新路由 | `require_arm_available`;或在 `tests/test_motion_gate.py` 的 `NON_MOTION_ROUTES` 写明理由 |
-| 新动作类型 | `ActionProvider`(entry_points 或 `plugins/`) | `check_shape` 形状闸门;ctx 无 arm |
-| 新调参 | `backend/tuning.py` 模型 + 调参面板 | `Controller.apply_tuning` 分级(执行中拒一切、浮动中拒负载切换) |
+| 让臂动的 HTTP 端点 | `app/backend/api/` 新路由 | `require_arm_available`;或在 `app/tests/test_motion_gate.py` 的 `NON_MOTION_ROUTES` 写明理由 |
+| 新动作类型 | `ActionProvider`(entry_points 或 `app/plugins/`) | `check_shape` 形状闸门;ctx 无 arm |
+| 新调参 | `app/backend/tuning.py` 模型 + 调参面板 | `Controller.apply_tuning` 分级(执行中拒一切、浮动中拒负载切换) |
 | 新硬件事实 | `docs/HARDWARE_NOTES.md` | 已验证 / 待实测分开 |
 | 新插件扩展点 | 先读 `docs/PLUGINS.md` | 「为什么触发源不是插件」 |
-| 新语义事件 | `backend/core/events.py` + 在生产方 emit | 单向不可否决;慢订阅者丢包不阻塞 |
+| 新语义事件 | `app/backend/core/events.py` + 在生产方 emit | 单向不可否决;慢订阅者丢包不阻塞 |
 
 ## 边界:刻意不拥有、刻意不做
 

@@ -23,6 +23,9 @@ REMOTE_DIR="${REBOT_REMOTE_DIR:-/opt/rebot-copilot-camera}"
 PORT="${REBOT_PORT:-18790}"
 SERVICE=rebot-copilot-camera
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 应用代码住在 app/ 二级目录。远端保持扁平布局：同步时把 app/ 的内容铺到 REMOTE_DIR 根，
+# 这样 deploy/ 里的 systemd unit（WorkingDirectory=/opt/rebot-copilot-camera）无需任何改动。
+APP="$HERE/app"
 
 die() {
 	echo "error: $*" >&2
@@ -43,11 +46,11 @@ cmd_setup() {
 	ssh "$HOST" "sudo mkdir -p $REMOTE_DIR && sudo chown \$(whoami): $REMOTE_DIR"
 
 	step "[r2x] 安装 systemd unit"
-	scp "$HERE/deploy/$SERVICE.service" "$HERE/deploy/rebot-can.service" "$HOST:/tmp/"
+	scp "$APP/deploy/$SERVICE.service" "$APP/deploy/rebot-can.service" "$HOST:/tmp/"
 	ssh "$HOST" "sudo mv /tmp/$SERVICE.service /tmp/rebot-can.service /etc/systemd/system/ && sudo systemctl daemon-reload"
 
 	step "[r2x] 安装 udev 规则"
-	scp "$HERE/deploy/99-rebot-usb.rules" "$HOST:/tmp/"
+	scp "$APP/deploy/99-rebot-usb.rules" "$HOST:/tmp/"
 	ssh "$HOST" 'sudo mv /tmp/99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload'
 
 	# 如果不把用户加入 systemd-journal 组，/api/logs 端点会静默返回空列表且无任何错误提示
@@ -66,6 +69,7 @@ cmd_push() {
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
 	# --delete 保证远端代码干净；但必须保护数据目录（包含操作员现场示教出来的点位数据，绝不能删）。
 	# 带前导斜杠挂在根路径锚点上，防止误杀路径中同名的 Python 包目录。
+	# 源是 app/（本地二级目录），远端铺平：app/data -> $REMOTE_DIR/data，systemd unit 路径因此不变。
 	rsync -az --delete \
 		--exclude '.git/' \
 		--exclude '.venv/' \
@@ -74,11 +78,11 @@ cmd_push() {
 		--exclude '/data/' \
 		--exclude '.pio/' \
 		--filter 'protect /data/' \
-		"$HERE/" "$HOST:$REMOTE_DIR/"
+		"$APP/" "$HOST:$REMOTE_DIR/"
 
 	step "[r2x] 同步 vendored 臂层"
 	# rsync 默认跳过子模块内容，因此显式同步子模块，避免远端 import 报错
-	rsync -az --delete "$HERE/vendor/reBotArm_control_py/" \
+	rsync -az --delete "$APP/vendor/reBotArm_control_py/" \
 		"$HOST:$REMOTE_DIR/vendor/reBotArm_control_py/"
 
 	step "[r2x] 安装依赖"

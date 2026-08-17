@@ -7,7 +7,7 @@
 #   ./dev.sh prod              全栈启动：自动构建前端并启动 Python 后端 (默认连接真实硬件)
 #   ./dev.sh prod --sim        全栈启动：构建前端并启动 Python 后端 (强行使用模拟臂)
 #   ./dev.sh prod --no-build   全栈启动：跳过前端构建，直接启动 Python 后端
-#   ./dev.sh build             仅构建前端静态页面，产物输出至 backend/static/
+#   ./dev.sh build             仅构建前端静态页面，产物输出至 app/backend/static/
 #
 # 常用参数 (用于 prod 模式)：
 #   --host <ip>                指定监听地址 (默认: 127.0.0.1)
@@ -23,6 +23,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 应用代码整体住在 app/ 二级目录，顶层只留脚本与 AI/人读文档
+APP="$HERE/app"
 PORT="${REBOT_PORT:-18790}"
 
 die() {
@@ -36,22 +38,22 @@ usage() {
 	awk 'NR > 1 && /^$/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"
 }
 
-# 检查机械臂控制库 Submodule。如果 vendor/ 为空，clone 时不会报错，但在 Python import 时会失败；
+# 检查机械臂控制库 Submodule。如果 app/vendor/ 为空，clone 时不会报错，但在 Python import 时会失败；
 # 在 sim 模式下表现为 3D 视图中没有臂（看起来像渲染 Bug，实际上是未拉取子模块）。
 require_submodule() {
-	[ -f "$HERE/vendor/reBotArm_control_py/pyproject.toml" ] ||
-		die "vendor/reBotArm_control_py is empty — run: git submodule update --init"
+	[ -f "$APP/vendor/reBotArm_control_py/pyproject.toml" ] ||
+		die "app/vendor/reBotArm_control_py is empty — run: git submodule update --init"
 }
 
 npm_install() {
-	[ -d "$HERE/frontend/node_modules" ] || (cd "$HERE/frontend" && npm install)
+	[ -d "$APP/frontend/node_modules" ] || (cd "$APP/frontend" && npm install)
 }
 
 cmd_build() {
 	step "[本机] 构建前端"
 	npm_install
-	# 构建产物输出到 backend/static/，由 backend/app.py 挂载托管
-	(cd "$HERE/frontend" && npm run build)
+	# 构建产物输出到 app/backend/static/，由 backend/app.py 挂载托管
+	(cd "$APP/frontend" && npm run build)
 }
 
 cmd_prod() {
@@ -59,11 +61,11 @@ cmd_prod() {
 	command -v uv >/dev/null || die "uv not found — https://astral.sh/uv"
 
 	step "[本机] 安装 Python 依赖"
-	(cd "$HERE" && uv sync)
+	(cd "$APP" && uv sync)
 
 	if [ "${NO_BUILD:-}" = "1" ]; then
-		[ -f "$HERE/backend/static/index.html" ] ||
-			die "--no-build given but backend/static/ is empty"
+		[ -f "$APP/backend/static/index.html" ] ||
+			die "--no-build given but app/backend/static/ is empty"
 		step "[本机] 跳过前端构建（--no-build）"
 	else
 		# 默认每次启动都重新构建前端：防止出现“后端更新了 API，但前端展示旧网页”的情况，
@@ -99,6 +101,8 @@ cmd_prod() {
 	# 注意不能用 `exec env LANG=... uv run ...`：/usr/bin/env 是 SIP 保护二进制，
 	# exec 它时 dyld 会剥掉 DYLD_* 环境变量，上面的 PCBUSB 搜索路径就传不下去。
 	export LANG="${LANG:-zh_CN.UTF-8}"
+	# uv 项目根在 app/（pyproject.toml 所在），必须先 cd 进去再 exec
+	cd "$APP"
 	exec uv run -m backend.app "$@"
 }
 
@@ -106,10 +110,10 @@ cmd_sim() {
 	require_submodule
 
 	step "[本机] 启动 sim 前端（内存 mock，无后端）"
-	# `vite --mode mock` 关闭后端代理，由 frontend/mock/ 在内存中响应 API 和 WebSocket，
+	# `vite --mode mock` 关闭后端代理，由 app/frontend/mock/ 在内存中响应 API 和 WebSocket，
 	# 并直接读取 submodule URDF。无需 Python 环境，亦不连接真实机械臂。
 	npm_install
-	cd "$HERE/frontend"
+	cd "$APP/frontend"
 	exec npm run dev:mock -- "$@"
 }
 

@@ -2,12 +2,17 @@
 name = "rebot-copilot-camera"
 version = "0.1.0"
 description = "Automated multi-view photography: a reBot-RS arm carries a Canon camera through taught waypoints and fires the shutter over BLE at each pose."
-readme = "README.md"
+# The human-facing README lives one level up at the repo root, but hatchling
+# requires the readme file inside the project directory — and device.sh syncs
+# only app/ to the device, so a relative link out of it would dangle there.
+# The built wheel therefore carries this short pointer instead; the project is
+# never published, it runs from source, so this metadata is never shown.
+readme = { content-type = "text/markdown", text = "Teach & Repeat · 示教回放 — see README.md at the repository root." }
 # Upper bound inherited from the upstream arm library (reBotArm_control_py pins
 # >=3.10,<3.12). Keeping the same window here means the `arm` extra can always
 # be installed into this environment without a resolver conflict.
 requires-python = ">=3.10,<3.12"
-license = { file = "LICENSE" }
+license = "MIT"
 
 dependencies = [
     "fastapi>=0.115",
@@ -52,7 +57,7 @@ build-backend = "hatchling.build"
 # for the same reason.
 #
 # A submodule keeps the exact upstream commit pinned in git — upgrading is a
-# `git -C vendor/reBotArm_control_py checkout <sha>`, not a manual re-merge of
+# `git -C app/vendor/reBotArm_control_py checkout <sha>`, not a manual re-merge of
 # copied files. Mapping it in here makes `import reBotArm_control_py` work
 # without touching sys.path at runtime.
 #

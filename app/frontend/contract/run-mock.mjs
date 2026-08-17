@@ -4,7 +4,7 @@
  * frontend dependency, so no new tooling) and prints the mock's canonical
  * transcript as JSON on stdout.
  *
- * Usage: node frontend/contract/run-mock.mjs [cases-dir]   (from anywhere)
+ * Usage: node app/frontend/contract/run-mock.mjs [cases-dir]   (from anywhere)
  *
  * `tests/test_contract.py` shells out to this and diffs the transcript against
  * the FastAPI TestClient's. Run it by hand to see the mock's half on its own.

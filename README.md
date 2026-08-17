@@ -22,11 +22,11 @@ The first deployment is automated multi-view photography: a reBot-RS six-axis ar
 
 | Area | Directories |
 |---|---|
-| Program | `backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `frontend/` (UI + dev mock + contract runner), `firmware/esp32-shutter/`, `vendor/reBotArm_control_py/` (pinned submodule) |
-| Config & data | `config/` (hardware yaml + operator tuning), `data/` (runtime poses / sequences / templates, gitignored) |
-| Deploy | `deploy/` (systemd units + udev rule) |
+| Program | `app/backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `app/frontend/` (UI + dev mock + contract runner), `app/firmware/esp32-shutter/`, `app/vendor/reBotArm_control_py/` (pinned submodule) |
+| Config & data | `app/config/` (hardware yaml + operator tuning), `app/data/` (runtime poses / sequences / templates, gitignored) |
+| Deploy | `app/deploy/` (systemd units + udev rule) |
 | Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture anchor, hardware facts), `PROGRESS.md`, this README |
-| Verification | `tests/`, `contract/cases/` (golden contract cases) |
+| Verification | `app/tests/`, `app/contract/cases/` (golden contract cases) |
 | Entries | `./dev.sh` (everything on this machine), `./device.sh` (everything over ssh to the device) |
 
 ---
@@ -51,8 +51,8 @@ Kinematics, dynamics and collision checking run on macOS and Linux dev machines 
 ```bash
 git clone --recursive https://github.com/Love4yzp/rebot-copilot-camera.git
 cd rebot-copilot-camera
-uv sync
-cd frontend && npm install && npm run build && cd ..
+cd app && uv sync                       # the application lives in app/; everything below runs from there
+cd app/frontend && npm install && npm run build
 ```
 
 Already cloned without `--recursive`: `git submodule update --init`.
@@ -64,17 +64,17 @@ Already cloned without `--recursive`: `git submodule update --init`.
 ## Try it (no hardware)
 
 ```bash
-uv run -m backend.app --sim
+cd app && uv run -m backend.app --sim
 ```
 
 Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, walks waypoints and pretends to fire the shutter — the whole workflow runs.
 
-Frontend work: `cd frontend && npm run dev` (hot reload, proxies to 18790).
-Tests: `uv run pytest`.
+Frontend work: `cd app/frontend && npm run dev` (hot reload, proxies to 18790).
+Tests: `cd app && uv run pytest`.
 
 `./dev.sh` wraps the two local modes — `./dev.sh prod` builds the frontend and runs the backend on one origin (add `--sim` for no hardware), `./dev.sh sim` runs the frontend alone. API integration without the frontend: `./dev.sh prod --no-build`, `/docs` is the console (requires the frontend to have been built once). The old name `mock` still works as an alias for `sim`, slated for removal. **Whatever the mode, the backend's arm safety measures (estop latch / motion gate / watchdog) are always on.** Deployment to the device is a different script, `./device.sh` — see "Deploy to the R2x"; daily use never touches it.
 
-**Preview the frontend without the backend**: `./dev.sh sim`, or `cd frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
+**Preview the frontend without the backend**: `./dev.sh sim`, or `cd app/frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from app/vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
 
 ---
 
@@ -85,7 +85,7 @@ Tests: `uv run pytest`.
 Arm on CAN, ESP32 on USB, camera mounted on the gripper. **No `--sim`**:
 
 ```bash
-uv run -m backend.app
+cd app && uv run -m backend.app
 curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
 ```
 
@@ -95,7 +95,7 @@ curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
 
 1. Camera menu `Wireless communication settings > Bluetooth` → set to **Remote control** (not "Smartphone"). Pairing fails without this.
 2. Select "Pairing" on the camera; it waits.
-3. `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./firmware/esp32-shutter/README.md)).
+3. `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./app/firmware/esp32-shutter/README.md)).
 4. The pairing is stored on the board and reconnects automatically on power-up.
 
 Verify the whole chain — **this takes a real photo**:
@@ -177,15 +177,15 @@ One exception: **if the emergency stop is latched, shutdown does not park** — 
 |---|---|---|
 | `REBOT_HOST` | `127.0.0.1` | Listen address. **Setting `0.0.0.0` opens arm control to the whole network — this project has no auth layer** |
 | `REBOT_PORT` | `18790` | Port |
-| `REBOT_DATA_DIR` | `./data` | Operator data root: `poses/`, `sequences/`, `templates/` live under it, one JSON per document |
+| `REBOT_DATA_DIR` | `./app/data` | Operator data root: `poses/`, `sequences/`, `templates/` live under it, one JSON per document |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
-| `REBOT_TUNING_FILE` | `./config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
+| `REBOT_TUNING_FILE` | `./app/config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
 
 CLI: `--sim` / `--host` / `--port`.
 `device.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
 
-**Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `config/tuning.yaml`, and「恢复已保存」reverts to the last save.
+**Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `app/config/tuning.yaml`, and「恢复已保存」reverts to the last save.
 
 **After mounting the camera**: weigh the body + mount, enter the mass under「负载 → 相机质量」and the centre-of-mass offset as com, switch to the camera profile, then verify by float-drift feel — release the estop, the backend drops into zero-force teach, and the arm should stay put; drift means the gravity feedforward is off (per-joint correction workflow in `docs/HARDWARE_NOTES.md` #B2). No code constants to edit anymore.
 
@@ -215,11 +215,11 @@ The service listens on `127.0.0.1`; remote access goes through an SSH tunnel: `.
 
 **LAN access (common on a reComputer)**
 
-Device on a reComputer, other hosts on the same LAN opening the UI directly: change `Environment=REBOT_HOST=127.0.0.1` in `deploy/rebot-copilot-camera.service` to `0.0.0.0` (or the device's static LAN IP), `push`, then visit `http://<device-ip>:18790` from the LAN. Note **anyone who can reach that port can move the arm** — only do this on a LAN you control; a static IP avoids the "device joined a new network and got exposed" surprise.
+Device on a reComputer, other hosts on the same LAN opening the UI directly: change `Environment=REBOT_HOST=127.0.0.1` in `app/deploy/rebot-copilot-camera.service` to `0.0.0.0` (or the device's static LAN IP), `push`, then visit `http://<device-ip>:18790` from the LAN. Note **anyone who can reach that port can move the arm** — only do this on a LAN you control; a static IP avoids the "device joined a new network and got exposed" surprise.
 
 Untrusted network plus remote access: don't expose the service directly — put an authenticating reverse proxy in front of the localhost service (Caddy / nginx basic auth is enough), or go through a private network with ACLs (WireGuard / Tailscale). Auth is the deployment layer's job, not this application's — such configs belong to the deployment site and stay out of the repo.
 
-`push` never deletes `data/` on the device — the operator's taught poses and sequences live there and exist only there.
+`push` never deletes `app/data/` on the device — the operator's taught poses and sequences live there and exist only there.
 
 ---
 
@@ -228,7 +228,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Symptom | Probably | Do |
 |---|---|---|
 | Service running, arm dead still | silently fell back to the simulator | `curl -s :18790/api/health \| grep simulated`. `true` means not connected; the startup log has the reason |
-| Falls back on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh prod` injects the dyld search path itself; a direct `uv run -m backend.app` needs `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
+| Falls back on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh prod` injects the dyld search path itself; a direct `cd app && uv run -m backend.app` needs `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
 | `import reBotArm_control_py` fails | submodule not pulled | `git submodule update --init` |
 | Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
 | Play returns **409** | estop latched, or already playing / teaching | `detail` says which |
@@ -259,13 +259,13 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 | `POST /api/teach` | Zero-force teaching toggle |
 | `POST /api/shutter/test` | Shutter self-test. Checks both links, USB and BLE; `?shoot=true` takes a real shot |
 | `POST /api/shutter/pair` | Put the board into BLE pairing mode and wait for the camera (30s). 409 while playing |
-| `GET /api/plugins` · `POST /api/plugins/probe` | Which action plugins are installed and usable. The frontend renders trigger forms from this |
+| `GET /api/plugins` · `POST /api/app/plugins/probe` | Which action plugins are installed and usable. The frontend renders trigger forms from this |
 | `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | State and logs |
 | `WS /api/events` | Semantic event stream: arrived / action / estop. For integrators; no 20 Hz joint angles |
 
 **Every endpoint that moves the arm returns 409 with a reason during estop.**
 
-**Extending the machine**: action plugins (in-process — drop a folder with a `plugin.json` into `plugins/`, or `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`examples/rebot-plugin-turntable/`](./examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
+**Extending the machine**: action plugins (in-process — drop a folder with a `plugin.json` into `app/plugins/`, or `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`app/examples/rebot-plugin-turntable/`](./app/examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
 
 **Agent API** (`/api/agent/*`) for external LLMs / scripts: `acquire` takes an exclusive token, `control/joints` and `control/play/{id}` issue commands, `release` hands it back (`?force=true` lets the Web UI forcibly reclaim). Leases expire after 5 idle minutes or 30 minutes held. **It grants control, not safety exemption** — during estop the agent is refused exactly like a human. Full parameters in `/docs`.
 
@@ -278,7 +278,7 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 | [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, unbreakable conventions, architecture layers |
 | [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts and traps — **verified** and **to-be-measured** kept strictly apart |
 | [PROGRESS.md](./PROGRESS.md) | Progress, blockers, handoff protocol |
-| [firmware/esp32-shutter/](./firmware/esp32-shutter/README.md) | Flashing, pairing, serial protocol |
+| [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | Flashing, pairing, serial protocol |
 | [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | Original design and decision log (archived, no longer appended) |
 
 The arm layer is not written here — kinematics, dynamics, gravity compensation, trajectory planning and URDF all come from [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py).

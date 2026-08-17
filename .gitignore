@@ -1,8 +1,8 @@
 # runtime data — operator's teach/playback libraries, one JSON per document,
-# never committed; everything under one data/ root (REBOT_DATA_DIR overrides)
-/data/
+# never committed; everything under one app/data/ root (REBOT_DATA_DIR overrides)
+/app/data/
 # drop-in plugins — the user's own code, synced by device.sh push, never committed
-/plugins/
+/app/plugins/
 
 # python
 __pycache__/
@@ -14,8 +14,8 @@ __pycache__/
 
 # node / frontend
 node_modules/
-frontend/dist/
-backend/static/
+app/frontend/dist/
+app/backend/static/
 
 # platformio (firmware/esp32-shutter)
 .pio/

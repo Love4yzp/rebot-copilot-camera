@@ -32,7 +32,7 @@
 
 ### 完整例子
 
-**[`examples/rebot-plugin-turntable/`](../examples/rebot-plugin-turntable/) 是一个真的包,不是文档里的代码块** —— 它装在开发环境里(`pyproject.toml` 的 `[tool.uv.sources]`),`tests/test_plugin_packaging.py` 通过**真的 `importlib.metadata` 扫描**拿到它。只被引用在散文里的打包元数据是没人跑过的元数据:group 名拼错、工厂要参数、`module:Class` 解析不出来,三种写法都会让插件干脆不出现,而第一个发现的人会是照着这份文档在设备上装的人。
+**[`app/examples/rebot-plugin-turntable/`](../app/examples/rebot-plugin-turntable/) 是一个真的包,不是文档里的代码块** —— 它装在开发环境里(`pyproject.toml` 的 `[tool.uv.sources]`),`app/tests/test_plugin_packaging.py` 通过**真的 `importlib.metadata` 扫描**拿到它。只被引用在散文里的打包元数据是没人跑过的元数据:group 名拼错、工厂要参数、`module:Class` 解析不出来,三种写法都会让插件干脆不出现,而第一个发现的人会是照着这份文档在设备上装的人。
 
 转台,一个文件,串口。骨架:
 
@@ -74,10 +74,10 @@ entry point 指向的东西必须**无参可调**。`TURNTABLE_PORT=sim` 时例�
 
 ### 两种装法
 
-**一、丢进 `plugins/` 目录（简单的那种）。** 一个文件夹就是插件：代码 + 一个 `plugin.json` 清单：
+**一、丢进 `app/plugins/` 目录（简单的那种）。** 一个文件夹就是插件：代码 + 一个 `plugin.json` 清单：
 
 ```
-plugins/
+app/plugins/
   my-turntable/
     plugin.json
     rebot_plugin_turntable.py     # module 指的那个文件,多文件就放一整个包
@@ -87,7 +87,7 @@ plugins/
 {"module": "rebot_plugin_turntable", "provider": "TurntableProvider", "enabled": true}
 ```
 
-`module` 从这个文件夹里 import,`provider` 是模块里那个**无参可调**的类。装 = 把文件夹拷进 `plugins/` 再重启服务,没有 pip、没有 lockfile —— 也就不存在 `uv sync` 把它清掉的事(那正是 entry point 装法手动 `uv pip install` 后每次 `device.sh push` 都丢插件的原因)。`plugins/` 被 gitignore 但会跟 `device.sh push` 一起同步到设备,源在你开发机上。
+`module` 从这个文件夹里 import,`provider` 是模块里那个**无参可调**的类。装 = 把文件夹拷进 `app/plugins/` 再重启服务,没有 pip、没有 lockfile —— 也就不存在 `uv sync` 把它清掉的事(那正是 entry point 装法手动 `uv pip install` 后每次 `device.sh push` 都丢插件的原因)。`app/plugins/` 被 gitignore 但会跟 `device.sh push` 一起同步到设备,源在你开发机上。
 
 `enabled: false` 就是开关:停用后插件灰显在 `/api/plugins` 里带着原因,不会被排进新序列;改回 `true` 重启恢复。状态随插件自己的文件走,不怕更新覆盖。
 
@@ -109,7 +109,7 @@ sudo systemctl restart rebot-copilot-camera
 ### 无硬件开发循环
 
 ```bash
-uv run -m backend.actions.check                          # 列出装了什么(entry point 和 plugins/ 都扫)
+uv run -m backend.actions.check                          # 列出装了什么(entry point 和 app/plugins/ 都扫)
 uv run -m backend.actions.check turntable                # 看它的 manifest
 uv run -m backend.actions.check turntable --probe        # 跑自检
 uv run -m backend.actions.check turntable --run '{"degrees": 90}'
@@ -210,7 +210,7 @@ r = requests.post(
 
 **触发源永远是运动闸门的客户端,不在闸门之上。**
 
-一个能否决或改写运动的 pre-hook,等于把第三方代码放进「臂动不动」的决策路径,`require_arm_available` 就绕过去了 —— 而 `tests/test_motion_gate.py` 遍历路由表的全部意义,就是让「新增运动入口」必须是一个显式决定。
+一个能否决或改写运动的 pre-hook,等于把第三方代码放进「臂动不动」的决策路径,`require_arm_available` 就绕过去了 —— 而 `app/tests/test_motion_gate.py` 遍历路由表的全部意义,就是让「新增运动入口」必须是一个显式决定。
 
 所以触发源的能力上限就是 REST 的能力上限:急停拒绝界面,就同样拒绝它。要独占控制走 `/api/agent/acquire`,而站在臂边的人可以 `force` 收回。
 
@@ -226,7 +226,7 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
             push_to_asset_manager(e["data"])
 ```
 
-事件表(权威定义在 `backend/core/events.py`):
+事件表(权威定义在 `app/backend/core/events.py`):
 
 | 事件 | 什么时候 |
 |---|---|
@@ -252,7 +252,7 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 ## 刻意不做
 
 - **pre-hook**(能否决运动的钩子 = 第三方代码进安全路径)
-- **条件 / 分支规则引擎** —— 工作流是线性的:到位、稳定、触发、下一个。论证在 `backend/sequences/models.py` 开头
+- **条件 / 分支规则引擎** —— 工作流是线性的:到位、稳定、触发、下一个。论证在 `app/backend/sequences/models.py` 开头
 - **插件间通信** —— 两个插件要说话,说明它们该是一个插件
 - **运行时加载/卸载** —— 装插件(丢文件夹或 pip 包)都要重启才生效。Python 没有可靠的模块卸载,进程内「热拔」实际只能注销 provider、代码留在进程里,调试半加载状态比现场重启一次贵得多
 
@@ -261,18 +261,18 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 ## 代码地图
 
 ```
-backend/actions/
+app/backend/actions/
   base.py       ActionProvider Protocol / ActionContext / FieldSpec / 异常
   runner.py     ThreadedRunner(每 provider 一条 worker,action 与 probe 同一条队列)
                 + InlineRunner(测试用)
-  registry.py   entry_points + plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康状态 + manifest
+  registry.py   entry_points + app/plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康状态 + manifest
   validate.py   写入时与播放前的两道校验
   shutter.py    ShutterProvider —— 第一个 provider,包 ShutterDriver
   check.py      插件作者的命令行
-backend/core/events.py   事件名与信封
-backend/api/plugins.py   GET /api/plugins、POST /api/plugins/probe
-examples/rebot-plugin-turntable/   可安装的完整例子(装在开发环境里,被真实发现测试用到)
-tests/test_plugin_packaging.py     唯一走真 entry point 的测试:证明打包元数据本身是对的
+app/backend/core/events.py   事件名与信封
+app/backend/api/plugins.py   GET /api/plugins、POST /api/plugins/probe
+app/examples/rebot-plugin-turntable/   可安装的完整例子(装在开发环境里,被真实发现测试用到)
+app/tests/test_plugin_packaging.py     唯一走真 entry point 的测试:证明打包元数据本身是对的
 ```
 
-`backend/shutter/` 是**驱动**,不是插件层:`/api/shutter/test` 直接跟它对话检查链路,那和执行一个动作是两个问题。
+`app/backend/shutter/` 是**驱动**,不是插件层:`/api/shutter/test` 直接跟它对话检查链路,那和执行一个动作是两个问题。
