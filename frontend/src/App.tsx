@@ -1,28 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
-import type { AppMode, Block, HoldBlock, Pose, ProviderInfo, SeqTemplate, Sequence, SequenceSummary } from "./types";
+import type { AppMode, Block, HoldBlock, Pose } from "./types";
 import { useControlSocket } from "./useControlSocket";
+import { useNumberKeys } from "./useNumberKeys";
 import { usePreview } from "./preview/usePreview";
 import { makeHold, markerSchedule, maxJointDelta, playbackAbsTime, sequenceDuration } from "./timeline/model";
 import { EstopBar } from "./components/EstopBar";
 import { LogDrawer } from "./components/LogDrawer";
 import { TallyRail } from "./components/TallyRail";
 import type { TallyState } from "./components/TallyRail";
-import { Dialog } from "./components/Dialog";
 import { ModeWarning } from "./components/ModeWarning";
 import { TuningPanel } from "./components/TuningPanel";
 import { ToastProvider, useToast } from "./components/Toasts";
 import { LibraryPanel } from "./library/LibraryPanel";
 import { TeachBar } from "./library/TeachBar";
 import { TemplateWizard } from "./library/TemplateWizard";
+import { useLibrary } from "./library/useLibrary";
+import { SequenceDialogs } from "./library/SequenceDialogs";
+import type { SequenceDialogsHandle } from "./library/SequenceDialogs";
 import { MonitorPanel } from "./monitor/MonitorPanel";
 import { TimelineView } from "./timeline/TimelineView";
 import type { Selection, TrackDensity } from "./timeline/TimelineView";
 import { Inspector } from "./timeline/Inspector";
 import { TransportBar } from "./transport/TransportBar";
-
-/** Which sequence was open last, so a reload does not cost a tap. */
-const LAST_SEQUENCE_KEY = "rebot:last-sequence";
 
 /** The track's face survives reloads too: stations for assembly, the ruler for precision. */
 const TRACK_DENSITY_KEY = "rebot:track-density";
@@ -47,13 +47,22 @@ function Workspace() {
   const [prodWarning, setProdWarning] = useState(false);
   /** Last mode observed by the health poll, for switch detection. */
   const prevModeRef = useRef<AppMode | null>(null);
-  const [poses, setPoses] = useState<Pose[]>([]);
-  const [summaries, setSummaries] = useState<SequenceSummary[]>([]);
-  const [templates, setTemplates] = useState<SeqTemplate[]>([]);
-  /** True when the v2 sequence API is not deployed (real backend, transition). */
-  const [sequencesUnavailable, setSequencesUnavailable] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sequence, setSequence] = useState<Sequence | null>(null);
+
+  const library = useLibrary();
+  const {
+    poses,
+    summaries,
+    templates,
+    sequencesUnavailable,
+    providers,
+    selectedId,
+    sequence,
+    applySequence,
+    refreshLibrary,
+    poseName,
+    poseMap,
+  } = library;
+
   const [selection, setSelection] = useState<Selection>(null);
   const [teachOpen, setTeachOpen] = useState(false);
   const [tuningOpen, setTuningOpen] = useState(false);
@@ -70,23 +79,9 @@ function Workspace() {
     localStorage.getItem(UI_MODE_KEY) === "edit" ? "edit" : "simple",
   );
   /** The template being instantiated through the station wizard, if any. */
-  const [wizardTemplate, setWizardTemplate] = useState<SeqTemplate | null>(null);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [dialog, setDialog] = useState<"create" | "rename" | "delete" | "template" | null>(null);
-  const [nameDraft, setNameDraft] = useState("");
-  /** 新建序列的起点：空白 / 从模板（直接进逐站位向导）/ 复制现有。 */
-  const [createStart, setCreateStart] = useState<"blank" | "tpl" | "copy">("blank");
-  const [createTemplateId, setCreateTemplateId] = useState("");
+  const [wizardTemplate, setWizardTemplate] = useState<(typeof templates)[number] | null>(null);
 
   const blocks = useMemo<Block[]>(() => sequence?.blocks ?? [], [sequence]);
-  const poseMap = useMemo(
-    () => Object.fromEntries(poses.map((p) => [p.id, p.joints])),
-    [poses],
-  );
-  const poseName = useCallback(
-    (id: string) => poses.find((p) => p.id === id)?.name ?? "已删除位姿",
-    [poses],
-  );
 
   // The arm's live pose in a ref: the preview snapshots it at start() to play
   // the approach, and ws updates must not restart the session mid-run.
@@ -175,44 +170,6 @@ function Workspace() {
     prevDone.current = doneNow;
   }, [playback, teaching, latched, executing]);
 
-  // ── data loading ──────────────────────────────────────────────────────────
-
-  const refreshLibrary = useCallback(async () => {
-    // The pose/template lists ride along; the sequence list is the one that
-    // may not exist yet against the real backend, and it must fail soft —
-    // monitor, estop and logs keep working either way.
-    try {
-      const list = await api.sequences.list();
-      setSummaries(list);
-      setSequencesUnavailable(false);
-    } catch {
-      setSummaries([]);
-      setSequencesUnavailable(true);
-    }
-    try {
-      setPoses(await api.poses.list());
-    } catch {
-      setPoses([]);
-    }
-    try {
-      setTemplates(await api.templates.list());
-    } catch {
-      setTemplates([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshLibrary();
-  }, [refreshLibrary]);
-
-  // A provider list that fails to load must not take the bench with it.
-  useEffect(() => {
-    api.plugins
-      .list()
-      .then(setProviders)
-      .catch(() => setProviders([]));
-  }, []);
-
   // Poll health continuously to detect sim/prod mode — including *switches*.
   // A user may start in `dev.sh sim` and later bring up `dev.sh prod` without
   // reloading; "still in the simulator" is exactly the misreading the mode
@@ -253,35 +210,14 @@ function Workspace() {
     };
   }, []);
 
-  // Land on something usable: the sequence that was open last, else the first.
-  useEffect(() => {
-    if (selectedId !== null || summaries.length === 0) return;
-    const remembered = localStorage.getItem(LAST_SEQUENCE_KEY);
-    const wanted = summaries.find((s) => s.id === remembered) ?? summaries[0];
-    setSelectedId(wanted.id);
-  }, [summaries, selectedId]);
-
-  useEffect(() => {
-    if (!selectedId) {
-      setSequence(null);
-      return;
-    }
-    localStorage.setItem(LAST_SEQUENCE_KEY, selectedId);
-    api
-      .sequences
-      .get(selectedId)
-      .then(setSequence)
-      .catch(() => setSequence(null));
-  }, [selectedId]);
-
   // Switching sequences closes whatever pointed into the old one.
   const selectSequence = useCallback(
     (id: string | null) => {
-      setSelectedId(id);
+      library.setSelectedId(id);
       setSelection(null);
       preview.stop();
     },
-    [preview],
+    [library.setSelectedId, preview],
   );
 
   // A reload can drop the block/marker the inspector was editing.
@@ -317,12 +253,12 @@ function Workspace() {
       if (!selectedId) return undefined;
       const updated = await attempt(() => api.sequences.patch(selectedId, { blocks: next }));
       if (updated) {
-        setSequence(updated);
+        applySequence(updated);
         void refreshLibrary();
       }
       return updated;
     },
-    [selectedId, attempt, refreshLibrary],
+    [selectedId, attempt, applySequence, refreshLibrary],
   );
 
   /**
@@ -407,8 +343,10 @@ function Workspace() {
         }
       }
     },
-    [latched, executing, show],
+    [latched, runningSequence, show],
   );
+
+  useNumberKeys(poses, gotoPose);
 
   /** Send the arm to the first station's pose, stopping preview first. */
   const goToStart = useCallback(() => {
@@ -419,99 +357,16 @@ function Workspace() {
 
   /** Instantiate a template through the station wizard — the 模板 tab's verb. */
   const useTemplate = useCallback(
-    (tpl: SeqTemplate) => {
+    (tpl: (typeof templates)[number]) => {
       preview.stop();
       setWizardTemplate(tpl);
     },
     [preview],
   );
 
-  // Number keys fire the first nine poses: the operator's hands are usually
-  // on the camera or the arm, and the same binding takes a foot pedal.
-  const posesRef = useRef(poses);
-  posesRef.current = poses;
-  const gotoRef = useRef(gotoPose);
-  gotoRef.current = gotoPose;
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const node = event.target as HTMLElement | null;
-      if (node && /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return;
-      if (node?.closest("[role='dialog']")) return;
-      const digit = Number(event.key);
-      if (!Number.isInteger(digit) || digit < 1 || digit > 9) return;
-      const pose = posesRef.current[digit - 1];
-      if (!pose) return;
-      event.preventDefault();
-      void gotoRef.current(pose);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   // ── sequence menu dialogs ─────────────────────────────────────────────────
 
-  const openDialog = (kind: NonNullable<typeof dialog>) => {
-    setNameDraft(kind === "create" ? "" : (sequence?.name ?? ""));
-    if (kind === "create") {
-      setCreateStart("blank");
-      setCreateTemplateId(templates[0]?.id ?? "");
-    }
-    setDialog(kind);
-  };
-
-  const submitDialog = async () => {
-    const name = nameDraft.trim();
-    if (dialog === "create") {
-      // 从模板：名称由向导接管，直接进入逐站位示教。
-      if (createStart === "tpl") {
-        const tpl = templates.find((t) => t.id === createTemplateId);
-        if (tpl) {
-          // 手上在臂上时监视器不该播模拟画面。
-          preview.stop();
-          setWizardTemplate(tpl);
-          setDialog(null);
-          return;
-        }
-      }
-      if (name) {
-        const created = await attempt(() => api.sequences.create(name));
-        if (created) {
-          if (createStart === "copy" && sequence) {
-            await attempt(() => api.sequences.patch(created.id, { blocks: sequence.blocks }));
-          }
-          await refreshLibrary();
-          selectSequence(created.id);
-        }
-      }
-    } else if (dialog === "rename" && sequence && name && name !== sequence.name) {
-      const updated = await attempt(() => api.sequences.patch(sequence.id, { name }));
-      if (updated) {
-        setSequence(updated);
-        void refreshLibrary();
-      }
-    } else if (dialog === "delete" && sequence) {
-      const removed = await attempt(async () => {
-        await api.sequences.remove(sequence.id);
-        return true;
-      }, `已删除序列「${sequence.name}」`);
-      if (removed) {
-        setDialog(null);
-        await refreshLibrary();
-        selectSequence(null);
-        return;
-      }
-    } else if (dialog === "template" && sequence) {
-      const created = await attempt(() =>
-        api.templates.create(sequence.id, name || sequence.name),
-      );
-      if (created) {
-        show("success", `已存为模板「${created.name}」—— 复印即脱钩，两不相干`);
-        void refreshLibrary();
-      }
-    }
-    setDialog(null);
-  };
+  const dialogsRef = useRef<SequenceDialogsHandle>(null);
 
   // ── display state ─────────────────────────────────────────────────────────
 
@@ -586,21 +441,21 @@ function Workspace() {
             </select>
             {meta ? <span className="seq-bar__meta num">{meta}</span> : null}
             <span className="seq-bar__spacer" />
-            <button type="button" className="ghost" disabled={!canEditSequences} onClick={() => openDialog("create")}>
+            <button type="button" className="ghost" disabled={!canEditSequences} onClick={() => dialogsRef.current?.open("create")}>
               新建
             </button>
-            <button type="button" className="ghost" disabled={!sequence} onClick={() => openDialog("rename")}>
+            <button type="button" className="ghost" disabled={!sequence} onClick={() => dialogsRef.current?.open("rename")}>
               改名
             </button>
             <button
               type="button"
               className="ghost"
               disabled={!sequence || sequence.blocks.length === 0}
-              onClick={() => openDialog("template")}
+              onClick={() => dialogsRef.current?.open("template")}
             >
               存为模板
             </button>
-            <button type="button" className="ghost" disabled={!sequence || executing} onClick={() => openDialog("delete")}>
+            <button type="button" className="ghost" disabled={!sequence || executing} onClick={() => dialogsRef.current?.open("delete")}>
               删除
             </button>
           </>
@@ -769,123 +624,18 @@ function Workspace() {
         * Escape keeps its meaning as "stop the arm", not "dismiss this". */}
       {prodWarning ? <ModeWarning onAcknowledge={() => setProdWarning(false)} /> : null}
 
-      {dialog ? (
-        <Dialog
-          label={
-            dialog === "create"
-              ? "新建序列"
-              : dialog === "rename"
-                ? "序列改名"
-                : dialog === "template"
-                  ? "存为模板"
-                  : "删除序列"
-          }
-          onClose={() => setDialog(null)}
-        >
-          <div className="sheet__head">
-            <h2 className="sheet__title">
-              {dialog === "create"
-                ? "新建序列"
-                : dialog === "rename"
-                  ? "序列改名"
-                  : dialog === "template"
-                    ? "存为模板"
-                    : `删除序列「${sequence?.name}」？`}
-            </h2>
-          </div>
-          {dialog === "delete" ? (
-            <p className="hint">序列删除不可撤销；它引用的位姿都保留在素材库里。</p>
-          ) : dialog === "create" ? (
-            <>
-              {createStart !== "tpl" ? (
-                <div className="sheet__field">
-                  <span className="sheet__label">名称</span>
-                  <input
-                    autoFocus
-                    value={nameDraft}
-                    onChange={(event) => setNameDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void submitDialog();
-                    }}
-                  />
-                </div>
-              ) : null}
-              <span className="sheet__label">从什么开始：</span>
-              <div className="create-opts">
-                <button
-                  type="button"
-                  className={createStart === "blank" ? "sel" : undefined}
-                  onClick={() => setCreateStart("blank")}
-                >
-                  空白
-                </button>
-                <button
-                  type="button"
-                  className={createStart === "tpl" ? "sel" : undefined}
-                  disabled={templates.length === 0}
-                  onClick={() => setCreateStart("tpl")}
-                >
-                  从模板
-                </button>
-                <button
-                  type="button"
-                  className={createStart === "copy" ? "sel" : undefined}
-                  disabled={!sequence}
-                  title={sequence ? "复制当前序列的结构与动作" : "先打开一条序列才能复制"}
-                  onClick={() => setCreateStart("copy")}
-                >
-                  复制现有
-                </button>
-              </div>
-              {createStart === "tpl" ? (
-                <select
-                  value={createTemplateId}
-                  onChange={(event) => setCreateTemplateId(event.target.value)}
-                  aria-label="选择模板"
-                >
-                  {templates.length === 0 ? (
-                    <option value="">（还没有模板 — 在「⋯」里存一个）</option>
-                  ) : (
-                    templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} · {t.station_count} 站位
-                      </option>
-                    ))
-                  )}
-                </select>
-              ) : null}
-            </>
-          ) : (
-            <div className="sheet__field">
-              <span className="sheet__label">名称</span>
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(event) => setNameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void submitDialog();
-                }}
-              />
-            </div>
-          )}
-          {dialog === "template" ? (
-            <p className="hint">模板只存结构（站位 / 时长 / 标记 / 过渡），不存关节角。</p>
-          ) : null}
-          <div className="sheet__actions">
-            <button
-              type="button"
-              className={dialog === "delete" ? "danger primary" : "primary"}
-              disabled={dialog === "delete" ? false : dialog === "create" ? (createStart === "tpl" ? templates.length === 0 : nameDraft.trim() === "") : nameDraft.trim() === ""}
-              onClick={() => void submitDialog()}
-            >
-              {dialog === "delete" ? "确认删除" : createStart === "tpl" && dialog === "create" ? "开始向导" : "确定"}
-            </button>
-            <button type="button" className="ghost" onClick={() => setDialog(null)}>
-              取消
-            </button>
-          </div>
-        </Dialog>
-      ) : null}
+      <SequenceDialogs
+        ref={dialogsRef}
+        sequence={sequence}
+        templates={templates}
+        attempt={attempt}
+        show={show}
+        refreshLibrary={refreshLibrary}
+        applySequence={applySequence}
+        selectSequence={selectSequence}
+        stopPreview={() => preview.stop()}
+        onWizard={(tpl) => setWizardTemplate(tpl)}
+      />
     </div>
   );
 }
