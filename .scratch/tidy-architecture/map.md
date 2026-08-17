@@ -15,7 +15,10 @@
 
 ## Decisions so far
 
-（空 —— 建图会话不解决任何票。票解决后在此追加一行要点 + 链接。）
+- [01 五档清理方案总批](issues/01-five-tier-cleanup-plan.md) — 全部照单：五档 + R0-R9 按推荐接受；05–09、11 解锁。
+- [02 DSH 借/不借矩阵](issues/02-dsh-borrow-matrix.md) — 7 借 5 不借照单；三张图写进 ARCHITECTURE.md 一个锚点；10 解锁，04 经 10。
+- [03 臂接口内核行与安全姿势](issues/03-arm-kernel-row-safety.md) — Q-F=a（接口表内核行）；Q-G=a（外置闩锁、单点耦合）。
+- [05 档 0 纯删除](issues/05-tier0-deletions.md) — 完成，commit 135e13e；两处历史记录保留提及（票内 Answer 有偏差记录）。
 
 ## Not yet specified
 
