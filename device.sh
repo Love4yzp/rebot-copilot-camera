@@ -71,13 +71,9 @@ cmd_push() {
 		--exclude '.venv/' \
 		--exclude 'node_modules/' \
 		--exclude '__pycache__/' \
-		--exclude '/poses/' \
-		--exclude '/sequences/' \
-		--exclude '/templates/' \
+		--exclude '/data/' \
 		--exclude '.pio/' \
-		--filter 'protect /poses/' \
-		--filter 'protect /sequences/' \
-		--filter 'protect /templates/' \
+		--filter 'protect /data/' \
 		"$HERE/" "$HOST:$REMOTE_DIR/"
 
 	step "[r2x] 同步 vendored 臂层"

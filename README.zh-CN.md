@@ -164,6 +164,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 |---|---|---|
 | `REBOT_HOST` | `127.0.0.1` | 监听地址。**改成 `0.0.0.0` 等于把机械臂控制权开放给整个网络，本项目没有认证层** |
 | `REBOT_PORT` | `18790` | 端口 |
+| `REBOT_DATA_DIR` | `./data` | 操作者数据根目录：`poses/`、`sequences/`、`templates/` 三个库都在它下面，一文档一 JSON |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到别的 CDC 设备上看起来就是相机坏了）|
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 | `REBOT_TUNING_FILE` | `./config/tuning.yaml` | 调参面板的落盘文件。文件缺失 = 默认值 |
@@ -205,7 +206,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 网络不可信、又需要远程访问时，不要把服务直接暴露出去：在 localhost 服务前面挡一个带认证的反向代理（Caddy / nginx 的 basic auth 即可），或走带 ACL 的私有网络（WireGuard / Tailscale 之类）。认证是部署层的职责，不是这个应用的 —— 这类配置属于部署现场，不进仓库。
 
-`push` **不删设备上的 `poses/`、`sequences/`、`templates/`** —— 那是操作员现场示教出来的点位和序列，只存在于设备上。
+`push` **不删设备上的 `data/`** —— 操作员现场示教出来的点位和序列都在那里，只存在于设备上。
 
 ---
 

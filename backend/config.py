@@ -13,11 +13,13 @@ from pathlib import Path
 
 from .assets import REPO_ROOT
 
-#: The v2 libraries: pose library, block/marker sequences, sequence templates.
-#: Operator data, one JSON per document, gitignored.
-POSES_DIR = Path(os.environ.get("REBOT_POSES_DIR", REPO_ROOT / "poses"))
-SEQUENCES_DIR = Path(os.environ.get("REBOT_SEQUENCES_DIR", REPO_ROOT / "sequences"))
-TEMPLATES_DIR = Path(os.environ.get("REBOT_TEMPLATES_DIR", REPO_ROOT / "templates"))
+#: Operator data: pose library, block/marker sequences, sequence templates.
+#: One JSON per document, gitignored. All three live under one DATA_DIR so
+#: runtime data has a single overridable root instead of three scattered ones.
+DATA_DIR = Path(os.environ.get("REBOT_DATA_DIR", REPO_ROOT / "data"))
+POSES_DIR = DATA_DIR / "poses"
+SEQUENCES_DIR = DATA_DIR / "sequences"
+TEMPLATES_DIR = DATA_DIR / "templates"
 
 #: Drop-in plugins, one folder each with a plugin.json. Gitignored like the
 #: operator data — it is content the user added, not this repo's source — but
