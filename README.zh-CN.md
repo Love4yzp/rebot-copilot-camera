@@ -14,7 +14,20 @@
 
 第一个落地场景是自动化多视角拍摄：reBot-RS 六轴臂夹佳能相机，被拍物体固定不动。照片留在相机 SD 卡里 —— 本项目只管把臂开到位、把快门按下去。
 
-> 软件已完成，386 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
+> 软件已完成，464 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
+
+---
+
+## 什么东西在哪
+
+| 分区 | 目录 |
+|---|---|
+| 程序 | `backend/`（内核、编排引擎、插件层、API —— 分层见 `docs/ARCHITECTURE.md`）、`frontend/`（界面 + 开发 mock + 契约 runner）、`firmware/esp32-shutter/`、`vendor/reBotArm_control_py/`（锁版本的 submodule） |
+| 配置与数据 | `config/`（硬件 yaml + 操作者调参）、`data/`（运行时位姿 / 序列 / 模板，不入 git） |
+| 部署 | `deploy/`（systemd unit + udev 规则） |
+| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构锚点、硬件事实）、`PROGRESS.md`、本 README |
+| 验证 | `tests/`、`contract/cases/`（golden 契约用例） |
+| 入口 | `./dev.sh`（全在本机跑）、`./device.sh`（每条命令经 ssh 落到设备） |
 
 ---
 

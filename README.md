@@ -14,7 +14,20 @@ drag → release → record → ordered waypoints + actions → arrive → settl
 
 The first deployment is automated multi-view photography: a reBot-RS six-axis arm holds a Canon camera, the subject stays put. Photos land on the camera's SD card — this project only drives the arm to the pose and presses the shutter.
 
-> Software complete, 386 tests; two on-hardware checks pending. Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors).
+> Software complete, 464 tests; two on-hardware checks pending. Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors).
+
+---
+
+## Where everything lives
+
+| Area | Directories |
+|---|---|
+| Program | `backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `frontend/` (UI + dev mock + contract runner), `firmware/esp32-shutter/`, `vendor/reBotArm_control_py/` (pinned submodule) |
+| Config & data | `config/` (hardware yaml + operator tuning), `data/` (runtime poses / sequences / templates, gitignored) |
+| Deploy | `deploy/` (systemd units + udev rule) |
+| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture anchor, hardware facts), `PROGRESS.md`, this README |
+| Verification | `tests/`, `contract/cases/` (golden contract cases) |
+| Entries | `./dev.sh` (everything on this machine), `./device.sh` (everything over ssh to the device) |
 
 ---
 

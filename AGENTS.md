@@ -106,6 +106,7 @@ backend/
     models.py       Pose / EventMarker / Hold+Transition 块（判别式联合）/ Sequence / SeqTemplate
     normalize.py    normalize 的 Python 实现（TS 端是 frontend/src/timeline/model.ts），写入前必跑
     store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
+    seed_demo.py    首启演示数据（四方位：4 位姿 + 序列 + 模板）。与 mock 的镜像被契约用例 seeded-library 钉死
 
   shutter/
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
@@ -115,6 +116,7 @@ backend/
     sim.py          SimShutter，可脚本化失败
 
   api/
+    preflight.py    序列 / agent 共用的播放预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
     estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
@@ -136,6 +138,11 @@ deploy/             systemd unit ×2 + udev 规则
 config/rebotarm_rs.yaml  从上游 fork 的硬件配置（挂相机后要重调）
 config/tuning.yaml       调参面板的落盘值（操作者标定）；文件缺失 = 代码默认值
 vendor/reBotArm_control_py/  git submodule，锁 d540405
+
+examples/rebot-plugin-turntable/  可安装的动作插件示例（pyproject [tool.uv.sources] 钉住路径，挪动要同步改）
+data/               运行时数据根：poses/ sequences/ templates/ 三个库（gitignored；REBOT_DATA_DIR 可改家）
+.agents/ + skills-lock.json   threejs-* 参考技能（git 跟踪，刻意保留，见「技能体系」）
+tests/               测试自成「测试」章节，不在地图里复述
 ```
 
 ---
