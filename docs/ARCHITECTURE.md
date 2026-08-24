@@ -127,7 +127,7 @@
 
 | 层 | 目录 | 内容 |
 |---|---|---|
-| **内核 Kernel**(物理地基,永不动) | `app/backend/arm/` + `app/backend/safety/` + `app/backend/core/controller.py` | 动词集:hold(急停走的就是它)/ move_to / settle / relax / set_float / follow;前置件:SafetyLatch + 运动闸门 |
+| **内核 Kernel**(物理地基,永不动) | `app/backend/arm/` + `app/backend/safety/` + `app/backend/core/controller.py` + `app/backend/core/activity.py` | 动词集:hold(急停走的就是它)/ move_to / settle / relax / set_float / follow;前置件:SafetyLatch + 运动闸门 + 互斥活动表(`decide`) |
 | **时空编排引擎** | `app/backend/core/`(executor / floatlock / broadcaster / events)+ `app/backend/sequences/` | 位姿 / 序列 / 模板 / 时间轴 + 执行器 |
 | **插件层** | `app/backend/actions/` + `app/backend/shutter/` | 动作插件框架与快门实现;插件够不到臂 |
 | **入口层** | `app/backend/api/` | HTTP / WS 入口,只调 controller 与 store |

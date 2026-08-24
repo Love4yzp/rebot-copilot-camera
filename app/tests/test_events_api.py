@@ -259,7 +259,4 @@ def test_the_source_defaults_to_the_ui_and_grants_nothing(rig):
     assert r.status_code == 409, "a source is a label, not a permission"
 
     client.post("/api/estop/clear")
-    # A clear now hands the arm over in drag teaching; leave it before
-    # commanding a run.
-    client.post("/api/teach", json={"enabled": False})
     assert client.post(f"/api/sequences/{sid}/execute").json()["source"] == "ui"

@@ -221,20 +221,29 @@ def test_goto_is_409_while_the_stop_is_engaged(client: TestClient):
     assert r.json()["detail"]["error"] == "estop_latched"
 
 
-def test_goto_is_409_while_teaching_or_playing(rig):
+def test_goto_is_409_while_teaching(rig):
     client, *_ = rig
     a = make_pose(client, 0.2)
-    b = make_pose(client, 0.9)
-
     client.post("/api/teach", json={"enabled": True})
     assert client.post(f"/api/poses/{a}/goto").status_code == 409
     client.post("/api/teach", json={"enabled": False})
+
+
+def test_goto_retargets_while_a_sequence_is_playing(rig):
+    """Goto sets destination. A second card click replaces it; Play of a
+    stored sequence stays exclusive (stop first)."""
+    client, *_ = rig
+    a = make_pose(client, 0.2)
+    b = make_pose(client, 0.9)
 
     sid = client.post("/api/sequences", json={"name": "long"}).json()["id"]
     client.patch(f"/api/sequences/{sid}", json={"blocks": [
         {"type": "hold", "pose_id": b, "duration_s": 30.0, "markers": []}]})
     assert client.post(f"/api/sequences/{sid}/execute").status_code == 200
-    assert client.post(f"/api/poses/{a}/goto").status_code == 409
+    r = client.post(f"/api/poses/{a}/goto")
+    assert r.status_code == 200
+    assert r.json()["mode"] == "playback"
+    assert r.json()["activity"] == "playback"
 
 
 def test_goto_preflights_the_path_from_the_current_pose(tmp_path: Path):

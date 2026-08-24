@@ -105,8 +105,7 @@ function Workspace() {
   const latched = state?.estop.latched ?? false;
   const resting = state?.resting ?? false;
 
-  // 解除急停后，后端自动进入零重力示教 —— 前端必须同步打开示教条，
-  // 否则监视器写着「松手自动锁定 · 直接保存」，页面上却没有保存控件。
+  // 示教条跟「+ 录位姿」走。急停解除不再自动进示教（后端 idle 保持）。
   // 只在示教的上升沿打开：取消流程走「示教 → 待命」的下降沿，绝不能被
   // 这个效应重新拉回示教条（TeachBar 挂载时的 teach(true) 是幂等的）。
   const prevTeachRef = useRef(false);
@@ -389,9 +388,11 @@ function Workspace() {
         ? shutterJustFired
           ? "acting"
           : "moving"
-        : arrived
-          ? "arrived"
-          : "idle";
+        : resting
+          ? "idle"
+          : arrived
+            ? "arrived"
+            : "idle";
 
   const canEditSequences = !sequencesUnavailable;
   // 总时长只出现在走带条时间码一处（一处信息一处措辞）；这里只报站位数。

@@ -35,6 +35,7 @@ from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..shutter.base import ShutterDriver
 from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
+from .activity import Activity, Effect, Intent, decide
 from .broadcaster import Broadcaster
 from .executor import DEFAULT_APPROACH_S, SequenceExecutor
 from .floatlock import FloatLock, FloatLockConfig
@@ -101,6 +102,9 @@ class Controller:
         # keep saying 到位 while the arm holds. Dropped only by an explicit
         # stop — after POST /api/execute/stop the playback field is null.
         self._executor: SequenceExecutor | None = None
+        #: Exclusive activity. Flags below are the hardware side-effects of
+        #: that activity, not a second state machine — see activity.py.
+        self._activity = Activity.IDLE
         self._teaching = False
         #: Rest: zero torque, the arm lying on its mechanical stops. Entered
         #: only at the zero pose; the loop wakes the arm the moment it drifts.
@@ -266,6 +270,26 @@ class Controller:
         with self._lock:
             return self._executor is not None and not self._executor.is_finished
 
+    @property
+    def activity(self) -> Activity:
+        """Exclusive activity. ``mode`` is this, or ``estop`` when latched."""
+        with self._lock:
+            return self._activity
+
+    def _set_activity(self, activity: Activity) -> None:
+        self._activity = activity
+        self._teaching = activity is Activity.TEACHING
+        self._resting = activity is Activity.RESTING
+
+    def _require(self, intent: Intent):
+        """Latch first, then the activity table. Raises ``RuntimeError`` on deny."""
+        if self.latch.is_latched:
+            raise RuntimeError("emergency stop is engaged")
+        decision = decide(self._activity, intent)
+        if not decision.ok:
+            raise RuntimeError(decision.reason)
+        return decision
+
     def play(
         self,
         sequence: Sequence,
@@ -285,14 +309,9 @@ class Controller:
         otherwise unanswerable after the fact.
         """
         with self._lock:
+            self._require(Intent.PLAY)
             if self._resting:
                 self._wake_from_rest()
-            if self.latch.is_latched:
-                raise RuntimeError("emergency stop is engaged")
-            if self.is_playing:
-                raise RuntimeError("a sequence is already executing")
-            if self._teaching:
-                raise RuntimeError("cannot execute while teaching")
 
             executor = SequenceExecutor(
                 sequence,
@@ -313,6 +332,7 @@ class Controller:
                      sequence.name, len(sequence.blocks), source)
             executor.start()
             self._executor = executor
+            self._set_activity(Activity.PLAYING)
             return executor
 
     def goto(self, pose: Pose, source: str = "ui") -> SequenceExecutor:
@@ -359,14 +379,13 @@ class Controller:
             blocks=[TransitionBlock(duration_s=duration_s)],
         )
         with self._lock:
+            decision = self._require(Intent.GOTO)
+            if decision.effect is Effect.RETARGET:
+                if self._executor is not None and not self._executor.is_finished:
+                    self._executor.abort("retargeted to a new pose")
+                self._executor = None
             if self._resting:
                 self._wake_from_rest()
-            if self.latch.is_latched:
-                raise RuntimeError("emergency stop is engaged")
-            if self.is_playing:
-                raise RuntimeError("a sequence is already executing")
-            if self._teaching:
-                raise RuntimeError("cannot move while teaching")
 
             executor = SequenceExecutor(
                 ephemeral,
@@ -387,6 +406,7 @@ class Controller:
             log.info("goto %r at the request of %r", target.name, source)
             executor.start()
             self._executor = executor
+            self._set_activity(Activity.PLAYING)
             return executor
 
     def resume(self) -> bool:
@@ -414,6 +434,8 @@ class Controller:
             # semantics). Only a run that finished *on its own* keeps
             # broadcasting its final "done".
             self._executor = None
+            if self._activity is Activity.PLAYING:
+                self._set_activity(Activity.IDLE)
             return running
 
     # ── shutdown ─────────────────────────────────────────────────────────────
@@ -461,7 +483,7 @@ class Controller:
     @property
     def is_teaching(self) -> bool:
         with self._lock:
-            return self._teaching
+            return self._activity is Activity.TEACHING
 
     def set_teaching(self, enabled: bool) -> None:
         """Enter or leave zero-force drag teaching.
@@ -470,13 +492,15 @@ class Controller:
         the same loop is the mock's 409, and the operator can stop first.
         """
         with self._lock:
-            if enabled and self._resting:
-                self._wake_from_rest()
-            if enabled and self.latch.is_latched:
-                raise RuntimeError("emergency stop is engaged")
-            if enabled and self.is_playing:
-                raise RuntimeError("cannot teach while a sequence is executing")
-            self._teaching = enabled
+            if enabled:
+                self._require(Intent.TEACH_ON)
+                if self._resting:
+                    self._wake_from_rest()
+                self._set_activity(Activity.TEACHING)
+            else:
+                off = decide(self._activity, Intent.TEACH_OFF)
+                if off.ok:
+                    self._set_activity(off.activity)
             self._floatlock.reset()
             # Starts locked, so an arm nobody is holding yet does not sag.
             self._float_engaged = False
@@ -499,10 +523,7 @@ class Controller:
                 return
             if self.latch.is_latched:
                 raise RuntimeError("emergency stop is engaged")
-            if self.is_playing:
-                raise RuntimeError("a sequence is executing")
-            if self._teaching:
-                raise RuntimeError("cannot rest while teaching")
+            self._require(Intent.REST_ON)
             positions = self._last_state.positions
             if not positions or any(
                 abs(positions.get(name, 0.0)) > REST_AT_EPS
@@ -510,7 +531,7 @@ class Controller:
             ):
                 raise RuntimeError("arm is not at the zero pose — park home first")
             self.arm.relax()
-            self._resting = True
+            self._set_activity(Activity.RESTING)
             self._rest_snapshot = dict(positions)
             log.info("rest: torque dropped — the arm lies on its stops")
 
@@ -522,7 +543,7 @@ class Controller:
         """
         if not self._resting:
             return
-        self._resting = False
+        self._set_activity(Activity.IDLE)
         self._rest_snapshot = None
         positions = self._last_state.positions
         if positions:
@@ -557,7 +578,6 @@ class Controller:
             latched = self.latch.is_latched
             if latched:
                 # The latched tick holds with torque, which is the wake.
-                self._resting = False
                 self._rest_snapshot = None
                 self._tick_latched(state)
             else:
@@ -593,9 +613,8 @@ class Controller:
         self.latch.record_freeze_pose(state.positions)
         frozen = self.latch.snapshot().freeze_pose or state.positions
 
-        if self._teaching:
+        if self._activity is Activity.TEACHING:
             # A floating arm under an engaged stop is a dropped arm.
-            self._teaching = False
             self._floatlock.reset()
             self._float_engaged = False
             self.arm.set_float(False)
@@ -603,6 +622,7 @@ class Controller:
         if self._executor is not None and not self._executor.is_finished:
             self._executor.abort("emergency stop engaged")
 
+        self._set_activity(Activity.IDLE)
         self.arm.hold(frozen)
         self._hold_target = dict(frozen)
 
@@ -618,6 +638,10 @@ class Controller:
             # Mid-move a large error is the point, so drift is only judged
             # against a hold, never against a moving target.
             self._hold_target = None
+            if self._executor.is_finished and self._activity is Activity.PLAYING:
+                finished = decide(self._activity, Intent.FINISH)
+                if finished.ok:
+                    self._set_activity(finished.activity)
             return
         self._hold_target = None
 
@@ -700,6 +724,7 @@ class Controller:
                     "velocities": dict(state.velocities),
                     "rate_hz": self.rate_hz,
                     "mode": self.mode,
+                    "activity": self._activity.value,
                     "resting": self._resting,
                     "estop": {
                         "latched": latch.latched,
@@ -716,14 +741,10 @@ class Controller:
 
     @property
     def mode(self) -> str:
-        """Coarse state for the UI. The latch outranks everything."""
+        """Coarse state for the UI. The latch outranks Activity."""
         if self.latch.is_latched:
             return "estop"
-        if self._teaching:
-            return "teach"
-        if self.is_playing:
-            return "playback"
-        return "idle"
+        return self._activity.value
 
     # ── thread driver ────────────────────────────────────────────────────────
     #

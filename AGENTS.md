@@ -99,6 +99,7 @@ app/backend/
     check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
 
   core/
+    activity.py     互斥活动表。decide(activity, intent) 是命令缝；闩锁不在这张表里
     controller.py   控制循环。闩锁在任何东西能命令臂之前检查
     events.py       语义事件名与信封。单向，不可否决
     executor.py     Sequence 执行器（块遍历）。纯逻辑，注入时钟/arm/shutter/已解析位姿

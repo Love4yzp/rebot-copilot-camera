@@ -95,6 +95,19 @@ def rig() -> Rig:
 def test_idle_by_default(rig: Rig):
     rig.step()
     assert rig.controller.mode == "idle"
+    assert rig.controller.activity.value == "idle"
+
+
+def test_rest_is_reported_as_rest_not_idle(rig: Rig):
+    rig.step(2)
+    rig.controller.set_resting(True)
+    rig.step()
+    assert rig.controller.mode == "rest"
+    assert rig.controller.activity.value == "rest"
+    states = [m for m in rig.published if m["type"] == "state"]
+    assert states[-1]["data"]["mode"] == "rest"
+    assert states[-1]["data"]["activity"] == "rest"
+    assert states[-1]["data"]["resting"] is True
 
 
 def test_playback_runs_a_sequence_to_completion(rig: Rig):
@@ -107,6 +120,16 @@ def test_playback_runs_a_sequence_to_completion(rig: Rig):
     assert rig.controller.executor.phase is Phase.DONE
     assert rig.shutter.shots == 2
     assert rig.controller.mode == "idle"
+
+
+def test_goto_retargets_instead_of_refusing_a_second_motion(rig: Rig):
+    first = Pose(name="a", joints={"joint1": 0.4, "joint2": 0.0})
+    second = Pose(name="b", joints={"joint1": 0.8, "joint2": 0.0})
+    rig.controller.goto(first)
+    rig.controller.goto(second)
+    assert rig.controller.mode == "playback"
+    rig.run_until_done()
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(0.8, abs=0.05)
 
 
 def test_cannot_start_two_sequences(rig: Rig):

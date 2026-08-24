@@ -35,6 +35,9 @@ def _controller(request: Request) -> Controller:
 
 class PlaybackState(BaseModel):
     mode: str
+    #: Exclusive activity (idle/teach/playback/rest/safelock). ``mode`` is
+    #: this, or ``estop`` when the latch is engaged.
+    activity: str
     playing: bool
     teaching: bool
     rate_hz: float
@@ -60,6 +63,7 @@ def playback_state(controller: Controller) -> PlaybackState:
     executor = controller.executor
     return PlaybackState(
         mode=controller.mode,
+        activity=controller.activity.value,
         playing=controller.is_playing,
         teaching=controller.is_teaching,
         rate_hz=controller.rate_hz,

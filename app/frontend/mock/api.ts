@@ -60,10 +60,12 @@ function estopConflict(state: MockState): MockResponse {
   });
 }
 
-/** `{mode, playing, teaching, rate_hz, playback, source}` — the PlaybackState shape. */
+/** `{mode, activity, playing, teaching, rate_hz, playback, source}` — the PlaybackState shape. */
 function playbackState(state: MockState): Record<string, unknown> {
+  const activity = state.mode === "estop" ? "idle" : state.mode;
   return {
     mode: state.mode,
+    activity,
     playing: state.mode === "playback",
     teaching: state.mode === "teach",
     rate_hz: 20,
@@ -209,11 +211,8 @@ export function handleApi(
     state.estop.source = null;
     state.estop.engaged_at = null;
     state.estop.freeze_pose = null;
-    // The backend's clear hands the arm to the operator in zero-gravity drag
-    // teaching (locked until a hand moves it) — a rigidly held arm right
-    // after a stop is one nobody can reposition. The run was already aborted
-    // at engage (see above) — nothing resumes.
-    if (state.mode === "estop") state.mode = "teach";
+    // Clear leaves the arm holding in idle. Teaching is an explicit intent.
+    if (state.mode === "estop") state.mode = "idle";
     state.goto = null;
     return json(200, estopStatus(state.estop, true));
   }
@@ -305,7 +304,6 @@ export function handleApi(
     if (state.estop.latched) return estopConflict(state);
     const pose = findPose(state, decodeSegment(poseGotoMatch[1]));
     if (!pose) return notFound(`no pose '${decodeSegment(poseGotoMatch[1])}'`);
-    if (state.mode === "playback") return conflict("a sequence is already executing");
     if (state.mode === "teach") return conflict("cannot move while teaching");
     state.mode = "playback";
     state.goto = {
