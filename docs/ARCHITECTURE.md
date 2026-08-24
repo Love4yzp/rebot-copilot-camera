@@ -4,14 +4,13 @@
 
 它只回答一个问题:**这个参考方案是什么、概念怎么组织、层次怎么分、边界在哪**。它不回答:
 
-- 交互骨架(时空编辑器)的布局/行为/接口 → [`docs/TIMELINE.md`](./TIMELINE.md)
+- 交互骨架的布局/行为 → [`docs/TIMELINE.md`](./TIMELINE.md)
 - 硬件数值与已验证事实 → [`docs/HARDWARE_NOTES.md`](./HARDWARE_NOTES.md)
-- 当前进度与阻塞 → [`PROGRESS.md`](../PROGRESS.md)
+- 现在做到哪 → [`PROGRESS.md`](../PROGRESS.md)
 - 怎么使用与部署 → [`README.md`](../README.md)
 - 扩展点怎么用 → [`docs/PLUGINS.md`](./PLUGINS.md)
-- 历史决策的来龙去脉 → issue #1(历史记录,不再追加;新决策写这里)
 
-**设计模式的先后:先立骨架(本文件),插件与参考场景后做。** 骨架已立:内核是地基,时空编排引擎与参考 UI 是承重结构,插件是装修,参考场景是装修之上的示范内容。
+历史在 `git log`。骨架已立:内核是地基,时空编排引擎与参考 UI 是承重结构,插件是装修,参考场景是装修之上的示范内容。
 
 ---
 
@@ -136,7 +135,7 @@
 
 | 接口 | 动作集 | 实现 | 使用者 |
 |---|---|---|---|
-| **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例)。前置件:SafetyLatch + 运动闸门。失败语义:出声回落 + SIM 徽章 |
+| **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例)。前置件:SafetyLatch + 运动闸门。失败语义:无 `--sim` 连不上真臂则拒绝启动(`ArmUnavailable`),不静默退回模拟器 |
 | **ShutterDriver** | is_connected / ping / focus / shoot / pair / pair_smart / camera_connected / camera_status;失败**抛异常**不回布尔(「继续拍」还是「停整条」必须当场可辨) | `Esp32Shutter`(真板)、`SimShutter` | runner worker(经 ShutterProvider)+ 快门自检。**永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到 |
 | **ActionProvider** | fields(触发表单)/ probe(健康)/ run(执行,阻塞常态) | entry_points + `app/plugins/` 目录两条发现路径 | runner worker,每 provider 一条;`ActionContext` 里**没有 arm** |
 | **ActionContext** | 只读:sequence id/name、waypoint 位置与备注、触发时刻关节角、`emit()` 单向事件 | — | 动作插件 |
@@ -191,4 +190,4 @@
 
 ---
 
-*这份文档随设计模式演进而更新;它不记录历史(那是 issue #1),只记录当前的设计模式是什么。*
+*只记录当前的设计模式。历史在 git log。*

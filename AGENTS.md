@@ -15,20 +15,17 @@
 git submodule update --init                  # 臂层是 submodule，漏了 import 就失败
 (cd app && uv sync)
 (cd app && uv run pytest)
-(cd app && uv run -m backend.app --sim)      # 无硬件启动，127.0.0.1:18790
 (cd app && uvx ruff check backend tests)
 
 cd app/frontend && npm install && npm run build  # 产物进 app/backend/static/
-cd app/frontend && npm run dev                   # 热更新，proxy 到 18790
+cd app/frontend && npm run dev                   # 热更新，proxy 到人已经起好的 18790
 
-./dev.sh prod [--sim]                        # 本机：构建前端 + 起后端，同一个源
-./dev.sh sim                                 # 本机：只起前端，内存 mock，无后端
-./dev.sh build                               # 只构建前端（唯一所有者）
-# API 联调不起前端：./dev.sh prod --no-build，/docs 即控制台。旧名 mock 是 sim 的别名，过渡期后移除。
-
+./dev.sh --help                              # 本机启动入口，命令以脚本头为准
 ./device.sh push                             # build + rsync + 重启（部署到设备，需先设 REBOT_HOST_SSH）
 ./device.sh status                           # 跑在真臂还是模拟器上
 ```
+
+**本机后端只由人用 `./dev.sh` 启动**（日常 `./dev.sh sim`，真臂 `./dev.sh prod`）。Agent 用 pytest 验证，不要执行 `uv run -m backend.app`，不要占用 18790。端口预检是双实例安全阀，不能关。
 
 **区分两个脚本的是代码在哪台机器上执行**：`dev.sh` 全在本机，`device.sh` 每条命令都经 ssh 落到设备上。
 构建是本机工作，所以归 `dev.sh build`，`device.sh push` 调它 —— 抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是你要发的那个。
@@ -83,7 +80,7 @@ app/backend/
     base.py         ArmDriver Protocol + ArmState。hold(q) 与 move_to(q, t) 是两个动词
     sim.py          SimArm。一阶滞后 + 可注入拖动。开发与测试的地基
     session.py      ArmSession —— 薄封装上游 RebotArm。dict↔ndarray 只在这一处转
-    factory.py      真臂 / 模拟器选择。fallback 一定出声
+    factory.py      真臂 / 模拟器选择。无 `--sim` 连不上真臂则拒绝启动，不静默回落
 
   safety/
     latch.py        SafetyLatch。急停闩锁，纯逻辑不碰硬件
@@ -118,7 +115,7 @@ app/backend/
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
     protocol.py     行协议编解码 + LineReader
     esp32.py        串口客户端。单条在途，id 防迟到回包
-    factory.py      真板 / 模拟选择。**快门永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到；只有 --sim 拿到模拟快门
+    factory.py      真板 / 模拟选择。**快门永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到；只有 sim 模式拿到模拟快门
     sim.py          SimShutter，可脚本化失败
 
   api/
@@ -201,7 +198,9 @@ FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍�
 「已到位」只能由 `phase === "done"` 点亮，且只在 done 的上升沿认领 —— controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，陈旧的 `done` 不能当作新点击的答复。急停、进入示教、开始新一次执行都必须立刻作废「已到位」—— 臂被冻在别处、即将被人推走、或已在路上。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
 
 **急停在栈顶**
-`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。prod 进入警告层 z-55，必须低于急停。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+
+模式徽标（sim 蓝 / prod 灰阶）与连接状态是两个维度：断连是徽标旁灰阶脉冲「已断连」，不覆盖模式徽标，也不占用红 / 绿。
 
 **退出路径先回零**
 Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零位（复用 goto 的进站限速与到位检测），到位后才停控制循环 —— 停循环永远是退出的最后一步。闩锁吸合时例外：原地冻结保持退出，不回零（闩锁吸合意味着出了状况，不再规划新运动）。信号归 `app/backend/app.py` 的 `ParkOnExitServer` 管，**别换回 `uvicorn.run`**：原版第二次 Ctrl+C 置 `force_exit` 并**跳过 lifespan shutdown**，回零整段就没了。systemd 的 `TimeoutStopSec=60` 是按最坏回零 ~37s 留的，别调小。配套：`main()` 在碰 CAN 之前先做端口预检（`_ensure_port_free`）—— 一个绑不上端口的实例若连了臂，它的退出回零就会去动一台归别的进程管的臂。
@@ -227,11 +226,9 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 ## 提交约定
 
-每个 commit 结束时代码库能跑：`cd app && uv run pytest` 绿、`cd app && uv run -m backend.app --sim` 能起。
+每个 commit 结束时代码库能跑：`cd app && uv run pytest` 绿。后端由人用 `./dev.sh sim` 起，agent 不要自己起。
 
-**改代码的 commit 里必须同时更新 [`PROGRESS.md`](./PROGRESS.md) 的状态**，不要分开提交，否则状态和代码漂移。
-
-commit message 写正常英文散文，说清**为什么**这么做，尤其是偏离原计划的地方 —— 这个仓库里好几个决定的理由只存在于 commit message 里。
+[`PROGRESS.md`](./PROGRESS.md) 只记现在在哪。**状态变了**才改，changelog 写 git commit，不要往文档里堆。
 
 ---
 
@@ -239,16 +236,18 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
-| `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
-| [`PROGRESS.md`](./PROGRESS.md) | 状态机：现在做到哪、什么被卡住、交接协议 | 接手一个 session 时 |
-| [`README.md`](./README.md)（英文）/ [`README.zh-CN.md`](./README.zh-CN.md)（中文） | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时；用户报故障先翻它的故障排查表。改 README 时两份同步改 |
-| [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
+| `AGENTS.md`（本文件） | 铁律、代码地图、约定 | 开工前 |
+| [`CONTEXT.md`](./CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
+| [`PROGRESS.md`](./PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
+| [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改）。改 README 时两份同步 | 要用这个服务时 |
+| [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
 | [`app/firmware/esp32-shutter/README.md`](./app/firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
-| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴编辑器设计定稿（新一版交互骨架）：块/标记模型 / 预演与执行 / 布局 / 三期路线 | 动前端界面或编排交互时 |
-| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
-| [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份 B601-RS 主从录制/回放 demo 提炼的**物理事实与策略**（限速、插值、首尾衔接、温度保护）。那份走 LeRobot，**代码一行都不能抄，抄的是数值和「为什么必须这么做」** | 写示教录制、轨迹回放、限速/过热保护时 |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
+| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴交互约束 | 动前端或编排交互时 |
+| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 动作插件 / 触发源 / 事件订阅 | 加动作、接外部触发时 |
+| [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份主从 demo 抄来的**数值和为什么**，代码一行都不能抄 | 写限速 / 回放 / 过热保护时 |
+| [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md) | Activity 互斥、Latch 横切 | 改命令缝时 |
 
-`CLAUDE.md` 只是指向本文件的指针，不要往里写内容。
+`CLAUDE.md` 只是指向本文件的指针，不要往里写内容。启动命令以 `./dev.sh --help` 为准。
 
-**每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、进度在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。
+**每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、现状在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。

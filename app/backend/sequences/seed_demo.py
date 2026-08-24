@@ -1,8 +1,8 @@
 """First-boot demo data: the four-station shoot the dev mock shows.
 
-``./dev.sh sim`` opens on a populated library — four poses, the 四方位拍摄
+``./dev.sh ui`` opens on a populated library — four poses, the 四方位拍摄
 sequence and the 四方位 template — because the mock seeds them. The real stores
-start empty, so ``./dev.sh prod --sim`` used to open on a blank library and a
+start empty, so ``./dev.sh sim`` used to open on a blank library and a
 visitor pressing play got nothing to watch. This closes that gap: ``main()``
 plants the same demo into empty stores, so the full stack demos like the mock.
 

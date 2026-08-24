@@ -143,7 +143,19 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 ### 13. 保持发热 = 真实重力矩；零位悬停是白烧 —— 休息态卸力
 
-真臂现象（2026-08）：臂停在抬起姿态时电机持续发热，操作者觉得比浮动「费力」。稳态物理账：MIT 保持时电机电流 = 该姿态的**真实**重力矩（前馈错了只会让臂停在目标偏移处，位置环把差值拉回来，总和不变）——j3 肘关节静止就扛 ~6.8 N·m，停哪都差不多热，这是硬件本性（上游 demo 自带温度保护）。真正的浪费在**零位**：臂被前馈悬停在止点上方 ~0.02 rad，电机顶着 ~6.8 N·m 白烧，机械止点就在下面扛不到力。对策已落地：`POST /api/rest` 休息态——零位门限（`REST_AT_EPS=0.03`）内发 kp=0 / kd=0 / tau=0 的 MIT（**不是 disable，急停铁律不动**），臂落到止点上、电机近零电流；控制循环每 tick 看漂移（`REST_WAKE_DRIFT=0.05`），臂一被碰就醒（重新保持），任何运动指令 / 急停也自动醒。**待真机确认**：卸力后各关节是否都真被止点托住（j1/j4/j5/j6 的止点未在文档里确认过）。
+MIT 保持时电机电流 = 该姿态的**真实**重力矩（前馈错了只会让臂停在目标偏移处，总和不变）——j3 静止就扛 ~6.8 N·m。浪费在**零位**：臂被前馈悬停在止点上方，电机白烧。对策：`POST /api/rest` 在零位门限内发 kp=0 / kd=0 / tau=0 的 MIT（**不是 disable**），臂落止点；碰一下或任何运动 / 急停即醒。**待真机确认**：卸力后 j1/j4/j5/j6 是否都真被止点托住。
+
+### 14. 本机 CAN 与控制模式
+
+macOS 直连 = XCAN-USB + MacCAN `libPCBUSB.dylib`（`~/.local/lib`）。darwin 后端把 yaml `channel: can0` 映射 PCAN_USBBUS1，yaml 零改动。`./dev.sh prod` 注入 `DYLD_FALLBACK_LIBRARY_PATH`；裸 `uv run` 报 `load PCBUSB failed`。
+
+固件在 **enable 时锁存控制模式**：必须先 `mode_mit()` 再 `enable_all()`，运行时切模式被无视。因此臂终生只走 MIT（斜坡 / 保持 / 浮动）。POS_VEL 在本机固件上不可用。急停冻结 = 停斜坡 + 钉当前位姿。
+
+j2/j3 的 rest 是机械下止点。q≈0 处测重力「FLIPPED」是假阳性（止点扛走重力）。正确方法 = 上游 lift-then-float。
+
+### 15. 断电顺序
+
+臂在跑 / 回零时断臂电源，CAN 调用阻塞 ~2s → 看门狗误报急停。干净收工：点「休息」→ 停后端（休息态退出不回零）→ 断臂电源。开工程序相反：先臂上电，再 `./dev.sh prod`。prod 连不上真臂拒绝启动，不退回模拟器。
 
 ---
 
@@ -151,21 +163,22 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 ### B1. CAN 接入形态
 
-`app/config/rebotarm_rs.yaml` 写 `channel: can0`（socketcan），但上游 README 的"通信接口"一栏写的是 "USB2CAN Serial Bridge or CAN Interface"。这台设备走哪条没确认。
+已解，见已验证 #14。
 
-查法：`ip link show can0`、`ls /dev/ttyACM*`，然后跑上游 `example/2_zero_and_read.py`。
+### B2. 挂佳能机身后重力补偿；j2 过补
 
-### B2. 挂佳能机身后重力补偿是否还准
+上游标定是**空载**的臂（误差 5–11%）。机上无相机；夹爪已装回并接线（yaml `gripper: true`，7 关节，profile 锁 `gripper`）。gripper 读数恒定不是串位（j2 一动即分开）。
 
-上游标定是**空载**的臂（误差 5–11%）。末端挂一台机身后负载变了，浮动手感和保持精度都会变。
+**约束**：肘展开姿态（j2≈0.44 / j3≈0.85 rad）j2 前馈过补，松手会自己上冲到 ~47°，有冲顶 / 夹手风险。近零位（j2=0.35 / j3=0.3）可保持。**标定完成前不要在展开姿态手掰示教。** 调参模型已有 `gravity.scale/bias`（`tau = scale·g_model + bias`，只许 6 臂关节；浮动中拒改）。
 
-**现状（2026-08）**：机上无相机；夹爪已装回并**接线**（官方一整套：电机 0x07 在总线，yaml `gripper: true`，7 关节，profile 锁 `gripper`，质量走 URDF 全值）。 读回的 `gripper` 位置恒为固定值 `0.008436…`（夹爪停在机械原位、未操作、无重力前馈）；开机瞬间 j2 零位读数恰好与之逐位相等、一度疑似「反馈串位」，但臂一动即分开（j2 变而 gripper 不变）——**不是串位，已排除**，别据此追查。
+**标定**（lift-then-float；UI 没有「示教」按钮）：
 
-**控制模式锁定（2026-08-14 真臂实测）**：固件在 **enable 时锁存控制模式**——必须先 `mode_mit()`（上游示例顺序）再 `enable_all()`，运行时 `ensure_mode` 切换被无视。实测证据链：后端先 enable 后切 mode → MIT 急停冻结软绵绵（无效）、POS_VEL goto 零位移超时；改成「先 mode_mit → enable → kp=50 保持」→ 臂立刻硬。**因此臂终生只走 MIT**：运动 = MIT 斜坡（`ArmSession.move_to` 按时钟插值 setpoint，执行器每 tick 重发）、保持 = MIT 钉住、浮动 = MIT 跟随；POS_VEL 模式在本机固件上不可用。急停冻结由此天然成立（停斜坡 + 钉当前位姿）。XCAN-USB 适配器走 MacCAN `libPCBUSB.dylib`（`~/.local/lib`），motorbridge 的 darwin 后端把 `channel: can0` 映射为 PCAN_USBBUS1；直跑 `uv run` 的零位示例脚本须先 `export DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:..."`，`dev.sh prod` 已自动注入，裸跑报 `load PCBUSB failed`。零位巡检：7 电机（j1–j6 + gripper 0x07）全部在线并已 set_zero。随动态（kp=0）夹爪手指自重漂移 0.09→0.26 rad 属预期（夹爪无重力前馈、零刚度）；后端保持态用 kp=50 钉住。**verify_gravity 首次实测（2026-08-14）**：q≈0 采样得到 joint2/joint3「FLIPPED」是**假阳性**——q=0 是机械下止点（上游 `auto_float_test` 明示「motors 2/3 rest at their lower stop q=0」），臂搁在挡块上，止点扛走全部重力，实测≈0 而模型 g(q)≠0。脚本「q≈0 有强重力信号」的指引对这条臂是错的。**正确方法 = 上游 lift-then-float**：先抬离止点，在悬空姿态重测（或直接以浮动漂移手感为最终判据——点「+ 录位姿」进零重力，臂若原地漂移就是前馈不准，用 `auto_float_test` 的 k/c 逐关节修正思路）。无夹爪态 = yaml 开关 `false` + profile `bare`（0.8 kg 从动力学模型剥离，与上游标定状态一致）；死重态（装着未接线）= 开关 `false` + profile `gripper`（质量保留、执行器缺席）。**负载机制已落地**：`app/config/tuning.yaml` 的 `payload.profile`（bare/camera/gripper）+ 调参面板；选 camera 会把 `camera.mass` / `camera.com` 注入 `gripper_end` 连杆的 `<inertial>`（`assets.effective_urdf_path()`），切换闸在「臂不在浮动」。camera 未填 mass 时后端拒绝切换（422）。
+1. 点素材库底部「+ 录位姿」，底部绿条「零重力 · 臂可推动，松手自动锁定」即示教条。看关节角点「详细数据 ▾」，退出点「× 取消」。
+2. 手掰到测试姿态（近零或展开），松手观察 3–5s：往上冲 → 降该关节 scale；往下掉 → 升 scale；方向固定量小 → 调 bias。
+3. 每调一次先「× 取消」退出再改面板（浮动中改会 409）。直到松手 10s 零漂移，点「保存到配置」。
+4. 至少标 j2/j3 两个姿态（近零 + 展开），验证回零到位不再超时、展开姿态浮动不再上冲。
 
-**浮动重力前馈真臂实测（2026-08-14）**：夹爪死重（0.8 kg）状态下,零重力浮动在「肘展开」姿态（j2≈0.44 / j3≈0.85 rad）时 joint2 前馈**过度补偿**——松手后 2 秒内 j2 被推到 0.82 rad（47°，抬了 22°）后稳定；而在 j2=0.35 / j3=0.3 姿态保持 10 秒零漂移。即 vendor URDF 的 j2 重力项随姿态的幅值/符号偏差远超 5–11% 标定误差（疑似与 #11 的「j2 幻影反向」配重效应同源）。**手感标定完成前,不要在展开姿态手掰示教——臂会自己往上走,有冲顶/夹手风险。** 后果已实测到：臂卡在 47° 时 goto 零位也「未到位」超时——kp=50 的 MIT 斜坡压不过 +19 N·m 级的前馈过补,臂无法下降(最终经退出回零/人工协助回落)。修法方向：仿上游 `auto_float_test` 的逐关节 k/c 重力修正,把 `gravity.scale[joint]` 加进调参模型。**已落地（2026-08-14）**：调参模型加 `gravity` 段（每关节 scale/bias,`tau = scale·g_model + bias`,缺省 = 恒等,只许 6 个臂关节、scale 0.2–2.0 / bias ±5 N·m）,面板「重力修正」夹 J2–J5 共 8 个旋钮;闸门与负载同档（浮动中拒改,前馈会跳）。**标定流程（下次真机,仿上游 lift-then-float）**：界面词汇先对齐——UI 没有「示教」按钮：进示教 = 点素材库底部「+ 录位姿」，底部弹出绿条「零重力 · 臂可推动，松手自动锁定」即示教条，看关节角点条上「详细数据 ▾」，退出 = 点「× 取消」。① 点「+ 录位姿」进示教,手掰到测试姿态（如 j2≈0.4 / j3≈0.85,即之前漂移的姿态）;② 松手观察 3–5s:往上冲 = 前馈过补 → 降该关节 scale;往下掉 = 欠补 → 升 scale;漂移方向固定但量小 = 调 bias;③ 每调一次先点示教条「× 取消」退出（锁定）再改面板（浮动中改会 409）;④ 直到松手 10s 零漂移,点「保存到配置」;⑤ 至少标 j2/j3 两个姿态（近零 + 展开）,验证「回零」到位不再超时、展开姿态浮动不再上冲。
-
-相机到货后：整体称重（机身+支架）填 `camera.mass`，量出质心相对末端法兰的偏移填 `camera.com`，切到 camera profile，然后按上面的 lift-then-float 流程用浮动漂移手感复核。次选：接受手感变差并靠位置环刚度补，或重调浮动/锁定的速度阈值（面板里就能调，上游默认线速度 `0.04 m/s`、角速度 `0.08 rad/s`）。
+相机到货后：整机称重填 `camera.mass`，质心相对末端法兰的偏移填 `camera.com`，切到 camera profile，再按上面的流程复核。camera 未填 mass 时后端拒绝切换（422）。
 
 ### B3. R2x 上 500 Hz 能否稳住
 
@@ -186,8 +199,7 @@ link4↔link5      link5↔link6  gripper_end↔gripper_left  gripper_end↔grip
 
 ### 其它待确认
 
-- **断电顺序（2026-08-14 实测）**：臂在跑/回零时直接断臂电源,CAN 调用阻塞 ~2s → 控制循环 tick 间隙超限 → 看门狗急停（此时臂已断电,冻结无害,但属误报）。干净收工顺序 = 点「休息」→ 停后端（休息态退出不回零）→ 断臂电源。开工程序相反:先臂上电,再起后端 —— 后端起动即连 CAN,臂没电会 fallback 到模拟器并大声警告。
-- 七个关节的读数符号与零位是否和 URDF 一致（上游说 rest pose = 伸直 = q=0，未实测）。**验证思路**：lift-then-float（先抬离止点再悬空重测）+ 观察漂移方向 —— 符号相反 = 前馈在推臂（浮动时「自己抬起来」的嫌疑），判定流程见 #B2 标定步骤。跑真臂前先退出所有 backend 实例（独占 CAN 总线）。
+- 七个关节的读数符号与零位是否和 URDF 一致（上游说 rest pose = 伸直 = q=0）。验证：lift-then-float + 看漂移方向，见 #B2。跑真臂前先退出所有 backend 实例（独占 CAN）。
 - 夹爪 `0x07` 的行程与 URDF 里 `joint_left`/`joint_right` 的米制限位如何对应。
-- 进站限速 `FIRST_APPROACH_MAX_SPEED = 0.25 rad/s`（`app/backend/core/executor.py`）是按 demo 安全同步速度 15°/s 取的（`docs/rebot-policy.md` §1.3），挂相机后的安全值未实测。execute 与 goto 的进站段都走它；真机上观察进站是否过冲/共振，必要时再降。
-- 到位静止判定 `SETTLE_DRIFT_RAD = 0.003` / `SETTLE_MIN_S = 0.15`（`app/backend/core/executor.py`）：hold 的时钟与快门都要等「进 eps 窗 + 驻留 0.15s 内漂移 < 0.003 rad」才算到位。刻意用位置漂移而不用差分速度判静止 —— 100 Hz 差分会把 CAN 读抖动放大 ~100 倍，速度阈值在真机上可能永远不满足，表现为每个序列都在进站 deadline abort。真机上若见到这种「永远不到位」，先查这条：把两个阈值放宽到能稳定通过的最紧值并回填。
+- 进站限速 `FIRST_APPROACH_MAX_SPEED = 0.25 rad/s`（`app/backend/core/executor.py`）按 demo 安全同步 15°/s 取的（`docs/rebot-policy.md` §1.3），挂相机后未标定。
+- 到位静止判定 `SETTLE_DRIFT_RAD = 0.003` / `SETTLE_MIN_S = 0.15`。用位置漂移、不用差分速度 —— 100 Hz 差分会把 CAN 抖动放大。真机若「永远不到位」，先放宽这两值到能稳定通过的最紧值并回填。

@@ -1,13 +1,13 @@
 """FastAPI application entry point.
 
-Run with::
+Operators start from the repo root::
 
-    uv run -m backend.app --sim     # no hardware
-    uv run -m backend.app           # real arm over CAN
+    ./dev.sh sim       # no hardware
+    ./dev.sh prod      # real arm over CAN
 
-Route mounting order matters: the static-file mount must come last, after every
-router and websocket, or it swallows their paths. (Learned the hard way in the
-previous generation of this service.)
+``uv run -m backend.app`` is what ``dev.sh`` execs (and what ``device.sh run``
+uses on the box). Don't start a second copy — the port probe refuses before
+CAN, because two instances would fight over the arm.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 from contextlib import asynccontextmanager
+from typing import ClassVar
 
 import uvicorn
 from fastapi import FastAPI
@@ -274,7 +275,7 @@ class _LevelColorFormatter(logging.Formatter):
     """
 
     _RESET = "\x1b[0m"
-    _COLORS = {
+    _COLORS: ClassVar[dict[int, str]] = {
         logging.DEBUG: "\x1b[34m",
         logging.INFO: "\x1b[32m",
         logging.WARNING: "\x1b[33m",
@@ -303,18 +304,85 @@ def _configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 
+def _interface_ipv4s() -> list[str]:
+    """Best-effort list of this machine's non-loopback IPv4 addresses.
+
+    On Linux we walk /sys/class/net and ask each interface for its address
+    via SIOCGIFADDR — the only dependency-free way to see every NIC (Wi-Fi,
+    NetBird's wt0, …) including ones DNS doesn't know about. Elsewhere fall
+    back to resolving the hostname, which usually finds only the primary
+    address. The result feeds a startup banner: informational, so partial
+    is fine, and an interface without an IPv4 (can0) is simply skipped.
+    """
+    ips: dict[str, None] = {}  # ordered dedupe
+    if sys.platform == "linux":
+        import fcntl
+        import struct
+        from pathlib import Path
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for iface in sorted(Path("/sys/class/net").iterdir()):
+                try:
+                    buf = fcntl.ioctl(
+                        probe.fileno(), 0x8915, struct.pack("256s", iface.name[:15].encode())
+                    )
+                    ips.setdefault(socket.inet_ntoa(buf[20:24]))
+                except OSError:
+                    continue  # no IPv4 on this interface
+        finally:
+            probe.close()
+    else:
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if not ip.startswith("127."):
+                    ips.setdefault(ip)
+        except OSError:
+            pass
+    return [ip for ip in ips if not ip.startswith("127.")]
+
+
+def _print_serving_banner(host: str, port: int) -> None:
+    """Vite-style summary of where the UI can actually be reached."""
+    # flush=True: under systemd / a pipe, stdout is block-buffered and the
+    # banner would otherwise surface long after the log lines around it.
+    print(f"\n  ➜  Local:   http://127.0.0.1:{port}", flush=True)
+    network = _interface_ipv4s() if host == "0.0.0.0" else (
+        [host] if host not in ("127.0.0.1", "localhost") else []
+    )
+    for i, ip in enumerate(network):
+        label = "Network:" if i == 0 else "         "
+        print(f"  ➜  {label} http://{ip}:{port}", flush=True)
+    if host == "0.0.0.0" and not network:
+        print("  ➜  Network: (none found)", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rebot-copilot-camera")
     parser.add_argument("--sim", action="store_true", help="force SimArm/SimShutter")
-    parser.add_argument("--host", default=config.HOST)
+    parser.add_argument(
+        "--host", default=None, help="listen address (default: all interfaces)"
+    )
     parser.add_argument("--port", type=int, default=config.PORT)
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="bind 127.0.0.1 only — keep the UI off the network",
+    )
     args = parser.parse_args()
+
+    # Precedence: explicit --host > --local > REBOT_HOST / default (all
+    # interfaces). The banner below tells the operator where the UI actually
+    # answers, so a typo'd env var is visible at startup, not at first click.
+    host = args.host or ("127.0.0.1" if args.local else config.HOST)
+    _print_serving_banner(host, args.port)
 
     _configure_logging()
 
     # Before anything touches CAN: a port conflict means another instance is
     # already responsible for the arm.
-    _ensure_port_free(args.host, args.port)
+    _ensure_port_free(host, args.port)
 
     # Fail at startup rather than mid-motion if the DM arm's assets leaked in.
     assets.assert_rs_model()
@@ -368,7 +436,7 @@ def main() -> None:
         enabled=os.environ.get("REBOT_SEED_DEMO", "1") != "0",
     )
 
-    ParkOnExitServer(uvicorn.Config(app, host=args.host, port=args.port)).run()
+    ParkOnExitServer(uvicorn.Config(app, host=host, port=args.port)).run()
 
 
 if __name__ == "__main__":

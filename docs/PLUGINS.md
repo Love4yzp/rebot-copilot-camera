@@ -2,7 +2,7 @@
 
 **这份文档写给要扩展这台机器的开发者。**
 
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) 的三个不变量里,插件是第三层 —— 内核是地基,交互骨架是承重结构,插件是装修。骨架正向时间轴编辑器演进(设计定稿见 [`TIMELINE.md`](./TIMELINE.md)),插件体系原样继承 —— 动作的家从 waypoint 的动作列表搬到时间轴的块内标记,扩展点不变。
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) 的三个不变量里,插件是第三层 —— 内核是地基,交互骨架是承重结构,插件是装修。动作的家是时间轴的块内标记(见 [`TIMELINE.md`](./TIMELINE.md)),扩展点不变。
 
 概念定义在 ARCHITECTURE.md,交互约束在 TIMELINE.md,改代码的铁律在 [`AGENTS.md`](../AGENTS.md)。这里只讲扩展点。
 

@@ -31,6 +31,8 @@ const MODE_LABEL: Record<Mode, string> = {
   teach: "示教中",
   playback: "运行中",
   estop: "已急停",
+  rest: "休息中",
+  safelock: "安全锁定",
 };
 
 /**

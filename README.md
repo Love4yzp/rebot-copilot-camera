@@ -14,7 +14,7 @@ drag → release → record → ordered waypoints + actions → arrive → settl
 
 The first deployment is automated multi-view photography: a reBot-RS six-axis arm holds a Canon camera, the subject stays put. Photos land on the camera's SD card — this project only drives the arm to the pose and presses the shutter.
 
-> Software complete, 464 tests; two on-hardware checks pending. Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors).
+> Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors). What's done and blocked is in **[PROGRESS.md](./PROGRESS.md)**.
 
 ---
 
@@ -25,7 +25,7 @@ The first deployment is automated multi-view photography: a reBot-RS six-axis ar
 | Program | `app/backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `app/frontend/` (UI + dev mock + contract runner), `app/firmware/esp32-shutter/`, `app/vendor/reBotArm_control_py/` (pinned submodule) |
 | Config & data | `app/config/` (hardware yaml + operator tuning), `app/data/` (runtime poses / sequences / templates, gitignored) |
 | Deploy | `app/deploy/` (systemd units + udev rule) |
-| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture anchor, hardware facts), `PROGRESS.md`, this README |
+| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture, hardware, interaction), `PROGRESS.md` (current), this README |
 | Verification | `app/tests/`, `app/contract/cases/` (golden contract cases) |
 | Entries | `./dev.sh` (everything on this machine), `./device.sh` (everything over ssh to the device) |
 
@@ -35,7 +35,7 @@ The first deployment is automated multi-view photography: a reBot-RS six-axis ar
 
 | | | If you don't have it |
 |---|---|---|
-| reBot-RS robot arm | 6 joints + gripper, RobStride, 48V, CAN | `--sim` runs a simulated arm — everything but real motion works |
+| reBot-RS robot arm | 6 joints + gripper, RobStride, 48V, CAN | `./dev.sh sim` runs a simulated arm — everything but real motion works |
 | USB-CAN adapter | host ↔ arm | same |
 | Canon camera | body must support Bluetooth remote | `SimShutter` — shutter calls are logged only |
 | XIAO ESP32-S3 | shutter bridge: USB to host, BLE to camera | same |
@@ -64,17 +64,17 @@ Already cloned without `--recursive`: `git submodule update --init`.
 ## Try it (no hardware)
 
 ```bash
-cd app && uv run -m backend.app --sim
+./dev.sh sim
 ```
 
-Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, walks waypoints and pretends to fire the shutter — the whole workflow runs.
+Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, walks waypoints and pretends to fire the shutter — the whole workflow runs. `./dev.sh status` reports who is on the port. `./dev.sh --help` is the command list.
 
-Frontend work: `cd app/frontend && npm run dev` (hot reload, proxies to 18790).
+Frontend work against a running backend: `cd app/frontend && npm run dev` (hot reload, proxies to 18790).
 Tests: `cd app && uv run pytest`.
 
-`./dev.sh` wraps the two local modes — `./dev.sh prod` builds the frontend and runs the backend on one origin (add `--sim` for no hardware), `./dev.sh sim` runs the frontend alone. API integration without the frontend: `./dev.sh prod --no-build`, `/docs` is the console (requires the frontend to have been built once). The old name `mock` still works as an alias for `sim`, slated for removal. **Whatever the mode, the backend's arm safety measures (estop latch / motion gate / watchdog) are always on.** Deployment to the device is a different script, `./device.sh` — see "Deploy to the R2x"; daily use never touches it.
+`./dev.sh` is the local start path. `./dev.sh sim` starts the backend with no hardware (the old `--sim` spelling still works); `./dev.sh prod` for the real arm. `./dev.sh --no-build` skips the frontend rebuild once `app/backend/static/` exists (`/docs` is then the console). `./dev.sh ui` is frontend-only (in-memory mock, no Python). **Whatever the mode, the backend's arm safety measures (estop latch / motion gate / watchdog) are always on.** A second instance is refused before it touches CAN. Deployment to the device is a different script, `./device.sh` — see "Deploy to the R2x"; daily use never touches it.
 
-**Preview the frontend without the backend**: `./dev.sh sim`, or `cd app/frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from app/vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
+**Preview the frontend without the backend**: `./dev.sh ui`, or `cd app/frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from app/vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
 
 ---
 
@@ -82,14 +82,14 @@ Tests: `cd app && uv run pytest`.
 
 ### 1 · Start, and confirm it's on the real arm
 
-Arm on CAN, ESP32 on USB, camera mounted on the gripper. **No `--sim`**:
+Arm on CAN, ESP32 on USB, camera mounted on the gripper. **Not sim mode**:
 
 ```bash
-cd app && uv run -m backend.app
-curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
+./dev.sh prod
+./dev.sh status    # arm.simulated must be false
 ```
 
-**Don't skip this check.** Without `--sim`, a missing arm refuses to start. `simulated: true` means you asked for `--sim`.
+**Don't skip this check.** Outside sim mode, a missing arm refuses to start. `simulated: true` means you started `./dev.sh sim`.
 
 ### 2 · Pair the camera (once)
 
@@ -175,14 +175,14 @@ One exception: **if the emergency stop is latched, shutdown does not park** — 
 
 | Env var | Default | Notes |
 |---|---|---|
-| `REBOT_HOST` | `127.0.0.1` | Listen address. **Setting `0.0.0.0` opens arm control to the whole network — this project has no auth layer** |
+| `REBOT_HOST` | `0.0.0.0` | Listen address. The startup banner lists the addresses the UI is reachable on. **Any interface beyond localhost opens arm control to that network — this project has no auth layer** |
 | `REBOT_PORT` | `18790` | Port |
 | `REBOT_DATA_DIR` | `./app/data` | Operator data root: `poses/`, `sequences/`, `templates/` live under it, one JSON per document |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
 | `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
 | `REBOT_TUNING_FILE` | `./app/config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
 
-CLI: `--sim` / `--host` / `--port`.
+CLI: `./dev.sh sim` (= `--sim`) / `--host` / `--port` / `--local` (`--local` binds 127.0.0.1 only).
 `device.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
 
 **Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `app/config/tuning.yaml`, and「恢复已保存」reverts to the last save.
@@ -209,7 +209,7 @@ export REBOT_HOST_SSH=recomputer@<device-ip>   # `recomputer` is the reComputer 
 
 **No auth layer**, and this service moves a 48V arm. Two deployment shapes:
 
-**Localhost only (default, the unit in this repo)**
+**Localhost only (default, the unit in this repo — the app itself now binds all interfaces unless pinned via `REBOT_HOST=127.0.0.1` in the unit or `--local` on the CLI)**
 
 The service listens on `127.0.0.1`; remote access goes through an SSH tunnel: `./device.sh open` builds the tunnel and opens the browser. Right for networks you don't trust.
 
@@ -227,8 +227,8 @@ Untrusted network plus remote access: don't expose the service directly — put 
 
 | Symptom | Probably | Do |
 |---|---|---|
-| Service running, arm dead still | started with `--sim`, or the UI is talking to a leftover sim process | `curl -s :18790/api/health \| grep simulated`. Prod without `--sim` refuses to start if the arm is missing |
-| Falls back on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh prod` injects the dyld search path itself; a direct `cd app && uv run -m backend.app` needs `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
+| Service running, arm dead still | started with `./dev.sh sim`, or the UI is talking to a leftover sim process | `./dev.sh status` — `arm.simulated` must be false on hardware. Prod refuses to start if the arm is missing |
+| Won't start on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh` injects the dyld search path; don't start the backend any other way |
 | `import reBotArm_control_py` fails | submodule not pulled | `git submodule update --init` |
 | Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
 | Play returns **409** | estop latched, or already playing / teaching | `detail` says which |
@@ -275,11 +275,10 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 
 | | |
 |---|---|
-| [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, unbreakable conventions, architecture layers |
-| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts and traps — **verified** and **to-be-measured** kept strictly apart |
-| [PROGRESS.md](./PROGRESS.md) | Progress, blockers, handoff protocol |
+| [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, conventions |
+| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts — **verified** vs **to-be-measured** |
+| [PROGRESS.md](./PROGRESS.md) | Current status and blockers |
 | [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | Flashing, pairing, serial protocol |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | Original design and decision log (archived, no longer appended) |
 
 The arm layer is not written here — kinematics, dynamics, gravity compensation, trajectory planning and URDF all come from [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py).
 

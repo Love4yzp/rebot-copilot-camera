@@ -14,7 +14,7 @@
 
 第一个落地场景是自动化多视角拍摄：reBot-RS 六轴臂夹佳能相机，被拍物体固定不动。照片留在相机 SD 卡里 —— 本项目只管把臂开到位、把快门按下去。
 
-> 软件已完成，464 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
+> 改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。做到哪了见 **[PROGRESS.md](./PROGRESS.md)**。
 
 ---
 
@@ -25,7 +25,7 @@
 | 程序 | `app/backend/`（内核、编排引擎、插件层、API —— 分层见 `docs/ARCHITECTURE.md`）、`app/frontend/`（界面 + 开发 mock + 契约 runner）、`app/firmware/esp32-shutter/`、`app/vendor/reBotArm_control_py/`（锁版本的 submodule） |
 | 配置与数据 | `app/config/`（硬件 yaml + 操作者调参）、`app/data/`（运行时位姿 / 序列 / 模板，不入 git） |
 | 部署 | `app/deploy/`（systemd unit + udev 规则） |
-| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构锚点、硬件事实）、`PROGRESS.md`、本 README |
+| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构、硬件、交互）、`PROGRESS.md`（现状）、本 README |
 | 验证 | `app/tests/`、`app/contract/cases/`（golden 契约用例） |
 | 入口 | `./dev.sh`（全在本机跑）、`./device.sh`（每条命令经 ssh 落到设备） |
 
@@ -35,7 +35,7 @@
 
 | | | 没有的话 |
 |---|---|---|
-| reBot-RS 机械臂 | 6 关节 + 夹爪，RobStride，48V，CAN | `--sim` 跑模拟臂，除真运动外全部可用 |
+| reBot-RS 机械臂 | 6 关节 + 夹爪，RobStride，48V，CAN | `./dev.sh sim` 跑模拟臂，除真运动外全部可用 |
 | USB-CAN 适配器 | 主机 ↔ 臂 | 同上 |
 | 佳能相机 | 机身要支持蓝牙遥控 | `SimShutter`，快门调用只记日志 |
 | XIAO ESP32-S3 | 快门桥：USB 连主机，BLE 连相机 | 同上 |
@@ -64,17 +64,17 @@ cd app/frontend && npm install && npm run build
 ## 试跑（不接任何硬件）
 
 ```bash
-cd app && uv run -m backend.app --sim
+./dev.sh sim
 ```
 
-开 **http://127.0.0.1:18790**。模拟臂会响应示教拖动、走点位、假装按快门 —— 整个流程都能走通。
+开 **http://127.0.0.1:18790**。模拟臂会响应示教拖动、走点位、假装按快门 —— 整个流程都能走通。`./dev.sh status` 看端口上是谁。命令列表以 `./dev.sh --help` 为准。
 
-改前端：`cd app/frontend && npm run dev`（热更新，自动 proxy 到 18790）。
+对着已启动的后端改前端：`cd app/frontend && npm run dev`（热更新，自动 proxy 到 18790）。
 跑测试：`cd app && uv run pytest`。
 
-`./dev.sh` 把本机启动包成两种模式 —— `./dev.sh prod` 构建前端并起后端，同一个源（无硬件加 `--sim`）；`./dev.sh sim` 只起前端。API 联调不起前端：`./dev.sh prod --no-build`，/docs 即控制台（需已构建过一次前端）。旧名 `mock` 仍是 `sim` 的别名，过渡期后移除。**不管哪种模式，后端控臂的安全措施（急停闩锁 / 运动闸门 / 看门狗）都在。** 部署到设备是另一个脚本 `./device.sh`，见「部署到 R2x」一节，日常使用不需要它。
+`./dev.sh` 是本机启动入口。`./dev.sh sim` 无硬件起后端（旧写法 `--sim` 仍可用），真臂 `./dev.sh prod`。`./dev.sh --no-build` 跳过前端构建（需已构建过一次，`/docs` 即控制台）。`./dev.sh ui` 只起前端（内存 mock，无 Python）。**不管哪种模式，后端控臂的安全措施（急停闩锁 / 运动闸门 / 看门狗）都在。** 第二个实例在碰 CAN 之前就会被拒绝。部署到设备是另一个脚本 `./device.sh`，见「部署到 R2x」一节，日常使用不需要它。
 
-**不启动后端也能预览前端**：`./dev.sh sim`，或 `cd app/frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
+**不启动后端也能预览前端**：`./dev.sh ui`，或 `cd app/frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
 
 ---
 
@@ -82,14 +82,14 @@ cd app && uv run -m backend.app --sim
 
 ### 1 · 启动，然后确认它连上了真臂
 
-臂接 CAN、ESP32 接 USB、相机装夹爪上。**不加 `--sim`**：
+臂接 CAN、ESP32 接 USB、相机装夹爪上。**不是 sim 模式**：
 
 ```bash
-cd app && uv run -m backend.app
-curl -s http://127.0.0.1:18790/api/health | grep simulated    # 必须是 false
+./dev.sh prod
+./dev.sh status    # arm.simulated 必须是 false
 ```
 
-**这一步别省。** 不加 `--sim` 时连不上真臂会拒绝启动。`simulated: true` 表示你显式要了模拟器。
+**这一步别省。** 非 sim 模式时连不上真臂会拒绝启动。`simulated: true` 表示你用 `./dev.sh sim` 起的。
 
 ### 2 · 配对相机（一次性）
 
@@ -175,14 +175,14 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `REBOT_HOST` | `127.0.0.1` | 监听地址。**改成 `0.0.0.0` 等于把机械臂控制权开放给整个网络，本项目没有认证层** |
+| `REBOT_HOST` | `0.0.0.0` | 监听地址，启动横幅会列出实际可访问地址。**绑到本机以外的接口等于把机械臂控制权开放给对应网络，本项目没有认证层** |
 | `REBOT_PORT` | `18790` | 端口 |
 | `REBOT_DATA_DIR` | `./app/data` | 操作者数据根目录：`poses/`、`sequences/`、`templates/` 三个库都在它下面，一文档一 JSON |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到别的 CDC 设备上看起来就是相机坏了）|
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 | `REBOT_TUNING_FILE` | `./app/config/tuning.yaml` | 调参面板的落盘文件。文件缺失 = 默认值 |
 
-命令行：`--sim` / `--host` / `--port`。
+命令行：`./dev.sh sim`（= `--sim`）/ `--host` / `--port` / `--local`（`--local` 只绑 127.0.0.1）。
 `device.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
 
 **调参面板**（监视器区右侧「调参」按钮，prod 下进入需确认）：浮动手感 kp/kd、浮动/锁定阈值、到位判定、进站限速、负载 profile（bare/camera/gripper）。改动立即热生效 —— 示教浮动中也可以边掰边调 kp/kd；但负载 profile 切换要求臂不在浮动，序列执行中拒绝一切写入。热改只进内存，点「保存到配置」才写进 `app/config/tuning.yaml`；「恢复已保存」随时回到上次保存。
@@ -211,7 +211,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 **仅本机访问（默认，仓库里 unit 的配置）**
 
-服务只听 `127.0.0.1`，外部走 SSH 隧道：`./device.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。
+服务只听 `127.0.0.1`，外部走 SSH 隧道：`./device.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。（应用本身默认绑所有接口，是 unit 里显式钉住 `REBOT_HOST=127.0.0.1` 才收窄的，别删那行；开发机上想收窄用 `--local`。）
 
 **局域网访问（reComputer 上的常见形态）**
 
@@ -227,8 +227,8 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 | 现象 | 多半是 | 怎么办 |
 |---|---|---|
-| 服务在跑，臂一动不动 | 用了 `--sim`，或连的是残留模拟进程 | `curl -s :18790/api/health \| grep simulated`。不加 `--sim` 时连不上真臂会拒绝启动 |
-| macOS 上退回模拟器，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh prod` 会自动注入 dyld 搜索路径；直接 `cd app && uv run -m backend.app` 要自己设 `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
+| 服务在跑，臂一动不动 | 用了 `./dev.sh sim`，或连的是残留模拟进程 | `./dev.sh status` —— 真臂时 `arm.simulated` 必须是 false。prod 连不上真臂会拒绝启动 |
+| macOS 上起不来，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh` 会注入 dyld 搜索路径；不要用别的方式起后端 |
 | `import reBotArm_control_py` 失败 | submodule 没拉 | `git submodule update --init` |
 | 按播放返 **400** | 有点位越限 / 自碰撞，或相邻两点之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录点时不拒绝只警告**（臂物理上就在那），检查发生在播放前 |
 | 按播放返 **409** | 急停闩着，或已在播 / 在示教 | `detail` 里写了是哪种 |
@@ -275,11 +275,10 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 | | |
 |---|---|
-| [AGENTS.md](./AGENTS.md) | 改代码前读：四条铁律、代码地图、不能破的约定、架构分层 |
-| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实与坑，**已验证**和**待实测**严格分开 |
-| [PROGRESS.md](./PROGRESS.md) | 进度、阻塞项、交接协议 |
+| [AGENTS.md](./AGENTS.md) | 改代码前读：四条铁律、代码地图、约定 |
+| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实，**已验证** vs **待实测** |
+| [PROGRESS.md](./PROGRESS.md) | 现在做到哪、什么卡住 |
 | [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | 烧录、配对、串口协议 |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计与决策记录（已归档，不再追加） |
 
 臂层不自己写 —— 运动学、动力学、重力补偿、轨迹规划、URDF 全部来自 [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py)。
 

@@ -243,7 +243,7 @@ def test_a_self_driven_arm_moves_with_nothing_stepping_it():
 
     Controller.tick() only ever *reads* the arm; nothing in the service calls
     step(). An arm built the way the tests build one therefore sits frozen in
-    `uv run -m backend.app --sim`, and every playback ends in "not reached".
+    `./dev.sh sim`, and every playback ends in "not reached".
     """
     clock = FakeClock()
     arm = SimArm(("joint1",), clock=clock, tau=0.05, self_driven=True)
