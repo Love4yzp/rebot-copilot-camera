@@ -161,7 +161,9 @@ export function MonitorPanel({
 
   return (
     <section className="monitor" data-state={bannerState} aria-label="监视器">
-      {banner ? <div className="monitor__banner">{banner}</div> : null}
+      <div className="monitor__banner" hidden={!banner}>
+        {banner}
+      </div>
       <div className="monitor__status">{status}</div>
       <div className="monitor__sub">{sub}</div>
       <div className="monitor__tuning-btn">

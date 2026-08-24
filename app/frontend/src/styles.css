@@ -811,7 +811,9 @@ select:focus {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 12px;
+  /* Top band is always reserved for the absolute banner. Toggling it with
+   * data-state made the 3D canvas jump ~34px when a goto finished. */
+  padding: 46px 12px 12px;
   background: var(--ink);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
@@ -847,16 +849,7 @@ select:focus {
   font-weight: 650;
   letter-spacing: 1px;
   flex: none;
-}
-/* The banner is absolute at top:10px and horizontally centred — exactly
- * where the status line sits. Reserve its height whenever one is showing,
- * or the two print on top of each other. */
-.monitor[data-state="exec"],
-.monitor[data-state="estop"],
-.monitor[data-state="preview"],
-.monitor[data-state="teach"],
-.monitor[data-state="rest"] {
-  padding-top: 46px;
+  min-height: 1.3em;
 }
 .monitor[data-state="estop"] .monitor__status {
   color: #ffd9d6;
@@ -867,6 +860,7 @@ select:focus {
   text-align: center;
   max-width: 92%;
   flex: none;
+  min-height: 2.6em;
 }
 .monitor__view {
   width: 100%;
