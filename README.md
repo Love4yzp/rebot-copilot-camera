@@ -115,7 +115,7 @@ Without `?shoot=true` no frame is burned, but both links are still checked: `con
 3. Drag to the pose, **let go**. About 0.25 s after your hand stops, it locks in place.
 4. Name it, press "保存位姿" (Save pose). Repeat 2–4 for the next one.
 
-Poses live in the library and are **linked** by any number of sequences — edit a pose and every reference changes with it. The daily "go there" verb sits on each pose card: "去这里". The teach bar has its own estop button — in this mode your hands are on the arm, not the keyboard.
+Poses live in the library and are **linked** by any number of sequences — edit a pose and every reference changes with it. Daily tap-to-go: tap a pose card, the arm goes there. The teach bar has its own estop button — in this mode your hands are on the arm, not the keyboard.
 
 ### 4 · Cut the timeline
 
@@ -239,7 +239,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 | Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `device.sh run` both set `LANG=zh_CN.UTF-8` |
 | Arm suddenly stopped on its own | watchdog-triggered estop | reason is on the estop bar. All three conditions require **sustained** failure — a jitter or a dropped frame won't trigger |
 | 3D blank in the frontend | URDF / meshes not loaded | the drawer says "load failed" / "mesh missing" / "3D failed to initialise" — follow that line. Most common: submodule not pulled, `git submodule update --init`. Self-check: `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` should return 200 — note meshes live at the **package root**, not under `urdf/` |
-| Never lights green (in place) | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — "去这里" any pose or run the sequence again |
+| Never lights green (in place) | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — tap any pose card or run the sequence again |
 
 ---
 

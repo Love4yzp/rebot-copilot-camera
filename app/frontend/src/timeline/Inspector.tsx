@@ -57,7 +57,7 @@ export function Inspector({
               </span>
             </div>
             {!pose ? (
-              <p className="hint">库里的位姿已被删除 —— 执行到这块时臂保持当时姿态。</p>
+              <p className="hint">库里的位姿已删除 — 执行前会被拒绝。</p>
             ) : null}
             <div className="insp__field">
               <span className="insp__label">时长</span>

@@ -14,8 +14,6 @@ interface Props {
   sequenceName: string | null;
   /** The open sequence is the thing running — only then is a block "current". */
   runningSequence: boolean;
-  /** Override for the idle hint — the tap-to-go face points at the pose cards. */
-  idleHint?: string | null;
   /** Rest: zero torque, the arm lying on its stops. */
   resting?: boolean;
   onToggleRest?: () => void;
@@ -58,7 +56,6 @@ export function MonitorPanel({
   poseName,
   sequenceName,
   runningSequence,
-  idleHint,
   resting,
   onToggleRest,
   poses,
@@ -155,8 +152,7 @@ export function MonitorPanel({
   } else {
     banner = "";
     status = "实况 · 臂静止";
-    // 总时长只出现在走带条时间码一处；这里留一行行动引导。
-    sub = idleHint ?? (sequenceName ? "执行前先「▶ 预演」走一遍计划" : "没有序列");
+    sub = sequenceName ?? "";
   }
 
   return (
