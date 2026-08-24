@@ -138,7 +138,7 @@ export function MonitorPanel({
     }
   } else if (preview.active) {
     banner = "预演中 · 臂未动";
-    status = "预演回放 · 模拟姿态";
+    status = "预演 · 模拟姿态";
     if (preview.waiting) {
       sub = "等待标记 · 预演暂停，点「继续」";
     } else if (preview.playing) {

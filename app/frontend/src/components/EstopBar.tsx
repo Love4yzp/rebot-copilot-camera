@@ -29,7 +29,7 @@ function reasonText(reason: string | null, source: string | null): string {
 const MODE_LABEL: Record<Mode, string> = {
   idle: "待命",
   teach: "示教中",
-  playback: "运行中",
+  playback: "执行中",
   estop: "已急停",
   rest: "休息中",
   safelock: "安全锁定",

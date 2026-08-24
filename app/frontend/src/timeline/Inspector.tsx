@@ -178,7 +178,7 @@ export function Inspector({
         </div>
 
         {isWait ? (
-          <p className="hint">等待标记：预演与执行播放到此都停住，手动点「继续」。开放式，不估时长。</p>
+          <p className="hint">等待标记：预演与执行推进到此都会停住，需手动点「继续」。开放式等待，不预设时长。</p>
         ) : (
           <div className="insp__field">
             <span className="insp__label">预估</span>
