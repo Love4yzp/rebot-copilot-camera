@@ -125,7 +125,7 @@ app/backend/
     preflight.py    序列 / agent 共用的播放预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
-    estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
+    estop.py        急停端点。解除后 idle 保持，不自动示教；示教只走「+ 录位姿」
     poses.py        位姿库 CRUD / capture / links / goto
     sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
     templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）

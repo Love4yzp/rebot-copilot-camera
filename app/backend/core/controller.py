@@ -692,6 +692,7 @@ class Controller:
         if (
             self.client_watchdog is not None
             and self._activity in (Activity.PLAYING, Activity.TEACHING)
+            and self._playback_source != "shutdown"
             and self.client_watchdog.expired()
         ):
             self._lock_safe("client silent")

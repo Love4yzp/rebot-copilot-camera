@@ -643,3 +643,16 @@ def test_contact_lock_holds_and_stop_unlocks():
     assert holds, "safe lock must keep holding, not disable"
     rig.controller.stop_playback()
     assert rig.controller.activity.value == "idle"
+
+
+def test_park_home_is_not_safelocked_by_client_silence():
+    """Shutdown park is PLAYING with no WS. The disconnect watchdog must not
+    abort it — otherwise the process exits with the arm still in the air."""
+    rig = Rig(client_watchdog=True)
+    away = Pose(name="away", joints={"joint1": 0.5, "joint2": 0.0})
+    rig.controller.goto(away)
+    rig.run_until_done()
+    assert rig.controller.park_home() is not None
+    rig.step(int(3.0 / DT))
+    assert rig.controller.activity.value != "safelock"
+    assert rig.controller.mode in ("playback", "idle")
