@@ -341,7 +341,12 @@ def test_a_block_stretches_when_its_marker_is_still_running():
         sequence, poses, arm=h.arm, actions=h.actions, clock=h.clock)
     h.executor.start()
 
-    for _ in range(200):  # 2s — well past the 0.3s hold
+    for _ in range(2000):
+        h.step()
+        if h.actions.jobs:
+            break
+    assert h.actions.jobs, "the hold marker never started"
+    for _ in range(50):  # well past the 0.3s hold
         h.step()
     assert not h.executor.is_finished, "the block ended while its marker was still running"
     assert h.executor.progress().block_index == 0

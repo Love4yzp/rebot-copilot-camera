@@ -11,7 +11,7 @@ from backend.actions import InlineRunner, ShutterProvider
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
 from backend.sequences import EventMarker, HoldBlock, Pose, Sequence, TransitionBlock
-from backend.safety import LatchSource, SafetyLatch, Watchdog
+from backend.safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from backend.shutter import SimShutter
 
 JOINTS = ("joint1", "joint2")
@@ -27,7 +27,12 @@ class FakeClock:
 
 
 class Rig:
-    def __init__(self, watchdog: bool = False) -> None:
+    def __init__(
+        self,
+        watchdog: bool = False,
+        client_watchdog: bool = False,
+        contact: bool = False,
+    ) -> None:
         self.clock = FakeClock()
         self.arm = SimArm(JOINTS, clock=self.clock, tau=0.05)
         self.arm.connect()
@@ -44,6 +49,16 @@ class Rig:
             broadcaster=self.broadcaster,
             clock=self.clock,
             watchdog=self.watchdog,
+            client_watchdog=(
+                ClientWatchdog(clock=self.clock, timeout_s=2.0) if client_watchdog else None
+            ),
+            contact=(
+                ContactObserver(
+                    threshold_nm=8.0, window_s=0.05, enabled=True, clock=self.clock
+                )
+                if contact
+                else None
+            ),
             expected_period_s=DT,
             # Inline, so a fake clock and real worker threads never race. The
             # loop-stays-free property is the subject of test_action_runner.py.
@@ -559,3 +574,72 @@ def test_park_home_skips_a_resting_arm(rig: Rig):
     rig.step()
     states = [m for m in rig.published if m["type"] == "state"]
     assert states[-1]["data"]["resting"] is True
+
+
+def test_idle_after_goto_keeps_holding(rig: Rig):
+    holds: list[dict] = []
+    real = rig.arm.hold
+
+    def counting(q):
+        holds.append(dict(q))
+        return real(q)
+
+    rig.arm.hold = counting  # type: ignore[method-assign]
+    p = Pose(name="p", joints={"joint1": 0.4, "joint2": 0.0})
+    rig.controller.goto(p)
+    rig.run_until_done()
+    holds.clear()
+    rig.step(5)
+    assert holds, "idle ticks must keep pinning the arm"
+
+
+def test_play_silence_locks_idle_does_not():
+    silent = Rig(client_watchdog=True)
+    p = Pose(name="p", joints={"joint1": 0.8, "joint2": 0.0})
+    silent.controller.goto(p)
+    silent.step(int(2.1 / DT))
+    assert silent.controller.activity.value == "safelock"
+    assert silent.controller.mode == "safelock"
+
+    idle = Rig(client_watchdog=True)
+    idle.step(int(3.0 / DT))
+    assert idle.controller.activity.value == "idle"
+    assert idle.controller.mode == "idle"
+
+
+def test_contact_needs_a_dwell_and_does_not_judge_teach():
+    playing = Rig(contact=True)
+    p = Pose(name="p", joints={"joint1": 0.5, "joint2": 0.0})
+    playing.controller.goto(p)
+    playing.arm.inject_contact(20.0)
+    playing.step(1)
+    assert playing.controller.activity.value == "playback"
+    playing.step(int(0.06 / DT))
+    assert playing.controller.activity.value == "safelock"
+
+    teach = Rig(contact=True)
+    teach.controller.set_teaching(True)
+    teach.arm.inject_contact(20.0)
+    teach.step(int(0.2 / DT))
+    assert teach.controller.activity.value == "teach"
+
+
+def test_contact_lock_holds_and_stop_unlocks():
+    rig = Rig(contact=True)
+    p = Pose(name="p", joints={"joint1": 0.5, "joint2": 0.0})
+    rig.controller.goto(p)
+    rig.arm.inject_contact(20.0)
+    rig.step(int(0.08 / DT))
+    assert rig.controller.activity.value == "safelock"
+    holds: list[dict] = []
+    real = rig.arm.hold
+
+    def counting(q):
+        holds.append(dict(q))
+        return real(q)
+
+    rig.arm.hold = counting  # type: ignore[method-assign]
+    rig.step(3)
+    assert holds, "safe lock must keep holding, not disable"
+    rig.controller.stop_playback()
+    assert rig.controller.activity.value == "idle"

@@ -54,6 +54,15 @@ def test_rejects_unknown_joints(arm: SimArm):
         arm.hold({"elbow": 1.0})
 
 
+def test_timed_move_is_between_start_and_goal_at_halfway(arm: SimArm, clock: FakeClock):
+    arm.move_to({"joint1": 1.0}, duration_s=2.0)
+    for _ in range(100):
+        clock.now += 0.01
+        arm.step(0.01)
+    q = arm.read_state().positions["joint1"]
+    assert 0.1 < q < 0.9
+
+
 def test_converges_to_the_commanded_target(arm: SimArm):
     arm.hold({"joint1": 1.0, "joint4": -0.5})
     run(arm, seconds=2.0)

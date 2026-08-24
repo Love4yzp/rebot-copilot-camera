@@ -29,7 +29,7 @@ from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shutter import ShutterProvider
 from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
-from ..safety import LatchSource, SafetyLatch, Watchdog
+from ..safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
 from ..shutter.base import ShutterDriver
@@ -73,6 +73,8 @@ class Controller:
         broadcaster: Broadcaster,
         clock: Callable[[], float] | None = None,
         watchdog: Watchdog | None = None,
+        client_watchdog: ClientWatchdog | None = None,
+        contact: ContactObserver | None = None,
         expected_period_s: float = 0.01,
         floatlock: FloatLockConfig | None = None,
         actions: ActionRunner | None = None,
@@ -94,6 +96,8 @@ class Controller:
         self.broadcaster = broadcaster
         self._clock = clock or time.monotonic
         self.watchdog = watchdog
+        self.client_watchdog = client_watchdog
+        self.contact = contact
         self._expected_period_s = expected_period_s
 
         self._lock = threading.RLock()
@@ -281,6 +285,35 @@ class Controller:
         self._teaching = activity is Activity.TEACHING
         self._resting = activity is Activity.RESTING
 
+    def _pin(self, positions: Mapping[str, float] | None = None) -> None:
+        """Hold torque at ``positions`` (or last read). Cancels any MIT ramp."""
+        q = dict(positions or self._last_state.positions)
+        if not q:
+            return
+        self.arm.hold(q)
+        self._hold_target = q
+
+    def note_client(self) -> None:
+        """A live client spoke. Resets the disconnect watchdog."""
+        if self.client_watchdog is not None:
+            self.client_watchdog.feed()
+
+    def _lock_safe(self, reason: str) -> None:
+        """Recoverable lock: hold, abort play, no auto-resume, motors stay on."""
+        decision = decide(self._activity, Intent.FAULT)
+        if not decision.ok:
+            return
+        if self._executor is not None and not self._executor.is_finished:
+            self._executor.abort(reason)
+            self._executor = None
+        if self._activity is Activity.TEACHING:
+            self._floatlock.reset()
+            self._float_engaged = False
+            self.arm.set_float(False)
+        self._set_activity(Activity.SAFELOCK)
+        self._pin()
+        log.warning("safe lock: %s", reason)
+
     def _require(self, intent: Intent):
         """Latch first, then the activity table. Raises ``RuntimeError`` on deny."""
         if self.latch.is_latched:
@@ -310,6 +343,7 @@ class Controller:
         """
         with self._lock:
             self._require(Intent.PLAY)
+            self.note_client()
             if self._resting:
                 self._wake_from_rest()
 
@@ -380,6 +414,7 @@ class Controller:
         )
         with self._lock:
             decision = self._require(Intent.GOTO)
+            self.note_client()
             if decision.effect is Effect.RETARGET:
                 if self._executor is not None and not self._executor.is_finished:
                     self._executor.abort("retargeted to a new pose")
@@ -424,6 +459,16 @@ class Controller:
         final "done" keeps broadcasting (see __init__).
         """
         with self._lock:
+            if self._activity is Activity.SAFELOCK:
+                unlocked = decide(self._activity, Intent.STOP)
+                if unlocked.ok:
+                    if self.contact is not None:
+                        self.contact.reset()
+                    self._set_activity(unlocked.activity)
+                    self._pin()
+                if self._executor is not None:
+                    self._executor = None
+                return True
             if self._executor is None:
                 return False
             running = not self._executor.is_finished
@@ -436,6 +481,7 @@ class Controller:
             self._executor = None
             if self._activity is Activity.PLAYING:
                 self._set_activity(Activity.IDLE)
+            self._pin()
             return running
 
     # ── shutdown ─────────────────────────────────────────────────────────────
@@ -494,6 +540,7 @@ class Controller:
         with self._lock:
             if enabled:
                 self._require(Intent.TEACH_ON)
+                self.note_client()
                 if self._resting:
                     self._wake_from_rest()
                 self._set_activity(Activity.TEACHING)
@@ -585,6 +632,7 @@ class Controller:
                     # Clearing a stop starts a fresh assessment; suspicion
                     # accumulated before the stop is about the old situation.
                     self.watchdog.reset()
+                self._observe_faults(state)
                 self._tick_running()
             if latched != self._was_latched:
                 # Emitted from here rather than from SafetyLatch: the latch is
@@ -626,7 +674,33 @@ class Controller:
         self.arm.hold(frozen)
         self._hold_target = dict(frozen)
 
+    def _observe_faults(self, state: ArmState) -> None:
+        if self._activity is Activity.SAFELOCK:
+            return
+        if (
+            self.contact is not None
+            and self.contact.enabled
+            and self._activity is Activity.PLAYING
+        ):
+            names = list(self.arm.joint_names)
+            measured = [state.torques.get(n, 0.0) for n in names]
+            q = [state.positions.get(n, 0.0) for n in names]
+            v = [state.velocities.get(n, 0.0) for n in names]
+            if self.contact.update(q, v, measured):
+                self._lock_safe("contact")
+                return
+        if (
+            self.client_watchdog is not None
+            and self._activity in (Activity.PLAYING, Activity.TEACHING)
+            and self.client_watchdog.expired()
+        ):
+            self._lock_safe("client silent")
+
     def _tick_running(self) -> None:
+        if self._activity is Activity.SAFELOCK:
+            if self._hold_target:
+                self.arm.hold(self._hold_target)
+            return
         if self._resting:
             self._tick_resting()
             return
@@ -642,8 +716,12 @@ class Controller:
                 finished = decide(self._activity, Intent.FINISH)
                 if finished.ok:
                     self._set_activity(finished.activity)
+                self._pin()
             return
-        self._hold_target = None
+        if self._hold_target:
+            self.arm.hold(self._hold_target)
+        elif self._last_state.positions:
+            self._pin(self._last_state.positions)
 
     def _tick_resting(self) -> None:
         """While resting, watch that the arm stays on its stops.

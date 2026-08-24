@@ -32,7 +32,7 @@ from .api import agent, control, estop, logs, plugins, poses, sequences, templat
 from .api import config as config_api
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
-from .safety import SafetyLatch, Watchdog
+from .safety import ClientWatchdog, ContactObserver, SafetyLatch, Watchdog
 from .safety.kinematics import arm_model
 from .sequences import (
     PoseStore,
@@ -323,6 +323,8 @@ def main() -> None:
     arm, simulated = create_arm(force_sim=args.sim)
     app.state.simulated = simulated
     app.state.controller.bind_arm(arm)
+    app.state.controller.client_watchdog = ClientWatchdog(clock=time.monotonic, timeout_s=2.0)
+    app.state.controller.contact = ContactObserver(clock=time.monotonic, enabled=False)
 
     # The shutter is chosen the same way, but never falls back: a simulated
     # shutter reports every frame as fired, and an operator who walks a whole

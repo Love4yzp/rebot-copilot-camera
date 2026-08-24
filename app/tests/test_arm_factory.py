@@ -1,13 +1,10 @@
-"""Arm selection and the fallback to simulation.
-
-The rule under test is that falling back is always announced. A service that
-silently switches to a simulator looks exactly like one that is working, until
-someone presses play expecting the arm to move.
-"""
+"""Arm selection: --sim is explicit; a dead bus does not pretend to be live."""
 
 import logging
 
-from backend.arm import SimArm, create_arm
+import pytest
+
+from backend.arm import ArmUnavailable, SimArm, create_arm
 
 
 def test_force_sim_never_touches_the_real_arm(monkeypatch):
@@ -24,20 +21,17 @@ def test_force_sim_never_touches_the_real_arm(monkeypatch):
     assert simulated is True
 
 
-def test_falls_back_when_the_real_arm_is_unavailable(monkeypatch, caplog):
+def test_refuses_to_start_when_the_real_arm_is_unavailable(monkeypatch, caplog):
     class Unavailable:
         def __init__(self, *args, **kwargs):
             raise OSError("no such CAN device: can0")
 
     monkeypatch.setattr("backend.arm.session.ArmSession", Unavailable, raising=False)
 
-    with caplog.at_level(logging.WARNING):
-        arm, simulated = create_arm()
-
-    assert isinstance(arm, SimArm)
-    assert simulated is True
-    assert "falling back" in caplog.text
-    assert "can0" in caplog.text, "the reason must survive, not just the fact"
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(ArmUnavailable, match="can0"):
+            create_arm()
+    assert "refusing to start" in caplog.text
 
 
 def test_uses_the_real_arm_when_it_connects(monkeypatch):

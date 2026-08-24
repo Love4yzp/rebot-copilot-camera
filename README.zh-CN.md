@@ -89,7 +89,7 @@ cd app && uv run -m backend.app
 curl -s http://127.0.0.1:18790/api/health | grep simulated    # 必须是 false
 ```
 
-**这一步别省。** 连不上真臂时服务会自动退回模拟器继续跑 —— 界面、日志、按钮全都正常，只有臂不动。
+**这一步别省。** 不加 `--sim` 时连不上真臂会拒绝启动。`simulated: true` 表示你显式要了模拟器。
 
 ### 2 · 配对相机（一次性）
 
@@ -187,7 +187,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 **调参面板**（监视器区右侧「调参」按钮，prod 下进入需确认）：浮动手感 kp/kd、浮动/锁定阈值、到位判定、进站限速、负载 profile（bare/camera/gripper）。改动立即热生效 —— 示教浮动中也可以边掰边调 kp/kd；但负载 profile 切换要求臂不在浮动，序列执行中拒绝一切写入。热改只进内存，点「保存到配置」才写进 `app/config/tuning.yaml`；「恢复已保存」随时回到上次保存。
 
-**挂上相机后**：整机（机身+支架）称重，把质量填进面板的「负载 → 相机质量」，质心相对末端法兰的偏移填 com，切到 camera profile，然后用浮动漂移手感复核 —— 解除急停后后端自动进零重力示教，臂应该原地不动；漂移就是重力前馈不准（逐关节修正流程见 `docs/HARDWARE_NOTES.md` #B2）。不再需要改代码里的常量。
+**挂上相机后**：整机（机身+支架）称重，把质量填进面板的「负载 → 相机质量」，质心相对末端法兰的偏移填 com，切到 camera profile，然后用浮动漂移手感复核 —— 点「+ 录位姿」进零重力，臂应该原地不动；漂移就是重力前馈不准（逐关节修正流程见 `docs/HARDWARE_NOTES.md` #B2）。不再需要改代码里的常量。
 
 ---
 
@@ -227,7 +227,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 | 现象 | 多半是 | 怎么办 |
 |---|---|---|
-| 服务在跑，臂一动不动 | 静默退回了模拟器 | `curl -s :18790/api/health \| grep simulated`。`true` 就是没连上，启动日志里有具体原因 |
+| 服务在跑，臂一动不动 | 用了 `--sim`，或连的是残留模拟进程 | `curl -s :18790/api/health \| grep simulated`。不加 `--sim` 时连不上真臂会拒绝启动 |
 | macOS 上退回模拟器，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh prod` 会自动注入 dyld 搜索路径；直接 `cd app && uv run -m backend.app` 要自己设 `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
 | `import reBotArm_control_py` 失败 | submodule 没拉 | `git submodule update --init` |
 | 按播放返 **400** | 有点位越限 / 自碰撞，或相邻两点之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录点时不拒绝只警告**（臂物理上就在那），检查发生在播放前 |

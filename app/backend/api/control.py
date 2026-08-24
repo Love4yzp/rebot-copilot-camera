@@ -184,6 +184,9 @@ async def _stream(websocket: WebSocket, topics: set[str], unwrap: bool = False) 
             # envelope: they asked for one kind of message, so a "type" field
             # that is always the same is noise a third-party client must skip.
             await websocket.send_json(message["data"] if unwrap else message)
+            controller = getattr(websocket.app.state, "controller", None)
+            if controller is not None:
+                controller.note_client()
     except WebSocketDisconnect:
         pass
     except Exception:

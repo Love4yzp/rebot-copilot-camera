@@ -89,7 +89,7 @@ cd app && uv run -m backend.app
 curl -s http://127.0.0.1:18790/api/health | grep simulated    # must be false
 ```
 
-**Don't skip this check.** When the real arm is unreachable the service silently falls back to the simulator and keeps running — UI, logs and buttons all look normal, only the arm doesn't move.
+**Don't skip this check.** Without `--sim`, a missing arm refuses to start. `simulated: true` means you asked for `--sim`.
 
 ### 2 · Pair the camera (once)
 
@@ -227,7 +227,7 @@ Untrusted network plus remote access: don't expose the service directly — put 
 
 | Symptom | Probably | Do |
 |---|---|---|
-| Service running, arm dead still | silently fell back to the simulator | `curl -s :18790/api/health \| grep simulated`. `true` means not connected; the startup log has the reason |
+| Service running, arm dead still | started with `--sim`, or the UI is talking to a leftover sim process | `curl -s :18790/api/health \| grep simulated`. Prod without `--sim` refuses to start if the arm is missing |
 | Falls back on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh prod` injects the dyld search path itself; a direct `cd app && uv run -m backend.app` needs `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
 | `import reBotArm_control_py` fails | submodule not pulled | `git submodule update --init` |
 | Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
