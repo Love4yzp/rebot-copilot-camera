@@ -41,7 +41,7 @@ def _registry() -> ActionRegistry:
     """
     from .. import config
     from ..shutter import create_shutter
-    from .shutter import ShutterProvider
+    from .shoot import ShutterProvider
 
     registry = ActionRegistry(ThreadedRunner())
     driver, _ = create_shutter()

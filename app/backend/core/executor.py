@@ -48,7 +48,7 @@ from pydantic import BaseModel
 
 from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
-from ..actions.shutter import SHUTTER_PROVIDER_ID, ShutterParams
+from ..actions.shoot import SHUTTER_PROVIDER_ID, ShutterParams
 from ..arm.base import ArmDriver, EASE_PEAK
 from ..sequences.models import (
     DEFAULT_TRANSITION_S,

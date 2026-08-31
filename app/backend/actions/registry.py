@@ -61,6 +61,15 @@ PROBE_TIMEOUT_S = 5.0
 #: HTTP, so it is kept to the characters that survive both without quoting.
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
+#: The plugin-api version this host speaks, as a contract with third-party
+#: drop-in code. When ``ActionContext`` or the provider surface changes
+#: semantics, this bumps and old folders refuse to load with a version
+#: mismatch instead of importing and misbehaving in ways nobody connected to
+#: the change. A manifest without ``api_version`` counts as this version, so
+#: every plugin written before the field existed keeps loading. Entry-point
+#: plugins version through their own package metadata, not this field.
+PLUGIN_API_VERSION = 1
+
 
 def check_shape(provider: object) -> None:
     """Raise ``ValueError`` unless this object can be used as a provider.
@@ -195,6 +204,7 @@ class ActionRegistry:
 
             {"module": "rebot_plugin_turntable",
              "provider": "TurntableProvider",
+             "api_version": 1,
              "enabled": true}
 
         The folder goes on ``sys.path`` and ``module`` is imported from it, so
@@ -234,6 +244,19 @@ class ActionRegistry:
                 log.info("plugin %r is disabled in its plugin.json", child.name)
                 self._record_broken(
                     child.name, f"disabled — set enabled to true in {child.name}/plugin.json"
+                )
+                continue
+
+            version = meta.get("api_version", PLUGIN_API_VERSION)
+            if version != PLUGIN_API_VERSION:
+                log.error(
+                    "plugin %r targets plugin api %s, host speaks %s",
+                    child.name, version, PLUGIN_API_VERSION,
+                )
+                self._record_broken(
+                    child.name,
+                    f"plugin api version {version} != host {PLUGIN_API_VERSION}"
+                    " — update the plugin",
                 )
                 continue
 

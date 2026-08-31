@@ -79,7 +79,7 @@ app/backend/
   assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫 + gripper 开关（has_gripper / effective_hardware_yaml 剥电机 / effective_urdf_path 剥质量）
   config.py         只放真正依赖部署的值（数据目录、快门串口/波特率）。限位不在这（从 URDF 读）
   tuning.py         调参模型与存取：payload profile / 浮动增益 / 阈值 + 服务端钳位；热改只进内存，显式保存才落 app/config/tuning.yaml
-  agent.py          外部 agent 的独占控制租约（token + 双重 TTL）
+  agent.py          外部 agent 的独占控制租约（token + 双重 TTL）【⏸ parked：有外部 agent 接入才扩，出厂应用无人用】
 
   arm/
     base.py         ArmDriver Protocol + ArmState。hold(q) 与 move_to(q, t) 是两个动词
@@ -97,7 +97,7 @@ app/backend/
     runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上，probe 走同一条队列
     registry.py     entry_points + app/plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
     validate.py     写入时与执行前两道校验，让错误离开 ACTING 阶段
-    shutter.py      ShutterProvider —— 第一个 provider
+    shutter.py      ShutterProvider —— 第一个 provider（名为「快门 provider」，文件名 `shoot.py`，与驱动包 `shutter/` 区分）
     check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
 
   core/
@@ -113,7 +113,7 @@ app/backend/
     store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
     seed_demo.py    首启演示数据（四方位：4 位姿 + 序列 + 模板）。与 mock 的镜像被契约用例 seeded-library 钉死
 
-  shutter/
+  shutter/          【⏸ parked：链路已建全 + 协议 30 测试，待 B4 板子 + 相机到位（HARDWARE_NOTES B4）】
     base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
     protocol.py     行协议编解码 + LineReader
     esp32.py        串口客户端。单条在途，id 防迟到回包
@@ -129,7 +129,7 @@ app/backend/
     sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
     templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）
     control.py      execute/stop+resume / 示教 / 快门自检 / WebSocket
-    agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）
+    agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）【⏸ parked：随 agent.py】
     config.py       调参端点 GET/PUT/save/reset —— 闸门在 Controller.apply_tuning（执行中拒一切、浮动中拒负载切换），不挂运动闸门，但要在 NON_MOTION_ROUTES 写明理由
     logs.py         journalctl 包装
 

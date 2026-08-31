@@ -84,10 +84,12 @@ app/plugins/
 ```
 
 ```json
-{"module": "rebot_plugin_turntable", "provider": "TurntableProvider", "enabled": true}
+{"module": "rebot_plugin_turntable", "provider": "TurntableProvider", "api_version": 1, "enabled": true}
 ```
 
 `module` 从这个文件夹里 import,`provider` 是模块里那个**无参可调**的类。装 = 把文件夹拷进 `app/plugins/` 再重启服务,没有 pip、没有 lockfile —— 也就不存在 `uv sync` 把它清掉的事(那正是 entry point 装法手动 `uv pip install` 后每次 `device.sh push` 都丢插件的原因)。`app/plugins/` 被 gitignore 但会跟 `device.sh push` 一起同步到设备,源在你开发机上。
+
+`api_version` 是宿主与第三方代码之间的契约(当前为 `1`):当 `ActionContext` 或 provider 接面改了语义,宿主会升版本号,旧文件夹**在加载闸门前被拒并写明版本不符**,而不是 import 进来以没人预料的方式错跑。清单里没这个字段视为当前版本,所以现存插件继续加载。entry point 装法走自己包的元数据,不看这个字段。
 
 `enabled: false` 就是开关:停用后插件灰显在 `/api/plugins` 里带着原因,不会被排进新序列;改回 `true` 重启恢复。状态随插件自己的文件走,不怕更新覆盖。
 
@@ -267,7 +269,7 @@ app/backend/actions/
                 + InlineRunner(测试用)
   registry.py   entry_points + app/plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康状态 + manifest
   validate.py   写入时与播放前的两道校验
-  shutter.py    ShutterProvider —— 第一个 provider,包 ShutterDriver
+  shutter.py    ShutterProvider —— 第一个 provider,包 ShutterDriver（文件名 `shoot.py`,与驱动包 `shutter/` 区分）
   check.py      插件作者的命令行
 app/backend/core/events.py   事件名与信封
 app/backend/api/plugins.py   GET /api/plugins、POST /api/plugins/probe

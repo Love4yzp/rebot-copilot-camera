@@ -10,17 +10,19 @@ from .base import (
 )
 from .registry import (
     ENTRY_POINT_GROUP,
+    PLUGIN_API_VERSION,
     PROBE_TIMEOUT_S,
     ActionRegistry,
     ProviderStatus,
     check_shape,
 )
 from .runner import ActionRunner, InlineRunner, Job, ThreadedRunner
-from .shutter import ShutterParams, ShutterProvider
+from .shoot import ShutterParams, ShutterProvider
 from .validate import validate_marker_params, validate_providers
 
 __all__ = [
     "ENTRY_POINT_GROUP",
+    "PLUGIN_API_VERSION",
     "PROBE_TIMEOUT_S",
     "ActionContext",
     "ActionError",

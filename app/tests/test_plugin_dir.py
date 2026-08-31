@@ -181,6 +181,33 @@ def test_a_folder_without_a_manifest_is_ignored(registry, tmp_path):
     assert registry.provider_ids == []
 
 
+def test_a_missing_api_version_field_loads_as_the_current_version(registry, tmp_path):
+    """Plugins written before the field existed keep loading — an absent
+    ``api_version`` counts as the host's current version, not as a mismatch."""
+    make_plugin(tmp_path, "legacy", "legacy_mod", pid="legacy")  # no api_version
+
+    registry.discover_dir(tmp_path)
+
+    assert manifest_entry(registry, "legacy")["installed"] is True
+
+
+def test_a_manifest_targeting_the_wrong_api_version_is_refused(registry, tmp_path):
+    """A version the host does not speak is refused at the gate with the
+    mismatch written out, so an accessory that stopped working after a host
+    upgrade reads as 'update the plugin', not as 'I configured it wrong'."""
+    make_plugin(tmp_path, "future", "future_mod", pid="future",
+                raw_manifest=json.dumps({
+                    "module": "future_mod", "provider": "Provider",
+                    "api_version": 999, "enabled": True}))
+
+    registry.discover_dir(tmp_path)
+
+    entry = manifest_entry(registry, "future")
+    assert entry["installed"] is False
+    assert "api version 999" in entry["reason"]
+    assert registry.provider("future") is None
+
+
 def test_a_missing_plugins_dir_is_not_an_error(registry, tmp_path):
     registry.discover_dir(tmp_path / "never-created")
     assert registry.provider_ids == []

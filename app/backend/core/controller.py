@@ -26,7 +26,7 @@ import time
 from collections.abc import Callable, Mapping
 
 from ..actions.runner import ActionRunner, ThreadedRunner
-from ..actions.shutter import ShutterProvider
+from ..actions.shoot import ShutterProvider
 from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
 from ..safety import LatchSource, SafetyLatch, Watchdog
