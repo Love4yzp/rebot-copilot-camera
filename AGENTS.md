@@ -239,6 +239,7 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
 | `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
 | [`PROGRESS.md`](./PROGRESS.md) | 状态机：现在做到哪、什么被卡住、交接协议 | 接手一个 session 时 |
 | [`README.md`](./README.md)（英文）/ [`README.zh-CN.md`](./README.zh-CN.md)（中文） | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时；用户报故障先翻它的故障排查表。改 README 时两份同步改 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |

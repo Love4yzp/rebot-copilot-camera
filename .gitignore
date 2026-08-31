@@ -30,3 +30,5 @@ app/backend/static/
 # AI
 .kimi/
 .agent_context/
+.zcode/
+.scratch/
