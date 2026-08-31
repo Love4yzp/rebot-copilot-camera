@@ -135,7 +135,7 @@ export function TemplateWizard({
       await api.poses.goto(pose.id);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        show("info", latched ? "已急停 — 先解除急停" : "臂正忙 — 等当前动作完成");
+        show("info", latched ? "已急停 — 先解除急停" : "机械臂正忙 — 等当前动作完成");
       } else {
         show("error", error instanceof Error ? error.message : String(error));
       }
@@ -164,7 +164,7 @@ export function TemplateWizard({
     if (mode === "finish") return "全部站位已绑定。命名后生成普通序列 —— 复印即脱钩，与模板两不相干。";
     return boundName
       ? `${where} — 已绑定「${boundName}」，可重录或改选。`
-      : `${where} — 把臂拖到这一站录下来，或从素材库选一个。`;
+      : `${where} — 把机械臂推到这一站录下来，或从素材库选一个。`;
   };
 
   return (
@@ -291,10 +291,10 @@ export function TemplateWizard({
               type="button"
               className="primary"
               disabled={latched}
-              title={latched ? "已急停 — 先解除急停" : "卸力进入示教，把臂拖到这一站"}
+              title={latched ? "已急停 — 先解除急停" : "卸力进入示教，把机械臂推到这一站"}
               onClick={startTeach}
             >
-              拖臂录这一站
+              推臂录这一站
             </button>
             <button type="button" onClick={() => setMode("picking")}>
               选已有位姿

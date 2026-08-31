@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Pose, PoseLinks, SeqTemplate } from "../types";
 import { Dialog } from "../components/Dialog";
@@ -15,10 +15,10 @@ interface Props {
   wizardOpen: boolean;
   /** True when the sequence/pose API is not there (real backend before v2). */
   sequencesUnavailable: boolean;
+  /** Sequence tape is running — the card dims and goto is refused. */
+  gotoLocked: boolean;
   /** A sequence is open and not running — pose cards may offer 「＋追加」. */
   canAppend: boolean;
-  /** Name of the open sequence — the 追加 target, stated once, in one place. */
-  appendTarget: string | null;
   /** Tap-to-go face: the 追加 button stays hidden (no sequence on screen). */
   hideAppend?: boolean;
   /** Template material for the edit face — absent in tap-to-go, so no tab bar. */
@@ -36,23 +36,19 @@ interface Props {
 /**
  * The library: poses, always on screen.
  *
- * The card IS the destination — tapping it sends the arm there (the same goto
- * as the ghost arms in the monitor); there is no 「去这里」 label because the
- * label needed a subject ("who goes?") and the card is the answer. The only
- * always-visible button is ＋追加; rename and delete live in the ⋯ menu.
- * Poses are *links* from every sequence that uses them, so deleting one first
- * asks the server who would be affected and says the names out loud before
- * anything is thrown away (先告知再动手).
+ * The card IS the destination — the name is the button, same goto as the
+ * monitor ghosts. Rename and delete live in the ⋯ menu. 「＋追加」 is the
+ * only extra verb, and only while a sequence can take a station.
  */
 export function LibraryPanel({
   poses,
   executing,
   latched,
   teaching,
+  gotoLocked,
   wizardOpen,
   sequencesUnavailable,
   canAppend,
-  appendTarget,
   hideAppend,
   templates,
   onUseTemplate,
@@ -64,9 +60,17 @@ export function LibraryPanel({
   const { attempt, show } = useToast();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ pose: Pose; links: PoseLinks } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [tab, setTab] = useState<"poses" | "templates">("poses");
+
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = () => setMenuFor(null);
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menuFor]);
 
   const rename = async (pose: Pose) => {
     const name = renameDraft.trim();
@@ -100,7 +104,7 @@ export function LibraryPanel({
     // failure path instead of the success value.
     try {
       await api.poses.remove(pose.id);
-      show("info", `已删除位姿「${pose.name}」—— 引用它的保持块会保持臂当时姿态`);
+      show("info", `已删除位姿「${pose.name}」`);
       onChanged();
     } catch (error) {
       show("error", error instanceof Error ? error.message : String(error));
@@ -165,66 +169,48 @@ export function LibraryPanel({
               </div>
             ))
           ) : (
-            <div className="lib__empty">
-              <p className="lib__empty-title">还没有模板</p>
-              <p className="hint">
-                打开一条序列，点顶栏「存为模板」—— 模板只存结构（站位 / 时长 / 动作），不存关节角。
-              </p>
-            </div>
+            <div className="lib__empty">还没有模板</div>
           )}
         </div>
       ) : (
-        <div className="lib__pane">
-          {canAppend && appendTarget ? (
-            <p className="lib__context">
-              ＋追加 → 排到 <b>{appendTarget}</b> 末尾
-            </p>
-          ) : null}
-          {poses.length === 0 ? (
-            <div className="lib__empty">
-              <p className="lib__empty-title">还没有位姿</p>
-              <p className="hint">
-                点下方「+ 录位姿」—— 手掰臂到想要的姿态、松手、点保存。
-                录完它出现在这里，再「＋追加」进序列。
-              </p>
-            </div>
-          ) : null}
-          {poses.map((pose) => (
-            <div
-              key={pose.id}
-              className="lib__pose"
-              title="点击 → 臂开过去"
-              draggable={!executing}
-              onClick={() => onGoto(pose)}
-              onDragStart={(event) => {
-                event.dataTransfer.setData(POSE_MIME, pose.id);
-                event.dataTransfer.effectAllowed = "copy";
-              }}
-            >
-              <div className="lib__pose-top">
-                {renaming === pose.id ? (
-                  <input
-                    autoFocus
-                    onClick={(event) => event.stopPropagation()}
-                    value={renameDraft}
-                    onChange={(event) => setRenameDraft(event.target.value)}
-                    onBlur={() => void rename(pose)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void rename(pose);
-                      if (event.key === "Escape") setRenaming(null);
-                    }}
-                    aria-label="位姿名称"
-                  />
-                ) : (
-                  <span className="lib__pose-name">{pose.name}</span>
-                )}
-              </div>
-              <div className="lib__pose-actions">
-                {!hideAppend ? (
+        <div className={`lib__pane ${poses.length === 0 ? "lib__pane--empty" : ""}`}>
+          {poses.map((pose) => {
+            const open = menuFor === pose.id;
+            const showAppend = !hideAppend && canAppend;
+            return (
+              <div
+                key={pose.id}
+                className={`lib__pose${gotoLocked ? " lib__pose--locked" : ""}`}
+                draggable={!executing && !teaching}
+                onClick={() => onGoto(pose)}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(POSE_MIME, pose.id);
+                  event.dataTransfer.effectAllowed = "copy";
+                }}
+              >
+                <div className="lib__pose-top">
+                  {renaming === pose.id ? (
+                    <input
+                      autoFocus
+                      onClick={(event) => event.stopPropagation()}
+                      value={renameDraft}
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                      onBlur={() => void rename(pose)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void rename(pose);
+                        if (event.key === "Escape") setRenaming(null);
+                      }}
+                      aria-label="位姿名称"
+                    />
+                  ) : (
+                    <span className="lib__pose-name">{pose.name}</span>
+                  )}
+                </div>
+                {showAppend ? (
                   <button
                     type="button"
-                    disabled={!canAppend || executing || teaching || wizardOpen}
-                    title={canAppend ? "排到序列末尾，成为一个新站位" : "先在顶栏打开一条序列"}
+                    className="lib__append"
+                    disabled={executing || teaching || wizardOpen}
                     onClick={(event) => {
                       event.stopPropagation();
                       onAppendPose(pose);
@@ -235,30 +221,51 @@ export function LibraryPanel({
                 ) : null}
                 <button
                   type="button"
+                  className="lib__more"
+                  aria-label="更多"
+                  aria-expanded={open}
+                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setRenaming(pose.id);
-                    setRenameDraft(pose.name);
+                    setMenuFor(open ? null : pose.id);
                   }}
                 >
-                  改名
+                  ⋯
                 </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void removePose(pose);
-                  }}
-                >
-                  删除
-                </button>
+                {open ? (
+                  <div
+                    className="lib__menu"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuFor(null);
+                        setRenaming(pose.id);
+                        setRenameDraft(pose.name);
+                      }}
+                    >
+                      改名
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => {
+                        setMenuFor(null);
+                        void removePose(pose);
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ))}
+            );
+          })}
           <button
             type="button"
-            className="lib__record"
+            className={poses.length === 0 ? "lib__record primary" : "lib__record ghost"}
             disabled={latched || executing || teaching || wizardOpen}
             onClick={onTeach}
           >
@@ -273,8 +280,7 @@ export function LibraryPanel({
             <h2 className="sheet__title">删除位姿「{confirmDelete.pose.name}」？</h2>
           </div>
           <p className="hint">
-            正被 {confirmDelete.links.count} 条序列用着。删除后这些序列的对应保持块会失去位姿
-            —— 执行到那里时臂保持当时姿态，不报错。
+            正被 {confirmDelete.links.count} 条序列用着。删掉后那些序列执行前会被拒绝。
           </p>
           <ul className="lib__affected">
             {confirmDelete.links.links.map((link) => (

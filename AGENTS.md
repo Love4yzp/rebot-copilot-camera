@@ -2,7 +2,7 @@
 
 **这份代码能让一条 48V 的机械臂动起来。** 下面四条铁律，违反了都**不会报错** —— 只是结果错了，而错的方式是臂掉下来、算错力矩、或者拍完一整轮全是空片。
 
-项目在做什么、怎么用，看 [`README.md`](./README.md)。这里只讲改代码要知道的。
+项目在做什么、怎么用，看 [`README.md`](./README.md)。这里只讲**做什么、怎么做、去哪查**。做过什么写 `git log`，不要往本文件追加。
 
 ---
 
@@ -10,10 +10,10 @@
 
 布局：应用整体住在 `app/` 二级目录（`pyproject.toml`/`uv.lock`/`.venv` 都在里面），顶层只放 AI/人读文档与 `dev.sh`/`device.sh`。**所有 `uv` 命令在 `app/` 下执行**——漏了这层会找不到包。
 
-`git submodule update --init`（臂层是 submodule，漏了 import 就失败）。`dev.sh`（本机）/`device.sh`（经 ssh 落设备）的命令清单见各自 `--help` 或脚本头。三条环境不写的约定：
+`git submodule update --init`（臂层是 submodule，漏了 import 就失败）。`dev.sh`（本机）/`device.sh`（经 ssh 落设备）的命令清单见 `./dev.sh --help` 或脚本头。**本机后端只由人用 `./dev.sh` 启动**——agent 用 pytest 验证，不要执行 `uv run -m backend.app`、不要占用 18790。三条环境不写的约定：
 
-- **前端构建归 `dev.sh build`，它是唯一所有者**——`device.sh push` 调它。抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是要发的那个。
-- `dev.sh` 的 `mock` 是 `sim` 的旧名（过渡期后移除）；`prod --no-build` 不起前端、`/docs` 即控制台（API 联调用）。
+- `dev.sh` 模式：`sim` = 全栈 + SimArm；`prod` = 真臂（连不上就拒绝，不退回模拟器）；`ui` = 只前端 mock，无 Python。端口预检是双实例安全阀，不能关。
+- **前端构建归 `dev.sh build`，它是唯一所有者**——`device.sh push` 调它。抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是要发的那个。`mock` 是 `sim` 的旧名（过渡期后移除）。
 - 运动学/动力学/碰撞在开发机就能跑和测（`pin`/`motorbridge` 在 macOS arm64 可用），**只有 CAN 传输层需要真机**。
 
 ---
@@ -64,6 +64,12 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 - **例外（前门，不是越界）**：`api/gate.py`/`api/estop.py` 直接碰 `app.state.latch`（闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环）；`api/plugins.py` 只读 `ActionRegistry`（插件登记处自述）。运动前校验全走 `Controller.preflight_*` 那道门。
 - `SafetyLatch` 是横切闩锁，**不是模式机的一态**——做成模式的话每加一个模式都要重审所有切换是否会绕过它。
 
+**命令缝**
+臂在做什么由 `decide(activity, intent)` 一张表决定。新行为加一行，不加 controller 上的 flag。HTTP 解析完调 `Controller.intend`，409 从表里来，不要每个端点自己发明一套。词汇 [`CONTEXT.md`](./CONTEXT.md)，决策 [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md)。Goto 再来一次改目的地；Play 再来一次拒绝。到位 / 停下 / 急停都是 Hold。内核的演进面是这张表和 `ArmDriver` 的动词，按行改，不要换一套叙事。
+
+**接触观测默认关**
+只在 playing 采样。打开它是真机标定，不是代码补齐。
+
 **动作绝不跑在控制循环上**
 provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒），而控制循环正是撑住臂的东西。executor **投递 + 每 tick 轮询**，实际执行在 `app/backend/actions/runner.py` 的 worker 线程上。一条慢快门曾把 tick 间隔拖过 watchdog 宽限触发急停 —— 一台仅仅是慢的相机，看起来和丢了臂一模一样。
 
@@ -101,11 +107,19 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 **界面不许猜臂在哪**
 「已到位」只能由 `phase === "done"` 点亮，且只在 done 的上升沿认领 —— controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，陈旧的 `done` 不能当作新点击的答复。急停、进入示教、开始新一次执行都必须立刻作废「已到位」—— 臂被冻在别处、即将被人推走、或已在路上。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
 
+**布局不跟机器状态跳**
+监视器区 padding 固定（`46px 12px 12px`），不随执行 / 示教增减。状态走颜色通道，不走页面几何 —— 否则 goto 结束整页会挪一截。
+
+**示教范围**
+近零位手掰。展开肘会过补上冲。标定与禁区在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #B2，不要把展开姿态当默认测试姿态。真臂运动路径（MIT 终身、按组切片）见同文件 #10–#15。
+
 **急停在栈顶**
-`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。prod 进入警告层 z-55，必须低于急停。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
+
+模式徽标（sim 蓝 / prod 灰阶）与连接状态是两个维度：断连是徽标旁灰阶脉冲「已断连」，不覆盖模式徽标，也不占用红 / 绿。
 
 **退出路径先回零**
-Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零位（复用 goto 的进站限速与到位检测），到位后才停控制循环 —— 停循环永远是退出的最后一步。闩锁吸合时例外：原地冻结保持退出，不回零（闩锁吸合意味着出了状况，不再规划新运动）。信号归 `app/backend/app.py` 的 `ParkOnExitServer` 管，**别换回 `uvicorn.run`**：原版第二次 Ctrl+C 置 `force_exit` 并**跳过 lifespan shutdown**，回零整段就没了。systemd 的 `TimeoutStopSec=60` 是按最坏回零 ~37s 留的，别调小。配套：`main()` 在碰 CAN 之前先做端口预检（`_ensure_port_free`）—— 一个绑不上端口的实例若连了臂，它的退出回零就会去动一台归别的进程管的臂。
+Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零位（复用 goto 的进站限速与到位检测），到位后才停控制循环 —— 停循环永远是退出的最后一步。闩锁吸合时例外：原地冻结保持退出，不回零。已经在休息态（力矩已卸）时 `park_home` 直接跳过。shutdown 回零把 `_playback_source` 标成 `"shutdown"`，ClientWatchdog 不把这段沉默打成 SafeLock —— 加看门狗条件时保留这条豁免。信号归 `app/backend/app.py` 的 `ParkOnExitServer` 管，**别换回 `uvicorn.run`**：原版第二次 Ctrl+C 置 `force_exit` 并**跳过 lifespan shutdown**，回零整段就没了。systemd 的 `TimeoutStopSec=60` 是按最坏回零 ~37s 留的，别调小。配套：`main()` 在碰 CAN 之前先做端口预检（`_ensure_port_free`）—— 一个绑不上端口的实例若连了臂，它的退出回零就会去动一台归别的进程管的臂。
 
 **技能体系只用 [mattpocock/skills](https://github.com/mattpocock/skills)**
 今后新增技能一律从 mattpocock/skills 构建；已有的 `threejs-*` 参考技能保留。
@@ -118,7 +132,7 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 不测：前端组件、`reBotArm_control_py` 本身、MotorBridge SDK、ESP32 固件、真实硬件在环。
 
-`SimArm` 和 `SimShutter` 是一等公民而非测试边角料 —— 它们同时是无硬件开发循环的基础设施，两者都支持注入失败。
+`SimArm` 和 `SimShutter` 是一等公民而非测试边角料 —— 它们同时是无硬件开发循环的基础设施，两者都支持注入失败。SimArm 不推注入时钟就不会动；测试里前进 `clock` 或调 `step()`，否则回放停在「未到位」。`./dev.sh sim` 用 `self_driven=True`。
 
 **前后端契约是机器校验的，不是手工对齐的。** `app/tests/test_contract.py` 把 `app/contract/cases/` 里每个 golden 用例在 FastAPI TestClient 和 mock（`app/frontend/mock/api.ts`）上各跑一遍、逐字段比对；normalize 用例同时跑 TS（`app/frontend/src/timeline/model.ts`）与 Python（`app/backend/sequences/normalize.py`）。改任一侧的响应形状或 normalize 规则，先跑它。归一化规则在 `app/tests/test_contract.py` 与 `app/frontend/contract/mock-driver.ts` 的 docstring 里各有一份 —— 这是刻意抄的两份（两种语言各执一端），改规则必须两侧同步。新增用例 = 往 `app/contract/cases/` 丢一个 JSON。本地缺 node 或 `app/frontend/node_modules` 时该文件整体 skip；CI（`.github/workflows/ci.yml`）两者都装。
 
@@ -128,9 +142,9 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 ## 提交约定
 
-每个 commit 结束时代码库必须能跑（pytest 绿 + `--sim` 能起）。
+每个 commit 结束时代码库必须能跑（pytest 绿；后端由人用 `./dev.sh sim` 起，agent 不要自己起）。
 
-**改代码的 commit 里必须同时更新 [`PROGRESS.md`](./PROGRESS.md) 的状态**，不要分开提交，否则状态和代码漂移。
+[`PROGRESS.md`](./PROGRESS.md) 只记现在在哪——**状态变了**才改，changelog 写 git commit，不要往文档里堆。
 
 commit message 说清**为什么**，尤其是偏离原计划的地方——好几个决定的理由只存在于 commit message 里。
 
@@ -140,18 +154,20 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
-| `AGENTS.md`（本文件） | Agent 工作手册：铁律、代码地图、约定 | 开工前 |
+| `AGENTS.md`（本文件） | 做什么、怎么做、索引。不记做过什么 | 开工前 |
+| [`CONTEXT.md`](./CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
-| [`PROGRESS.md`](./PROGRESS.md) | 状态机：现在做到哪、什么被卡住、交接协议 | 接手一个 session 时 |
-| [`README.md`](./README.md)（英文）/ [`README.zh-CN.md`](./README.zh-CN.md)（中文） | 人类向：装什么、怎么拍一组、配置项、部署、**故障排查**、API。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时；用户报故障先翻它的故障排查表。改 README 时两份同步改 |
-| [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
+| [`PROGRESS.md`](./PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
+| [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改）。改时两份同步 | 要用这个服务时 |
+| [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
 | [`app/firmware/esp32-shutter/README.md`](./app/firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
 | [`docs/CODEMAP.md`](./docs/CODEMAP.md) | 逐行代码地图：哪个文件干什么 + 超前模块 parked 标 | 碰任何 backend 文件前 |
-| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴编辑器设计定稿（新一版交互骨架）：块/标记模型 / 预演与执行 / 布局 / 三期路线 | 动前端界面或编排交互时 |
-| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
-| [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份 B601-RS 主从录制/回放 demo 提炼的**物理事实与策略**（限速、插值、首尾衔接、温度保护）。那份走 LeRobot，**代码一行都不能抄，抄的是数值和「为什么必须这么做」** | 写示教录制、轨迹回放、限速/过热保护时 |
+| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴交互约束 | 动前端或编排交互时 |
+| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 动作插件 / 触发源 / 事件订阅 | 加动作、接外部触发时 |
+| [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份主从 demo 抄来的**数值和为什么**，代码一行都不能抄 | 写限速 / 回放 / 过热保护时 |
+| [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md) | Activity 互斥、Latch 横切 | 改命令缝时 |
 
-`CLAUDE.md` 只是指向本文件的指针，不要往里写内容。
+`CLAUDE.md` 只是指向本文件的指针，不要往里写内容。启动命令以 `./dev.sh --help` 为准。
 
-**每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、进度在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。
+**每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、现状在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。新约定写成祈使句，证据链到测试名或 HARDWARE_NOTES，不要写成「本轮 / 已修」。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。

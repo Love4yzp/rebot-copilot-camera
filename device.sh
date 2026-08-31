@@ -67,7 +67,7 @@ cmd_push() {
 	"$HERE/dev.sh" build
 
 	step "[r2x] 同步到 $HOST:$REMOTE_DIR"
-	# --delete 保证远端代码干净；但必须保护数据目录（包含操作员现场示教出来的点位数据，绝不能删）。
+	# --delete 保证远端代码干净；但必须保护数据目录（包含操作员现场示教出来的位姿与序列数据，绝不能删）。
 	# 带前导斜杠挂在根路径锚点上，防止误杀路径中同名的 Python 包目录。
 	# 源是 app/（本地二级目录），远端铺平：app/data -> $REMOTE_DIR/data，systemd unit 路径因此不变。
 	rsync -az --delete \

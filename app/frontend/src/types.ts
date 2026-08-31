@@ -1,4 +1,4 @@
-export type Mode = "idle" | "teach" | "playback" | "estop";
+export type Mode = "idle" | "teach" | "playback" | "estop" | "rest" | "safelock";
 
 /** App deployment mode: sim (simulator/frontend-only) or prod (production). */
 export type AppMode = "sim" | "prod";
@@ -195,6 +195,7 @@ export interface SeqPlayback {
 /** What the motion endpoints (execute / goto / teach / stop) return. */
 export interface PlaybackState {
   mode: string;
+  activity: string;
   playing: boolean;
   teaching: boolean;
   rate_hz: number;
@@ -210,8 +211,9 @@ export interface ControlState {
   velocities: Record<string, number>;
   rate_hz: number;
   mode: Mode;
-  /** Rest: zero torque, the arm lying on its stops. Not a machine mode —
-   * the loop wakes the arm the moment it drifts or any command arrives. */
+  /** Exclusive activity; ``mode`` is this, or ``estop`` when latched. */
+  activity?: string;
+  /** Rest: zero torque, the arm lying on its stops. */
   resting?: boolean;
   estop: EstopState;
   playback: SeqPlayback | null;

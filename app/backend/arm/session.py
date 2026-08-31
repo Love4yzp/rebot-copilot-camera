@@ -141,7 +141,7 @@ class ArmSession:
 
     def read_state(self) -> ArmState:
         with self._lock:
-            q, _, _ = self._arm.get_state()
+            q, _, tau = self._arm.get_state()
             now = self._clock()
 
             if self._prev_q is not None and self._prev_t is not None and now > self._prev_t:
@@ -151,10 +151,15 @@ class ArmSession:
                 }
             self._prev_q, self._prev_t = np.array(q, copy=True), now
 
+            torques = {}
+            if tau is not None:
+                torques = {name: float(tau[i]) for name, i in self._index.items()}
+
             return ArmState(
                 positions={name: float(q[i]) for name, i in self._index.items()},
                 velocities=dict(self._velocities),
                 t=now,
+                torques=torques,
             )
 
     def hold(self, q_target: Mapping[str, float]) -> None:

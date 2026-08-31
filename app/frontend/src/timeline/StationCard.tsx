@@ -82,11 +82,11 @@ export function StationCard({
       </div>
 
       <div className="stn__dur">
-        <span className="stn__dur-label">停留</span>
+        <span className="stn__dur-label">保持</span>
         <button
           type="button"
           disabled={locked || duration <= MIN_HOLD_S}
-          title="减少停留"
+          title="减少保持时间"
           onClick={(event) => {
             event.stopPropagation();
             setDuration(duration - 0.1);
@@ -98,7 +98,7 @@ export function StationCard({
         <button
           type="button"
           disabled={locked || duration >= 60}
-          title="增加停留"
+          title="增加保持时间"
           onClick={(event) => {
             event.stopPropagation();
             setDuration(duration + 0.1);

@@ -57,7 +57,7 @@ export function Inspector({
               </span>
             </div>
             {!pose ? (
-              <p className="hint">库里的位姿已被删除 —— 执行到这块时臂保持当时姿态。</p>
+              <p className="hint">库里的位姿已删除 — 执行前会被拒绝。</p>
             ) : null}
             <div className="insp__field">
               <span className="insp__label">时长</span>
@@ -178,7 +178,7 @@ export function Inspector({
         </div>
 
         {isWait ? (
-          <p className="hint">等待标记：预演与执行走到这里都停住，手动点「继续」。开放式，不估时长。</p>
+          <p className="hint">等待标记：预演与执行推进到此都会停住，需手动点「继续」。开放式等待，不预设时长。</p>
         ) : (
           <div className="insp__field">
             <span className="insp__label">预估</span>

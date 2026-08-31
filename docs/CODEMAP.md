@@ -14,13 +14,15 @@ app/backend/
 
   arm/
     base.py         ArmDriver Protocol + ArmState。hold(q) 与 move_to(q, t) 是两个动词
-    sim.py          SimArm。一阶滞后 + 可注入拖动。开发与测试的地基
+    sim.py          SimArm。一阶滞后 + 可注入拖动。运动只在注入时钟上走（`step()`/`_t`）；活服务 `self_driven=True`
     session.py      ArmSession —— 薄封装上游 RebotArm。dict↔ndarray 只在这一处转
-    factory.py      真臂 / 模拟器选择。fallback 一定出声
+    factory.py      真臂 / 模拟器选择。无 `--sim` 连不上真臂则拒绝启动，不静默回落
 
   safety/
     latch.py        SafetyLatch。急停闩锁，纯逻辑不碰硬件
     watchdog.py     三个条件自动触发急停，都要求「持续」而非单次
+    contact.py      接触残差观测器。默认关；只在 playing 采样
+    client_watchdog.py  回放/示教中客户端沉默 → SafeLock
     kinematics.py   限位（从 URDF 读）+ 自碰撞 + 路径采样 + FK
 
   actions/
@@ -32,7 +34,8 @@ app/backend/
     check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
 
   core/
-    controller.py   控制循环。闩锁在任何东西能命令臂之前检查
+    activity.py     互斥活动表。decide(activity, intent) 是命令缝；闩锁不在这张表里
+    controller.py   控制循环。闩锁在任何东西能命令臂之前检查；idle/done/stop 持续 hold
     events.py       语义事件名与信封。单向，不可否决
     executor.py     Sequence 执行器（块遍历）。纯逻辑，注入时钟/arm/shutter/已解析位姿
     floatlock.py    浮动/锁定判据。带迟滞与最短静止时间
@@ -55,7 +58,7 @@ app/backend/
     preflight.py    序列 / agent 共用的执行预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
     gate.py         require_arm_available —— 运动闸门，闩锁期间 409
     plugins.py      GET /api/plugins —— 前端据此渲染触发表单
-    estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
+    estop.py        急停端点。解除后 idle 保持，不自动示教；示教只走「+ 录位姿」
     poses.py        位姿库 CRUD / capture / links / goto
     sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
     templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）

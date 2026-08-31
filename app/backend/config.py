@@ -33,8 +33,12 @@ PLUGINS_DIR = Path(os.environ.get("REBOT_PLUGINS_DIR", REPO_ROOT / "plugins"))
 #: YAML round-trip would strip every comment.
 TUNING_FILE = Path(os.environ.get("REBOT_TUNING_FILE", REPO_ROOT / "config" / "tuning.yaml"))
 
-#: Localhost only. Remote access goes through an SSH tunnel, as before.
-HOST = os.environ.get("REBOT_HOST", "127.0.0.1")
+#: Listen on every interface by default; the startup banner lists the
+#: addresses the UI is actually reachable on (vite-style). There is no auth
+#: layer — anyone who can reach this port can move a 48 V arm — so deployments
+#: that must stay private pin REBOT_HOST=127.0.0.1 (the systemd unit does) or
+#: pass --local.
+HOST = os.environ.get("REBOT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("REBOT_PORT", "18790"))
 
 #: The shutter board. udev gives the XIAO this stable name

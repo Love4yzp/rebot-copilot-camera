@@ -11,9 +11,7 @@ which is the authoritative execution semantics, with the differences a real
 arm forces:
 
 - a transition is commanded as ``move_to(pose, duration)`` and confirmed by
-  arrival detection, where the mock lerps joints. **Easing only shapes the
-  frontend preview** — the real arm walks whatever profile upstream's
-  ``move_to`` picks. Close, not guaranteed identical; the UI says so.
+  arrival detection. Real arm and SimArm share a timed smoothstep ramp.
 - a hold's clock starts when the arm has arrived at the pose *and held
   still* for a settle dwell, so a marker can never fire mid-approach — or
   mid-settle — and photograph a moving scene. The mock starts the countdown
@@ -566,9 +564,8 @@ class SequenceExecutor:
             if pose is not None and self._has_arrived(pose.joints):
                 self._begin_hold_timing()
             elif pose is not None:
-                # The real arm's move is a MIT ramp that only exists while
-                # streamed: re-issue every tick until arrival (SimArm's
-                # move_to is an idempotent retarget, so this is a no-op there).
+                # The ramp only exists while streamed: re-issue every tick
+                # until arrival (same target continues the profile).
                 if self._clock() < self._arrival_deadline:
                     self._arm.move_to(pose.joints, self._move_duration_s)
                 else:

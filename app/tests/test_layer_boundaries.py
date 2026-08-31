@@ -202,17 +202,25 @@ def rig() -> "tuple[Controller, _Clock, list]":
 
 
 def _assert_invariant(controller: Controller):
-    """A resting arm must read ``idle`` (rest clears on any latch/teach/play),
-    and an engaged stop must clear rest and report ``estop`` — so ``mode``
-    alone is enough to know the motors are commanded."""
+    """Rest is a first-class Activity now (ADR 0001): a resting arm reports
+    ``mode == "rest"``, distinct from ``idle``, so a mode-only client is never
+    told the motors hold while torque is off. The latch stays cross-cutting —
+    ``"estop"`` is a view that outranks the activity table when latched, and
+    ``_tick_latched`` force-sets IDLE (clearing rest/teach) before holding, so
+    a freeze never leaves a torque-less arm also marked resting."""
     if controller._resting:
-        assert controller.mode == "idle", (
-            "a resting arm has no torque; reporting anything but 'idle' would "
-            "tell a mode-only client the motors are holding when they are not"
+        assert controller.mode == "rest", (
+            "a resting arm has no torque; mode must be 'rest' (not 'idle') so a "
+            f"mode-only client is not told the motors hold (got {controller.mode!r})"
         )
     if controller.latch.is_latched:
-        assert not controller._resting, "an engaged stop clears rest — torque-less and stopped cannot coexist"
-        assert controller.mode == "estop"
+        assert not controller._resting, (
+            "an engaged stop force-clears rest via _tick_latched — "
+            "torque-less and stopped cannot coexist"
+        )
+        assert controller.mode == "estop", (
+            f"a latched arm must report 'estop' (the view), got {controller.mode!r}"
+        )
 
 
 def test_mode_and_resting_stay_consistent_across_every_transition(rig):
@@ -234,9 +242,9 @@ def test_mode_and_resting_stay_consistent_across_every_transition(rig):
         rest = state["data"]["resting"]
         mode = state["data"]["mode"]
         if rest:
-            assert mode == "idle", (
-                f"published mode={mode!r} with resting=True — a client reading "
-                "only mode would miss that the arm has no torque"
+            assert mode == "rest", (
+                f"published mode={mode!r} with resting=True — a mode-only client "
+                "would miss that the arm has no torque"
             )
 
     # idle
@@ -261,7 +269,7 @@ def test_mode_and_resting_stay_consistent_across_every_transition(rig):
     for _ in range(3):
         tick()
 
-    # clear the stop — drops into teaching, not rest
+    # clear the stop — drops to idle (auto-teach was dropped in the activity refactor)
     controller.latch.clear()
     for _ in range(3):
         tick()

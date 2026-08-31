@@ -35,7 +35,7 @@ export function ModeBadge({ mode, moving, connected }: Props) {
     <span className="mode-badge__dot" />
   );
 
-  const label = mode === "prod" ? "后端直连机械臂，操作将实际驱动" : "仅前端演示，机械臂不会动";
+  const label = mode === "prod" ? "后端直连机械臂，操作将实际驱动" : "模拟器/演示模式，机械臂不会动";
 
   if (!mode) {
     return (

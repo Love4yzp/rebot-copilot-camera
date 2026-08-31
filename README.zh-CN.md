@@ -1,20 +1,20 @@
-# Teach & Repeat · 可编程空间点位应用
+# Teach & Repeat · 示教回放
 
 [English](./README.md) | **中文**
 
 > **教它走一遍，它替你走一万遍。**
 > Teach it once, it walks it a thousand times.
 
-用手把臂拖到一个位置，松手，按一下记录 —— 这就是一个点位。给点位挂上动作（快门是第一个），按播放：臂自己走遍全程，每到一处停稳、执行。
+用手把机械臂推到一个姿态，松手，点一下保存 —— 这就是一个位姿。把位姿排上时间轴、挂上动作（如相机快门），点击「执行」：机械臂按规划走完全程，每到一处停稳、触发动作、前往下一站。
 
 ```
 教                        存                         拍
-拖到位 → 松手 → 记录  →   有序点位 + 每点挂动作  →   到位 → 稳定 → 快门 → 下一点
+推到位 → 松手 → 保存位姿  →  排时间轴 + 挂动作标记  →  到位 → 停稳 → 快门 → 下一站
 ```
 
 第一个落地场景是自动化多视角拍摄：reBot-RS 六轴臂夹佳能相机，被拍物体固定不动。照片留在相机 SD 卡里 —— 本项目只管把臂开到位、把快门按下去。
 
-> 软件已完成，464 个测试；两项硬件实测待做。改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。
+> 改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。做到哪了见 **[PROGRESS.md](./PROGRESS.md)**。
 
 ---
 
@@ -25,7 +25,7 @@
 | 程序 | `app/backend/`（内核、编排引擎、插件层、API —— 分层见 `docs/ARCHITECTURE.md`）、`app/frontend/`（界面 + 开发 mock + 契约 runner）、`app/firmware/esp32-shutter/`、`app/vendor/reBotArm_control_py/`（锁版本的 submodule） |
 | 配置与数据 | `app/config/`（硬件 yaml + 操作者调参）、`app/data/`（运行时位姿 / 序列 / 模板，不入 git） |
 | 部署 | `app/deploy/`（systemd unit + udev 规则） |
-| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构锚点、硬件事实）、`PROGRESS.md`、本 README |
+| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构、硬件、交互）、`PROGRESS.md`（现状）、本 README |
 | 验证 | `app/tests/`、`app/contract/cases/`（golden 契约用例） |
 | 入口 | `./dev.sh`（全在本机跑）、`./device.sh`（每条命令经 ssh 落到设备） |
 
@@ -35,7 +35,7 @@
 
 | | | 没有的话 |
 |---|---|---|
-| reBot-RS 机械臂 | 6 关节 + 夹爪，RobStride，48V，CAN | `--sim` 跑模拟臂，除真运动外全部可用 |
+| reBot-RS 机械臂 | 6 关节 + 夹爪，RobStride，48V，CAN | `./dev.sh sim` 跑模拟臂，除真运动外全部可用 |
 | USB-CAN 适配器 | 主机 ↔ 臂 | 同上 |
 | 佳能相机 | 机身要支持蓝牙遥控 | `SimShutter`，快门调用只记日志 |
 | XIAO ESP32-S3 | 快门桥：USB 连主机，BLE 连相机 | 同上 |
@@ -64,17 +64,17 @@ cd app/frontend && npm install && npm run build
 ## 试跑（不接任何硬件）
 
 ```bash
-cd app && uv run -m backend.app --sim
+./dev.sh sim
 ```
 
-开 **http://127.0.0.1:18790**。模拟臂会响应示教拖动、走点位、假装按快门 —— 整个流程都能走通。
+开 **http://127.0.0.1:18790**。模拟臂会响应示教拖动、前往各站位、模拟触发快门 —— 整个流程都能完整走通。`./dev.sh status` 看端口上是谁。命令列表以 `./dev.sh --help` 为准。
 
-改前端：`cd app/frontend && npm run dev`（热更新，自动 proxy 到 18790）。
+对着已启动的后端改前端：`cd app/frontend && npm run dev`（热更新，自动 proxy 到 18790）。
 跑测试：`cd app && uv run pytest`。
 
-`./dev.sh` 把本机启动包成两种模式 —— `./dev.sh prod` 构建前端并起后端，同一个源（无硬件加 `--sim`）；`./dev.sh sim` 只起前端。API 联调不起前端：`./dev.sh prod --no-build`，/docs 即控制台（需已构建过一次前端）。旧名 `mock` 仍是 `sim` 的别名，过渡期后移除。**不管哪种模式，后端控臂的安全措施（急停闩锁 / 运动闸门 / 看门狗）都在。** 部署到设备是另一个脚本 `./device.sh`，见「部署到 R2x」一节，日常使用不需要它。
+`./dev.sh` 是本机启动入口。`./dev.sh sim` 无硬件起后端（旧写法 `--sim` 仍可用），真臂 `./dev.sh prod`。`./dev.sh --no-build` 跳过前端构建（需已构建过一次，`/docs` 即控制台）。`./dev.sh ui` 只起前端（内存 mock，无 Python）。**不管哪种模式，后端控臂的安全措施（急停闩锁 / 运动闸门 / 看门狗）都在。** 第二个实例在碰 CAN 之前就会被拒绝。部署到设备是另一个脚本 `./device.sh`，见「部署到 R2x」一节，日常使用不需要它。
 
-**不启动后端也能预览前端**：`./dev.sh sim`，或 `cd app/frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 臂全部由内存 mock 顶替 —— 列表 / 示教 / 录点 / 播放 / 急停都能走通，只是数据是临时的。3D 臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
+**不启动后端也能预览前端**：`./dev.sh ui`，或 `cd app/frontend && npm run dev:mock`。API、WebSocket 状态流和 3D 机械臂全部由内存 mock 顶替 —— 素材库 / 示教 / 录位姿 / 执行 / 急停都能走通，只是数据是临时的。3D 机械臂要读 vendor 里的 URDF，先 `git submodule update --init`；启动后开 http://localhost:5173。
 
 ---
 
@@ -82,14 +82,14 @@ cd app && uv run -m backend.app --sim
 
 ### 1 · 启动，然后确认它连上了真臂
 
-臂接 CAN、ESP32 接 USB、相机装夹爪上。**不加 `--sim`**：
+臂接 CAN、ESP32 接 USB、相机装夹爪上。**不是 sim 模式**：
 
 ```bash
-cd app && uv run -m backend.app
-curl -s http://127.0.0.1:18790/api/health | grep simulated    # 必须是 false
+./dev.sh prod
+./dev.sh status    # arm.simulated 必须是 false
 ```
 
-**这一步别省。** 连不上真臂时服务会自动退回模拟器继续跑 —— 界面、日志、按钮全都正常，只有臂不动。
+**这一步别省。** 非 sim 模式时连不上真臂会拒绝启动。`simulated: true` 表示你用 `./dev.sh sim` 起的。
 
 ### 2 · 配对相机（一次性）
 
@@ -115,7 +115,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 3. 拖到位，**松手**。停手约 0.25 秒后自动锁在那里。
 4. 命名，按「保存位姿」。重复 2–4 录下一个。
 
-位姿进素材库，被任意多条序列**链接**复用 —— 改一个位姿，所有引用一起变。日常的「点哪去哪」在每张位姿卡上：「去这里」。示教条自带一个急停按钮 —— 这个模式下你的手在臂上，不在键盘上。
+位姿进素材库，被任意多条序列**链接**复用 —— 改一个位姿，所有引用一起变。日常「点哪去哪」：点一张位姿卡，臂开过去。示教条自带一个急停按钮 —— 这个模式下你的手在臂上，不在键盘上。
 
 ### 4 · 排时间轴
 
@@ -131,10 +131,10 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 两个动词，不共用一个按钮：
 
-- **▶ 预演**：播放头走计划尺，监视器播灰阶模拟（过渡的缓动肉眼可见），**臂一动不动**。预演不是机器状态，四个状态色一个都不亮。
-- **执行（臂会动）**：真臂跑。播放头走真实进度，监视器翻为实况，琥珀色点亮，时间轴锁定到本轮结束。
+- **▶ 预演**：进度指针走计划尺，监视器播灰阶模拟（过渡的缓动肉眼可见），**臂一动不动**。预演不是机器状态，四个状态色一个都不亮。
+- **执行（臂会动）**：真臂跑。进度指针走真实进度，监视器翻为实况，琥珀色点亮，时间轴锁定到本轮结束。
 
-等待标记对两者都生效：播到它停住，点「继续」才走。执行前对**整条序列**做限位与自碰撞预检，包括相邻两位姿之间的路径 —— 两个各自合法的位姿，中间的直线可能穿过臂自己的底座。不合法直接拒绝，**臂一动不动**。
+等待标记对两者都生效：推进到它停住，点「继续」才走。执行前对**整条序列**做限位与自碰撞预检，包括相邻两位姿之间的路径 —— 两个各自合法的位姿，中间的直线可能穿过臂自己的底座。不合法直接拒绝，**臂一动不动**。
 
 ### 界面怎么读
 
@@ -155,7 +155,7 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 ## 急停
 
-**顶栏红色大按钮，或按 `Esc`。** 播放中、示教中都能按。
+**顶栏红色大按钮，或按 `Esc`。** 执行中、示教中都能按。
 
 - 臂**保持力矩钉在原地**，不掉电、不松劲。
 - 所有会让臂动的请求返 409 并带原因。
@@ -175,19 +175,19 @@ curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `REBOT_HOST` | `127.0.0.1` | 监听地址。**改成 `0.0.0.0` 等于把机械臂控制权开放给整个网络，本项目没有认证层** |
+| `REBOT_HOST` | `0.0.0.0` | 监听地址，启动横幅会列出实际可访问地址。**绑到本机以外的接口等于把机械臂控制权开放给对应网络，本项目没有认证层** |
 | `REBOT_PORT` | `18790` | 端口 |
 | `REBOT_DATA_DIR` | `./app/data` | 操作者数据根目录：`poses/`、`sequences/`、`templates/` 三个库都在它下面，一文档一 JSON |
 | `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | 快门板串口。udev 给的稳定名，别用 `/dev/ttyACM*`（插拔顺序会换号，指到别的 CDC 设备上看起来就是相机坏了）|
 | `REBOT_SHUTTER_BAUD` | `115200` | 快门板波特率。改了要同步改固件的 `-D REBOT_SERIAL_BAUD` |
 | `REBOT_TUNING_FILE` | `./app/config/tuning.yaml` | 调参面板的落盘文件。文件缺失 = 默认值 |
 
-命令行：`--sim` / `--host` / `--port`。
+命令行：`./dev.sh sim`（= `--sim`）/ `--host` / `--port` / `--local`（`--local` 只绑 127.0.0.1）。
 `device.sh` 另需设置 `REBOT_HOST_SSH`（无默认值，指向你的设备，如 `recomputer@192.168.1.10`），另认 `REBOT_REMOTE_DIR`。
 
 **调参面板**（监视器区右侧「调参」按钮，prod 下进入需确认）：浮动手感 kp/kd、浮动/锁定阈值、到位判定、进站限速、负载 profile（bare/camera/gripper）。改动立即热生效 —— 示教浮动中也可以边掰边调 kp/kd；但负载 profile 切换要求臂不在浮动，序列执行中拒绝一切写入。热改只进内存，点「保存到配置」才写进 `app/config/tuning.yaml`；「恢复已保存」随时回到上次保存。
 
-**挂上相机后**：整机（机身+支架）称重，把质量填进面板的「负载 → 相机质量」，质心相对末端法兰的偏移填 com，切到 camera profile，然后用浮动漂移手感复核 —— 解除急停后后端自动进零重力示教，臂应该原地不动；漂移就是重力前馈不准（逐关节修正流程见 `docs/HARDWARE_NOTES.md` #B2）。不再需要改代码里的常量。
+**挂上相机后**：整机（机身+支架）称重，把质量填进面板的「负载 → 相机质量」，质心相对末端法兰的偏移填 com，切到 camera profile，然后用浮动漂移手感复核 —— 点「+ 录位姿」进零重力，臂应该原地不动；漂移就是重力前馈不准（逐关节修正流程见 `docs/HARDWARE_NOTES.md` #B2）。不再需要改代码里的常量。
 
 ---
 
@@ -211,7 +211,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 **仅本机访问（默认，仓库里 unit 的配置）**
 
-服务只听 `127.0.0.1`，外部走 SSH 隧道：`./device.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。
+服务只听 `127.0.0.1`，外部走 SSH 隧道：`./device.sh open` 会建好隧道并打开浏览器。适合不信任所在网络的场景。（应用本身默认绑所有接口，是 unit 里显式钉住 `REBOT_HOST=127.0.0.1` 才收窄的，别删那行；开发机上想收窄用 `--local`。）
 
 **局域网访问（reComputer 上的常见形态）**
 
@@ -219,7 +219,7 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 网络不可信、又需要远程访问时，不要把服务直接暴露出去：在 localhost 服务前面挡一个带认证的反向代理（Caddy / nginx 的 basic auth 即可），或走带 ACL 的私有网络（WireGuard / Tailscale 之类）。认证是部署层的职责，不是这个应用的 —— 这类配置属于部署现场，不进仓库。
 
-`push` **不删设备上的 `app/data/`** —— 操作员现场示教出来的点位和序列都在那里，只存在于设备上。
+`push` **不删设备上的 `app/data/`** —— 操作员现场示教出来的位姿和序列都在那里，只存在于设备上。
 
 ---
 
@@ -227,19 +227,19 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 | 现象 | 多半是 | 怎么办 |
 |---|---|---|
-| 服务在跑，臂一动不动 | 静默退回了模拟器 | `curl -s :18790/api/health \| grep simulated`。`true` 就是没连上，启动日志里有具体原因 |
-| macOS 上退回模拟器，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh prod` 会自动注入 dyld 搜索路径；直接 `cd app && uv run -m backend.app` 要自己设 `DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/lib:/usr/local/lib:/usr/lib"` |
+| 服务在跑，臂一动不动 | 用了 `./dev.sh sim`，或连的是残留模拟进程 | `./dev.sh status` —— 真臂时 `arm.simulated` 必须是 false。prod 连不上真臂会拒绝启动 |
+| macOS 上起不来，日志 `load PCBUSB failed` | 缺 MacCAN 的 CAN 运行时 —— macOS 没有 SocketCAN，CAN 传输走 `libPCBUSB.dylib`（支持 PEAK 及 PEAK 兼容适配器，如 XCAN-USB） | 把 `libPCBUSB.dylib` 装进 `~/.local/lib/` 并建一个名为 `PCBUSB` 的软链指向它（motorbridge 仓库 `third_party/pcan/macos/` 有打包好的）。`./dev.sh` 会注入 dyld 搜索路径；不要用别的方式起后端 |
 | `import reBotArm_control_py` 失败 | submodule 没拉 | `git submodule update --init` |
-| 按播放返 **400** | 有点位越限 / 自碰撞，或相邻两点之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录点时不拒绝只警告**（臂物理上就在那），检查发生在播放前 |
-| 按播放返 **409** | 急停闩着，或已在播 / 在示教 | `detail` 里写了是哪种 |
+| 点击执行返 **400** | 有位姿超限 / 自碰撞，或相邻两站之间路径穿模 | 看返回体 `detail.reasons`，会指到具体关节或路段。注意**录位姿时不拒绝只警告**（臂物理上就在那），检查发生在执行前 |
+| 点击执行返 **409** | 急停闩着，或正在执行 / 正在示教 | `detail` 里写了是哪种 |
 | 臂拖不动 | 没开示教，或急停闩着 | 示教开着时臂**起手是握持的**，推一下才放开 —— 这是设计不是卡住 |
-| 快门自检通过，播放时拍不到 | 相机睡了或拒绝了 —— `camera: true` 只说明问的那一刻它连着 | 用 `?shoot=true` 测整条链路。一般是相机睡了、蓝牙没设成「遥控」、或板子重启丢了配对（用 `POST /api/shutter/pair` 重配）|
+| 快门自检通过，执行时拍不到 | 相机睡了或拒绝了 —— `camera: true` 只说明问的那一刻它连着 | 用 `?shoot=true` 测整条链路。一般是相机睡了、蓝牙没设成「遥控」、或板子重启丢了配对（用 `POST /api/shutter/pair` 重配）|
 | 主机完全收不到 ESP32 任何数据 | `platformio.ini` 少了 `-D ARDUINO_USB_CDC_ON_BOOT=1` | 加上重烧。少了它 `Serial` 走 UART0 引脚，板子照常枚举、端口能开、写入都成功，**全链路无一处报错** |
 | `/api/logs` 是空的 | 服务账号不在 `systemd-journal` 组 | `./device.sh setup` 会加，加完要重新登录 |
 | journalctl 里中文变 `?` | systemd 默认 `LANG=C` | unit 和 `device.sh run` 都已设 `LANG=zh_CN.UTF-8` |
 | 臂突然自己停了 | 看门狗触发的急停 | 急停条上有原因。三个条件都要求**持续**，抖一下、丢一帧不会触发 |
 | 前端 3D 空白 | URDF / mesh 没加载 | 抽屉里会写明是「加载失败」「网格缺失」还是「3D 无法初始化」，照着那句查。最常见是 submodule 没拉：`git submodule update --init`。自查 `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` 应返 200 —— 注意 mesh 在**包根**下，不在 `urdf/` 里 |
-| 一直不亮绿（到位） | 臂被急停或示教动过 | 这是对的。臂被冻在别处或被人推走之后，界面不再声称知道它在哪 —— 对任意位姿「去这里」或重跑一次即可 |
+| 一直不亮绿（到位） | 臂被急停或示教动过 | 这是对的。臂被冻在别处或被人推走之后，界面不再声称知道它在哪 —— 点一张位姿卡或重跑一次即可 |
 
 ---
 
@@ -258,8 +258,8 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 | `GET/POST /api/templates` · `DELETE /api/templates/{id}` · `POST /api/templates/{id}/instantiate` | 结构配方（位姿槽位）；实例化 = 把每个槽位绑到库位姿上复印一份 |
 | `POST /api/teach` | 零力示教开关 |
 | `POST /api/shutter/test` | 快门自检。查 USB 与 BLE 两段链路，`?shoot=true` 才真拍 |
-| `POST /api/shutter/pair` | 让板子进入 BLE 配对模式并等相机（30 秒）。播放中返 409 |
-| `GET /api/plugins` · `POST /api/app/plugins/probe` | 装了哪些动作插件、可不可用。前端据此渲染触发表单 |
+| `POST /api/shutter/pair` | 让板子进入 BLE 配对模式并等相机（30 秒）。执行中返 409 |
+| `GET /api/plugins` · `POST /api/plugins/probe` | 装了哪些动作插件、可不可用。前端据此渲染触发表单 |
 | `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | 状态与日志 |
 | `WS /api/events` | 语义事件流：到位 / 动作 / 急停。给集成方用，不含 20Hz 关节角 |
 
@@ -275,11 +275,10 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 | | |
 |---|---|
-| [AGENTS.md](./AGENTS.md) | 改代码前读：四条铁律、代码地图、不能破的约定、架构分层 |
-| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实与坑，**已验证**和**待实测**严格分开 |
-| [PROGRESS.md](./PROGRESS.md) | 进度、阻塞项、交接协议 |
+| [AGENTS.md](./AGENTS.md) | 改代码前读：四条铁律、代码地图、约定 |
+| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实，**已验证** vs **待实测** |
+| [PROGRESS.md](./PROGRESS.md) | 现在做到哪、什么卡住 |
 | [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | 烧录、配对、串口协议 |
-| [issue #1](https://github.com/Love4yzp/rebot-copilot-camera/issues/1) | 原始设计与决策记录（已归档，不再追加） |
 
 臂层不自己写 —— 运动学、动力学、重力补偿、轨迹规划、URDF 全部来自 [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py)。
 

@@ -62,6 +62,8 @@ class ArmState:
     velocities: Mapping[str, float] = field(default_factory=dict)
     #: Timestamp from the injected clock, not from ``time.time`` directly.
     t: float = 0.0
+    #: Joint torques in N·m when the driver can read them. Empty if unknown.
+    torques: Mapping[str, float] = field(default_factory=dict)
 
 
 @runtime_checkable

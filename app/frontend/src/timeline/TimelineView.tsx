@@ -551,14 +551,12 @@ export function TimelineView({
     return out;
   }, [blocks, starts, contentTotal, providers]);
 
-  const emptyState =
-    sequence === null ? (
-      <div className="tl-empty">先在顶栏选择或新建一条序列。</div>
-    ) : (
-      <div className="tl-empty">
-        点素材库位姿卡的「＋追加」，或把位姿拖到这里，排出第一个站位
-      </div>
-    );
+  const emptyState = (
+    <div
+      className="tl-empty"
+      aria-label={sequence === null ? "没有序列" : "空轨道"}
+    />
+  );
 
   return (
     <div className="tl">

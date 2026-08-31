@@ -2,7 +2,7 @@
 
 **这份文档写给要扩展这台机器的开发者。**
 
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) 的三个不变量里,插件是第三层 —— 内核是地基,交互骨架是承重结构,插件是装修。骨架正向时间轴编辑器演进(设计定稿见 [`TIMELINE.md`](./TIMELINE.md)),插件体系原样继承 —— 动作的家从 waypoint 的动作列表搬到时间轴的块内标记,扩展点不变。
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) 的三个不变量里,插件是第三层 —— 内核是地基,交互骨架是承重结构,插件是装修。动作的家是时间轴的块内标记(见 [`TIMELINE.md`](./TIMELINE.md)),扩展点不变。
 
 概念定义在 ARCHITECTURE.md,交互约束在 TIMELINE.md,改代码的铁律在 [`AGENTS.md`](../AGENTS.md)。这里只讲扩展点。
 
@@ -117,7 +117,7 @@ uv run -m backend.actions.check turntable --probe        # 跑自检
 uv run -m backend.actions.check turntable --run '{"degrees": 90}'
 ```
 
-最后一条最有用:按 provider 自己的模型校验参数、造一个真的 `ActionContext`、走**真的 `ThreadedRunner`** 带**真的超时**跑一次。挂死、乱抛异常、无视参数,都在这里暴露,而不是在机位上、被摄体等着的时候。
+最后一条最有用:按 provider 自己的模型校验参数、造一个真的 `ActionContext`、走**真的 `ThreadedRunner`** 带**真的超时**跑一次。挂死、乱抛异常、无视参数,都在这里暴露,而不是在机械臂实地运行、被摄体等着的时候。
 
 跟 `SimArm` / `SimShutter` 是同一套哲学 —— 无硬件循环是基础设施不是便利品。插件作者的第一天不该需要一条 48V 的臂。
 
@@ -243,7 +243,7 @@ async with websockets.connect("ws://127.0.0.1:18790/api/events") as ws:
 
 1. **单向,永不否决。** 没有返回值能改变流程。能否决的钩子就是第三方代码进了安全路径
 2. **有界队列,丢旧包。** 慢订阅者丢消息,不反压控制线程 —— 因订阅者不读而停摆的循环,就是停止撑住臂的循环
-3. **在知道事实的地方发。** sequence / pose / action 从 executor 发;急停从控制循环看闩锁跳变发(**不从 `SafetyLatch` 发** —— 它是纯逻辑,给它一个 broadcaster 就是在那堵墙上开第一个洞);`teach.captured` 从 HTTP 端点发,控制循环看不见手动录点
+3. **在知道事实的地方发。** sequence / pose / action 从 executor 发;急停从控制循环看闩锁跳变发(**不从 `SafetyLatch` 发** —— 它是纯逻辑,给它一个 broadcaster 就是在那堵墙上开第一个洞);`teach.captured` 从 HTTP 端点发,控制循环看不见手动录位姿
 
 `/ws` 与 `/api/events` 是两条流,因为回答的是两个问题:屏幕要 20Hz 关节角,集成方不要,更不该为此在棚里的网线上吃一条位置流。
 

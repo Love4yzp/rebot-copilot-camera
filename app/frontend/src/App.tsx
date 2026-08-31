@@ -116,8 +116,7 @@ function Workspace() {
   const latched = state?.estop.latched ?? false;
   const resting = state?.resting ?? false;
 
-  // 解除急停后，后端自动进入零重力示教 —— 前端必须同步打开示教条，
-  // 否则监视器写着「松手自动锁定 · 直接保存」，页面上却没有保存控件。
+  // 示教条跟「+ 录位姿」走。急停解除不再自动进示教（后端 idle 保持）。
   // 只在示教的上升沿打开：取消流程走「示教 → 待命」的下降沿，绝不能被
   // 这个效应重新拉回示教条（TeachBar 挂载时的 teach(true) 是幂等的）。
   const prevTeachRef = useRef(false);
@@ -137,6 +136,12 @@ function Workspace() {
    * operator is looking at, not to every transit the arm takes.
    */
   const runningSequence = executing && playback?.sequence_id === sequence?.id;
+  /** A library sequence is the tape — not a single-pose goto. */
+  const sequencePlaying =
+    executing &&
+    !!playback?.sequence_id &&
+    summaries.some((s) => s.id === playback.sequence_id);
+  const gotoLocked = teaching || sequencePlaying;
   const total = sequenceDuration(blocks);
 
   // ── distance-graded execution ("去起点" vs "执行") ──────────────────────────
@@ -290,7 +295,7 @@ function Workspace() {
   const execute = useCallback(async () => {
     if (!sequence) return;
     if (sequence.blocks.length === 0) {
-      show("info", "空序列 — 点素材库位姿卡上的「＋追加」，或把位姿拖上轴");
+      show("info", "空序列");
       return;
     }
     // 点执行 = 停预演进执行。
@@ -299,7 +304,7 @@ function Workspace() {
       await api.sequences.execute(sequence.id);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        show("info", latched ? "已急停 — 先解除急停" : "臂正忙 — 等当前动作完成");
+        show("info", latched ? "已急停" : error.message);
       } else {
         show("error", error instanceof Error ? error.message : String(error));
       }
@@ -320,7 +325,7 @@ function Workspace() {
   const toggleRest = useCallback(() => {
     const target = !(state?.resting ?? false);
     if (latched) {
-      show("info", "已急停 — 先解除急停");
+      show("info", "已急停");
       return;
     }
     void (async () => {
@@ -328,11 +333,7 @@ function Workspace() {
         await api.rest(target);
         show("info", target ? "已休息 · 电机卸力 · 臂搁在止点上" : "已唤醒 · 臂重新保持");
       } catch (error) {
-        if (error instanceof ApiError && error.status === 409) {
-          show("info", "臂不在零位 — 先点「零位」让臂回零，再休息");
-        } else {
-          show("error", error instanceof Error ? error.message : String(error));
-        }
+        show("info", error instanceof Error ? error.message : String(error));
       }
     })();
   }, [state?.resting, latched, show]);
@@ -340,7 +341,15 @@ function Workspace() {
   const gotoPose = useCallback(
     async (pose: Pose) => {
       if (latched) {
-        show("info", "已急停 — 先解除急停");
+        show("info", "已急停");
+        return;
+      }
+      if (teaching) {
+        show("info", "示教中");
+        return;
+      }
+      if (sequencePlaying) {
+        show("info", "序列执行中");
         return;
       }
       try {
@@ -348,13 +357,13 @@ function Workspace() {
         show("info", `臂开往「${pose.name}」…`);
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) {
-          show("info", runningSequence ? "执行中 — 等当前序列完成" : "臂正忙 — 等当前动作完成");
+          show("info", error.message);
         } else {
           show("error", error instanceof Error ? error.message : String(error));
         }
       }
     },
-    [latched, runningSequence, show],
+    [latched, teaching, sequencePlaying, show],
   );
 
   useNumberKeys(poses, gotoPose);
@@ -400,9 +409,11 @@ function Workspace() {
         ? shutterJustFired
           ? "acting"
           : "moving"
-        : arrived
-          ? "arrived"
-          : "idle";
+        : resting
+          ? "idle"
+          : arrived
+            ? "arrived"
+            : "idle";
 
   const canEditSequences = !sequencesUnavailable;
   // 总时长只出现在走带条时间码一处（一处信息一处措辞）；这里只报站位数。
@@ -473,10 +484,7 @@ function Workspace() {
             </button>
           </>
         ) : (
-          <>
-            <span className="seq-bar__meta">点一张位姿卡 → 臂开过去</span>
-            <span className="seq-bar__spacer" />
-          </>
+          <span className="seq-bar__spacer" />
         )}
       </header>
 
@@ -486,6 +494,7 @@ function Workspace() {
           executing={executing}
           latched={latched}
           teaching={teaching}
+          gotoLocked={gotoLocked}
           wizardOpen={wizardTemplate !== null}
           sequencesUnavailable={sequencesUnavailable}
           canAppend={uiMode === "edit" && canEditSequences && sequence !== null && !runningSequence}
@@ -496,7 +505,6 @@ function Workspace() {
           onGoto={(pose) => void gotoPose(pose)}
           onChanged={() => void refreshLibrary()}
           onTeach={() => setTeachOpen(true)}
-          appendTarget={sequence?.name ?? null}
         />
         <div className="monitor-area">
           <MonitorPanel
@@ -507,7 +515,6 @@ function Workspace() {
             poseName={poseName}
             sequenceName={uiMode === "edit" ? sequence?.name ?? null : null}
             runningSequence={runningSequence}
-            idleHint={uiMode === "simple" ? "点一张位姿卡 → 臂开过去" : null}
             resting={resting}
             onToggleRest={toggleRest}
             poses={poses}

@@ -60,6 +60,9 @@ class SimArm:
         self._q_target: dict[str, float] = dict(start)
         self._floating = False
         self._connected = False
+        #: Timed profile: (q0, target, t0, duration_s). Same shape as ArmSession.
+        self._motion: tuple[dict[str, float], dict[str, float], float, float] | None = None
+        self._tau_extra: dict[str, float] = {}
 
         # Previous sample, for finite-differencing velocity. `None` until the
         # first step, which is why ArmState.velocities can be empty.
@@ -103,6 +106,7 @@ class SimArm:
                 positions=dict(self._q),
                 velocities=dict(self._velocities),
                 t=self._t,
+                torques=dict(self._tau_extra),
             )
 
     def hold(self, q_target: Mapping[str, float]) -> None:
@@ -110,19 +114,27 @@ class SimArm:
             unknown = set(q_target) - set(self._joint_names)
             if unknown:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
+            self._motion = None
             self._q_target.update(q_target)
 
     def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
-        """Approximate a timed move with the first-order lag.
+        """One tick of a timed smoothstep ramp, matching ArmSession.move_to.
 
-        The simulator does not plan a trajectory; it just retargets, and the
-        lag gets it there. That is enough to exercise arrival detection, settle
-        timing and action sequencing, which is what the executor tests need.
-        Real timing fidelity belongs to the hardware arm's trajectory planner.
+        The same target continues the profile; a new target starts a new one
+        from the current pose. hold() cancels the clock so a later same-target
+        move does not jump to frac=1.
         """
         if duration_s <= 0:
             raise ValueError("duration_s must be positive")
-        self.hold(q_target)
+        with self._lock:
+            unknown = set(q_target) - set(self._joint_names)
+            if unknown:
+                raise KeyError(f"unknown joints: {sorted(unknown)}")
+            target = {n: float(q_target.get(n, self._q[n])) for n in self._joint_names}
+            now = self._t
+            if self._motion is None or target != self._motion[1]:
+                self._motion = (dict(self._q), target, now, float(duration_s))
+            self._apply_motion(now)
 
     def relax(self) -> None:
         """Recorded, not applied: the simulator has no torque loop to drop.
@@ -141,6 +153,7 @@ class SimArm:
         """
         with self._lock:
             self._floating = enabled
+            self._motion = None
             if not enabled:
                 self._q_target = dict(self._q)
 
@@ -183,6 +196,25 @@ class SimArm:
         with self._lock:
             return self._floating
 
+    def inject_contact(self, nm: float, joint: str = "joint1") -> None:
+        """Test hook: set a residual torque in N·m on one joint."""
+        with self._lock:
+            if nm == 0.0:
+                self._tau_extra = {}
+            else:
+                if joint not in self._joint_names:
+                    raise KeyError(joint)
+                self._tau_extra = {joint: nm}
+
+    def _apply_motion(self, now: float) -> None:
+        if self._motion is None:
+            return
+        q0, tgt, t0, dur = self._motion
+        frac = min(max((now - t0) / dur, 0.0), 1.0)
+        eased = frac * frac * (3.0 - 2.0 * frac)
+        for name in self._joint_names:
+            self._q_target[name] = q0[name] + (tgt[name] - q0[name]) * eased
+
     def drag(self, delta: Mapping[str, float]) -> None:
         """Simulate a human pushing the arm by ``delta`` radians per joint.
 
@@ -220,6 +252,8 @@ class SimArm:
             prev_q = dict(self._q)
             prev_t = self._t
 
+            if self._motion is not None:
+                self._apply_motion(self._t + dt)
             if not self._floating and dt > 0:
                 # Exponential approach: exact solution of q' = (target - q)/tau,
                 # so the result does not depend on how finely dt is chopped.

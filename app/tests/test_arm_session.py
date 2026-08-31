@@ -128,6 +128,13 @@ def test_move_is_a_mit_ramp_and_commands_stay_group_sized(monkeypatch):
     assert grip_group.mode_calls == []
 
     session.hold(q)
+    # hold cancels the ramp clock: a later same-target move starts at the
+    # measured pose, not at frac=1 of the old profile.
+    t[0] = 10.0
+    session.move_to(q, duration_s=2.0)
+    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.0, abs=1e-9)
+
+    session.hold(q)
     assert arm_group.mit[-1]["pos"].shape == (6,)
     assert grip_group.mit[-1]["pos"].shape == (1,)
     assert grip_group.mit[-1]["pos"][0] == pytest.approx(0.7)

@@ -91,12 +91,17 @@ export function TransportBar({
 
   return (
     <div className="transport">
-      <button type="button" className="touch-target" disabled={previewDisabled} onClick={previewClick}>
+      <button
+        type="button"
+        className="touch-target ghost"
+        disabled={previewDisabled}
+        onClick={previewClick}
+      >
         {previewLabel}
       </button>
       <button
         type="button"
-        className="touch-target transport__exec"
+        className="touch-target primary transport__exec"
         disabled={latched || executing || !canExecute || (!far && total === 0)}
         onClick={execClick}
       >

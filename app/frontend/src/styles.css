@@ -702,13 +702,23 @@ select:focus {
 }
 
 .lib__pose {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--body-lift);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
-  padding: 8px 10px;
-  cursor: grab;
+  padding: 10px 36px 10px 12px;
+  cursor: pointer;
+}
+.lib__pose--locked {
+  opacity: 0.45;
+  cursor: default;
 }
 .lib__pose-top {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -754,27 +764,26 @@ select:focus {
   text-align: left;
   background: transparent;
 }
-.lib__pose-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 6px;
-}
-.lib__pose-actions button {
-  min-height: 36px;
-  padding: 4px 14px;
-  font-size: 12.5px;
+.lib__append {
+  flex: none;
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 .lib__record {
   width: 100%;
-  background: none;
-  border: 1px dashed var(--edge);
-  color: var(--mark-dim);
   min-height: 44px;
 }
-.lib__record:hover:not(:disabled) {
-  color: var(--mark);
-  border-color: #3a3a44;
+.lib__pane--empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 160px;
+}
+.lib__pane--empty .lib__record {
+  min-height: 52px;
+  font-size: 15px;
+  font-weight: 600;
 }
 .lib__affected {
   margin: 0;
@@ -811,7 +820,9 @@ select:focus {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 12px;
+  /* Top band is always reserved for the absolute banner. Toggling it with
+   * data-state made the 3D canvas jump ~34px when a goto finished. */
+  padding: 46px 12px 12px;
   background: var(--ink);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
@@ -847,16 +858,7 @@ select:focus {
   font-weight: 650;
   letter-spacing: 1px;
   flex: none;
-}
-/* The banner is absolute at top:10px and horizontally centred — exactly
- * where the status line sits. Reserve its height whenever one is showing,
- * or the two print on top of each other. */
-.monitor[data-state="exec"],
-.monitor[data-state="estop"],
-.monitor[data-state="preview"],
-.monitor[data-state="teach"],
-.monitor[data-state="rest"] {
-  padding-top: 46px;
+  min-height: 1.3em;
 }
 .monitor[data-state="estop"] .monitor__status {
   color: #ffd9d6;
@@ -867,6 +869,7 @@ select:focus {
   text-align: center;
   max-width: 92%;
   flex: none;
+  min-height: 2.6em;
 }
 .monitor__view {
   width: 100%;
@@ -1151,7 +1154,7 @@ select:focus {
   background: var(--body);
 }
 .transport__exec {
-  border-color: #3a3a44;
+  font-weight: 600;
 }
 /* The amber outline exists only while the arm is really running — a lit
  * button that means nothing is a button that lies. */
@@ -1269,11 +1272,11 @@ select:focus {
 }
 .tl-empty {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--mark-dim);
-  font-size: 13px;
+  min-height: 72px;
+  margin: 8px 0;
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius);
+  background: transparent;
 }
 .tl-empty--guide {
   flex-direction: column;
@@ -1330,6 +1333,10 @@ select:focus {
   min-height: 132px;
   overflow-x: auto;
   padding: 4px 2px 8px;
+}
+.stn-strip > .tl-empty {
+  min-width: 100%;
+  margin: 0;
 }
 .stn {
   flex: none;
@@ -2326,44 +2333,29 @@ select:focus {
   color: var(--mark);
   font-weight: 600;
 }
-.lib__pose {
-  position: relative;
-  cursor: pointer; /* the card itself is 去这里 */
-}
 .lib__pose:hover {
   border-color: var(--edge-strong, #4a5563);
 }
-.lib__pose:hover::after {
-  content: "点击 → 臂开过去";
-  position: absolute;
-  right: 10px;
-  bottom: 6px;
-  font-size: 11px;
-  color: var(--mark-dim);
-  pointer-events: none;
-}
 .lib__more {
   position: absolute;
-  top: 6px;
+  top: 8px;
   right: 8px;
+  min-height: 28px;
+  min-width: 28px;
   padding: 0 4px;
   background: transparent;
   border: none;
   color: var(--mark-dim);
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.lib__pose:hover .lib__more {
-  opacity: 1;
 }
 .lib__more:hover {
   color: var(--mark);
 }
 .lib__menu {
   position: absolute;
-  top: 28px;
+  top: 32px;
   right: 8px;
   z-index: 30;
   display: flex;
@@ -2378,6 +2370,7 @@ select:focus {
   border-radius: 0;
   background: transparent;
   text-align: left;
+  min-height: 36px;
   padding: 6px 16px;
   font-size: 12px;
   cursor: pointer;
