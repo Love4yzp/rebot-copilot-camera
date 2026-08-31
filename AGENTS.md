@@ -8,32 +8,13 @@
 
 ## 常用命令
 
-> 布局说明：具体应用整体住在 `app/` 二级目录（`pyproject.toml` / `uv.lock` / `.venv` 都在里面），
-> 顶层只放 AI/人读文档与 `dev.sh` / `device.sh`。**所有 `uv` 命令都在 `app/` 下执行。**
+布局：应用整体住在 `app/` 二级目录（`pyproject.toml`/`uv.lock`/`.venv` 都在里面），顶层只放 AI/人读文档与 `dev.sh`/`device.sh`。**所有 `uv` 命令在 `app/` 下执行**——漏了这层会找不到包。
 
-```bash
-git submodule update --init                  # 臂层是 submodule，漏了 import 就失败
-(cd app && uv sync)
-(cd app && uv run pytest)
-(cd app && uv run -m backend.app --sim)      # 无硬件启动，127.0.0.1:18790
-(cd app && uvx ruff check backend tests)
+`git submodule update --init`（臂层是 submodule，漏了 import 就失败）。`dev.sh`（本机）/`device.sh`（经 ssh 落设备）的命令清单见各自 `--help` 或脚本头。三条环境不写的约定：
 
-cd app/frontend && npm install && npm run build  # 产物进 app/backend/static/
-cd app/frontend && npm run dev                   # 热更新，proxy 到 18790
-
-./dev.sh prod [--sim]                        # 本机：构建前端 + 起后端，同一个源
-./dev.sh sim                                 # 本机：只起前端，内存 mock，无后端
-./dev.sh build                               # 只构建前端（唯一所有者）
-# API 联调不起前端：./dev.sh prod --no-build，/docs 即控制台。旧名 mock 是 sim 的别名，过渡期后移除。
-
-./device.sh push                             # build + rsync + 重启（部署到设备，需先设 REBOT_HOST_SSH）
-./device.sh status                           # 跑在真臂还是模拟器上
-```
-
-**区分两个脚本的是代码在哪台机器上执行**：`dev.sh` 全在本机，`device.sh` 每条命令都经 ssh 落到设备上。
-构建是本机工作，所以归 `dev.sh build`，`device.sh push` 调它 —— 抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是你要发的那个。
-
-运动学、动力学、碰撞检查在开发机上就能跑和测（`pin` 和 `motorbridge` 在 macOS arm64 上可用），**只有 CAN 传输层需要真机**。
+- **前端构建归 `dev.sh build`，它是唯一所有者**——`device.sh push` 调它。抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是要发的那个。
+- `dev.sh` 的 `mock` 是 `sim` 的旧名（过渡期后移除）；`prod --no-build` 不起前端、`/docs` 即控制台（API 联调用）。
+- 运动学/动力学/碰撞在开发机就能跑和测（`pin`/`motorbridge` 在 macOS arm64 可用），**只有 CAN 传输层需要真机**。
 
 ---
 
@@ -71,106 +52,27 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 
 ## 代码地图
 
-**分层速览（四张表的细节只在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)「内核边界与部件关系」，这里不抄）：内核 = arm/ + safety/ + core/controller.py；编排引擎 = core/（executor/floatlock/broadcaster/events）+ sequences/；插件层 = actions/ + shutter/；入口层 = api/。**
+分层速览（细节在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)「内核边界与部件关系」）：内核 = arm/ + safety/ + core/controller.py；编排引擎 = core/（executor/floatlock/broadcaster/events）+ sequences/；插件层 = actions/ + shutter/；入口层 = api/。
 
-```
-app/backend/
-  app.py            FastAPI 入口。静态挂载必须在所有路由之后 —— mount("/") 匹配一切
-  assets.py         URDF / 硬件配置路径解析的唯一出口 + assert_rs_model() 守卫 + gripper 开关（has_gripper / effective_hardware_yaml 剥电机 / effective_urdf_path 剥质量）
-  config.py         只放真正依赖部署的值（数据目录、快门串口/波特率）。限位不在这（从 URDF 读）
-  tuning.py         调参模型与存取：payload profile / 浮动增益 / 阈值 + 服务端钳位；热改只进内存，显式保存才落 app/config/tuning.yaml
-  agent.py          外部 agent 的独占控制租约（token + 双重 TTL）【⏸ parked：有外部 agent 接入才扩，出厂应用无人用】
-
-  arm/
-    base.py         ArmDriver Protocol + ArmState。hold(q) 与 move_to(q, t) 是两个动词
-    sim.py          SimArm。一阶滞后 + 可注入拖动。开发与测试的地基
-    session.py      ArmSession —— 薄封装上游 RebotArm。dict↔ndarray 只在这一处转
-    factory.py      真臂 / 模拟器选择。fallback 一定出声
-
-  safety/
-    latch.py        SafetyLatch。急停闩锁，纯逻辑不碰硬件
-    watchdog.py     三个条件自动触发急停，都要求「持续」而非单次
-    kinematics.py   限位（从 URDF 读）+ 自碰撞 + 路径采样 + FK
-
-  actions/
-    base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
-    runner.py       每 provider 一条 worker。provider 绝不跑在控制循环上，probe 走同一条队列
-    registry.py     entry_points + app/plugins/ 目录(plugin.json)两条发现路径 + check_shape 形状闸门 + 健康。runner 才是「装了哪些」的唯一登记处
-    validate.py     写入时与执行前两道校验，让错误离开 ACTING 阶段
-    shutter.py      ShutterProvider —— 第一个 provider（名为「快门 provider」，文件名 `shoot.py`，与驱动包 `shutter/` 区分）
-    check.py        插件作者的无硬件开发循环：列 manifest / 跑自检 / 真 runner 真超时跑一次
-
-  core/
-    controller.py   控制循环。闩锁在任何东西能命令臂之前检查
-    events.py       语义事件名与信封。单向，不可否决
-    executor.py     Sequence 执行器（块遍历）。纯逻辑，注入时钟/arm/shutter/已解析位姿
-    floatlock.py    浮动/锁定判据。带迟滞与最短静止时间
-    broadcaster.py  控制线程 → asyncio 的扇出。有界队列，丢旧包
-
-  sequences/
-    models.py       Pose / EventMarker / Hold+Transition 块（判别式联合）/ Sequence / SeqTemplate
-    normalize.py    normalize 的 Python 实现（TS 端是 app/frontend/src/timeline/model.ts），写入前必跑
-    store.py        PoseStore / SequenceStore / TemplateStore，一文档一 JSON，原子写
-    seed_demo.py    首启演示数据（四方位：4 位姿 + 序列 + 模板）。与 mock 的镜像被契约用例 seeded-library 钉死
-
-  shutter/          【⏸ parked：链路已建全 + 协议 30 测试，待 B4 板子 + 相机到位（HARDWARE_NOTES B4）】
-    base.py         ShutterDriver Protocol + 异常类型。USB 与 BLE 是两段链路，分开报
-    protocol.py     行协议编解码 + LineReader
-    esp32.py        串口客户端。单条在途，id 防迟到回包
-    factory.py      真板 / 模拟选择。**快门永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到；只有 --sim 拿到模拟快门
-    sim.py          SimShutter，可脚本化失败
-
-  api/
-    preflight.py    序列 / agent 共用的执行预检（位姿解析 + 整序列校验，全经 Controller.preflight_* 那道门）
-    gate.py         require_arm_available —— 运动闸门，闩锁期间 409
-    plugins.py      GET /api/plugins —— 前端据此渲染触发表单
-    estop.py        急停端点。解除不是回到僵硬原位，而是直接进入零重力示教（先锁定、手一动就浮动）—— 急停后正是最需要用手掰臂的时刻
-    poses.py        位姿库 CRUD / capture / links / goto
-    sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
-    templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）
-    control.py      execute/stop+resume / 示教 / 快门自检 / WebSocket
-    agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）【⏸ parked：随 agent.py】
-    config.py       调参端点 GET/PUT/save/reset —— 闸门在 Controller.apply_tuning（执行中拒一切、浮动中拒负载切换），不挂运动闸门，但要在 NON_MOTION_ROUTES 写明理由
-    logs.py         journalctl 包装
-
-app/frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 app/backend/sequences/normalize.py 互为双语言端。调参面板 `components/TuningPanel.tsx`（Tweakpane，停靠监视器区右侧，全灰阶，prod 进入需确认）
-app/frontend/mock/      `npm run dev:mock` 的内存后端。数据形状与后端逐字段对齐，由 golden 契约测试守卫
-app/frontend/contract/  golden 契约的 mock 侧 runner（esbuild 打包，node 直跑）
-app/contract/cases/     golden 用例文件：REST 会话 + normalize 输入，两侧各跑一遍逐字段比对，见 app/tests/test_contract.py
-app/frontend/public/    自托管字体（离线设备，不能挂 CDN）
-app/firmware/esp32-shutter/  PlatformIO 工程
-app/deploy/             systemd unit ×2 + udev 规则
-app/config/rebotarm_rs.yaml  从上游 fork 的硬件配置（挂相机后要重调）
-app/config/tuning.yaml       调参面板的落盘值（操作者标定）；文件缺失 = 代码默认值
-app/vendor/reBotArm_control_py/  git submodule，锁 d540405
-
-app/examples/rebot-plugin-turntable/  可安装的动作插件示例（pyproject [tool.uv.sources] 钉住路径，挪动要同步改）
-app/data/               运行时数据根：poses/ sequences/ templates/ 三个库（gitignored；REBOT_DATA_DIR 可改家）
-.agents/ + skills-lock.json   threejs-* 参考技能（git 跟踪，刻意保留，见「技能体系」）
-app/tests/               测试自成「测试」章节，不在地图里复述
-```
+**每个文件干什么的逐行地图在 [`docs/CODEMAP.md`](./docs/CODEMAP.md)——碰任何 backend 文件前读它定位。** 超前建成模块（shutter/、agent、api/agent）在那标了 `⏸ parked` 与唤醒条件。
 
 ---
 
 ## 不能破的约定
 
-**层级边界**
-- `app/backend/api/*` 只调 controller 和 store，不直接动内部状态。所有运动前校验走 `Controller.preflight_*` 那道门（`app/backend/api/preflight.py` 是共用预检），不许直接 import `safety.kinematics.validate_*` / `actions.validate_*`
-- **例外**：`api/gate.py` 与 `api/estop.py` 直接碰 `app.state.latch` —— 闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环；`api/plugins.py` 只读 `ActionRegistry` —— 插件登记处的自述端点。都是刻意的前门，不是越界
-- `app/backend/core/executor.py` 纯逻辑，不碰 FastAPI、不碰真实时间、**不 import、不引用闩锁**（模块 docstring 的解释性提及除外；控制循环看到闩锁后调它的 `abort()`，这样执行器结构上不可能自己决定恢复）
-- `app/backend/arm/*` 只薄封装上游，不实现运动学
-- `SafetyLatch` 是横切闩锁，**不是模式机里的模式**（做成模式的话每加一个模式都要重审所有切换是否会绕过它）
+**层级边界**（`app/tests/test_layer_boundaries.py` AST 锁住：executor 不 import 闩锁 / api 不直连 `safety.kinematics`·`actions.validate` / arm 不实现运动学 / ActionContext 无 arm 句柄——改坏会大声失败）
+- **例外（前门，不是越界）**：`api/gate.py`/`api/estop.py` 直接碰 `app.state.latch`（闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环）；`api/plugins.py` 只读 `ActionRegistry`（插件登记处自述）。运动前校验全走 `Controller.preflight_*` 那道门。
+- `SafetyLatch` 是横切闩锁，**不是模式机的一态**——做成模式的话每加一个模式都要重审所有切换是否会绕过它。
 
 **动作绝不跑在控制循环上**
 provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒），而控制循环正是撑住臂的东西。executor **投递 + 每 tick 轮询**，实际执行在 `app/backend/actions/runner.py` 的 worker 线程上。一条慢快门曾把 tick 间隔拖过 watchdog 宽限触发急停 —— 一台仅仅是慢的相机，看起来和丢了臂一模一样。
 
-**插件够不到臂**
-`ActionContext` 只给只读姿态，没有 arm 句柄。这和「闩锁不进 executor」是同一手法 —— 让错的事**够不到**，而不只是禁止。要加运动能力给插件之前，先读 `docs/PLUGINS.md` 里「为什么触发源不是插件」。
+**插件够不到臂**（`app/tests/test_layer_boundaries.py` 锁住 ActionContext 字段集——加 arm/latch/store 句柄测试就红）
+`ActionContext` 只给只读姿态。这和「闩锁不进 executor」是同一手法——让错的事**够不到**，而不只是禁止。要加运动能力给插件之前，先读 `docs/PLUGINS.md`「为什么触发源不是插件」。
 
-**运动闸门**
-任何会让臂动的端点必须挂 `dependencies=[Depends(require_arm_available)]`。`app/tests/test_motion_gate.py` 遍历路由表，未挂闸门又没在 `NON_MOTION_ROUTES` 里写明理由的端点会让测试失败。**这是设计**：新增运动端点必须做一个显式决定。
-
-FastAPI 的 `include_router` 不把子路由摊平进 `app.routes`，朴素遍历一个端点都看不见，测试会永远空转通过 —— 所以那条测试有递归候选加 OpenAPI 交叉校验两层守卫，下次 FastAPI 改内部结构会大声失败而不是静默失效。**别删交叉校验。**
+**运动闸门**（`app/tests/test_motion_gate.py` 遍历路由表 + OpenAPI 交叉校验锁住）
+任何会让臂动的端点必须挂 `Depends(require_arm_available)`，或在 `NON_MOTION_ROUTES` 写明理由。**这是设计**：新增运动端点必须做显式决定。
+`include_router` 不摊平子路由进 `app.routes`，朴素遍历会空转通过——所以测试有递归候选 + OpenAPI 交叉校验两层守卫。**别删交叉校验**（FastAPI 改内部结构时会大声失败而非静默失效）。
 
 **调参闸门**
 调参写入不走运动闸门，走 `Controller.apply_tuning` 的分级：**执行中拒一切写入**（executor 的值是构造时捕获的）；**负载 profile 切换额外拒于浮动中**（前馈一次跳几 N·m，浮动没有位置环接得住）；**float kp/kd 浮动中可改**（follow 目标=当前位置，跳变为零 —— 边掰边调就靠这条）。服务端钳位在 `app/backend/tuning.py` 的 pydantic 模型里，面板的滑块范围只是 UX，可以被绕过，端点不能。
@@ -226,11 +128,11 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 ## 提交约定
 
-每个 commit 结束时代码库能跑：`cd app && uv run pytest` 绿、`cd app && uv run -m backend.app --sim` 能起。
+每个 commit 结束时代码库必须能跑（pytest 绿 + `--sim` 能起）。
 
 **改代码的 commit 里必须同时更新 [`PROGRESS.md`](./PROGRESS.md) 的状态**，不要分开提交，否则状态和代码漂移。
 
-commit message 写正常英文散文，说清**为什么**这么做，尤其是偏离原计划的地方 —— 这个仓库里好几个决定的理由只存在于 commit message 里。
+commit message 说清**为什么**，尤其是偏离原计划的地方——好几个决定的理由只存在于 commit message 里。
 
 ---
 
@@ -245,6 +147,7 @@ commit message 写正常英文散文，说清**为什么**这么做，尤其是�
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | **已验证**（有源码/实测证据）与**待实测**严格分开 | 碰硬件相关代码时 |
 | [`app/firmware/esp32-shutter/README.md`](./app/firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品架构锚点：设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
+| [`docs/CODEMAP.md`](./docs/CODEMAP.md) | 逐行代码地图：哪个文件干什么 + 超前模块 parked 标 | 碰任何 backend 文件前 |
 | [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴编辑器设计定稿（新一版交互骨架）：块/标记模型 / 预演与执行 / 布局 / 三期路线 | 动前端界面或编排交互时 |
 | [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 三个扩展点：动作插件 / 触发源 / 事件订阅。写给要扩展这台机器的人 | 加动作类型、接外部触发、做集成时 |
 | [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份 B601-RS 主从录制/回放 demo 提炼的**物理事实与策略**（限速、插值、首尾衔接、温度保护）。那份走 LeRobot，**代码一行都不能抄，抄的是数值和「为什么必须这么做」** | 写示教录制、轨迹回放、限速/过热保护时 |
