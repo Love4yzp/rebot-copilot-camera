@@ -12,6 +12,22 @@ never read from the motor's velocity register. On this firmware ``mechVel
 end-effector velocity, so reading it would make the arm fail to lock or lock too
 early. SimArm differences positions for the same reason -- logic developed
 against the simulator then behaves the same on hardware.
+
+Contract clauses -- what a ``session.py`` diff must not change. Details live
+in the per-method docstrings; this list is the index a reviewer checks a
+hardware-layer diff against.
+
+C1. Velocity is finite-differenced from position, never read from the
+    motor's velocity register (``mechVel 0x701A`` is not rad/s here).
+C2. ``hold()`` pins with torque; it must never become a motor disable.
+    The emergency stop depends on it.
+C3. ``relax()`` is only commanded at the zero pose; anywhere else zero
+    torque is a free-fall.
+C4. Units are radians / rad/s at this boundary, keyed by joint name; the
+    dict-to-array mapping happens only in ``session.py``.
+C5. Payload and gravity-correction changes are gated on the arm not
+    floating (``Controller.apply_tuning``); the driver itself does not
+    check.
 """
 
 from __future__ import annotations

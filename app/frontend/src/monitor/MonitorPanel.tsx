@@ -26,6 +26,10 @@ interface Props {
   /** Toggle the tuning panel. */
   onToggleTuning?: () => void;
   tuningOpen?: boolean;
+  /** Drop the 3D viewer entirely (phones): the operator is standing next to
+   * the real arm, and an unmounted viewer costs no GPU or battery. The text
+   * status lines above carry every machine state on their own. */
+  hideViewer?: boolean;
 }
 
 function blockLabel(block: Block | undefined, poseName: (id: string) => string): string {
@@ -65,6 +69,7 @@ export function MonitorPanel({
   onGhostClick,
   onToggleTuning,
   tuningOpen,
+  hideViewer = false,
 }: Props) {
   const latched = state?.estop.latched ?? false;
   const executing = state?.mode === "playback" && !latched;
@@ -160,7 +165,7 @@ export function MonitorPanel({
   }
 
   return (
-    <section className="monitor" data-state={bannerState} aria-label="监视器">
+    <section className={`monitor${hideViewer ? " monitor--flat" : ""}`} data-state={bannerState} aria-label="监视器">
       {banner ? <div className="monitor__banner">{banner}</div> : null}
       <div className="monitor__status">{status}</div>
       <div className="monitor__sub">{sub}</div>
@@ -176,19 +181,21 @@ export function MonitorPanel({
           </button>
         ) : null}
       </div>
-      <div className="monitor__view">
-        <ArmView3D
-          positions={state?.positions ?? {}}
-          preview={preview.pose}
-          ghosts={ghostPoses}
-          targetPoseId={targetPoseId}
-          targetAmber={executing}
-          onGhostClick={(ghost) => {
-            const pose = poses.find((p) => p.id === ghost.id);
-            if (pose) onGhostClick?.(pose);
-          }}
-        />
-      </div>
+      {hideViewer ? null : (
+        <div className="monitor__view">
+          <ArmView3D
+            positions={state?.positions ?? {}}
+            preview={preview.pose}
+            ghosts={ghostPoses}
+            targetPoseId={targetPoseId}
+            targetAmber={executing}
+            onGhostClick={(ghost) => {
+              const pose = poses.find((p) => p.id === ghost.id);
+              if (pose) onGhostClick?.(pose);
+            }}
+          />
+        </div>
+      )}
     </section>
   );
 }

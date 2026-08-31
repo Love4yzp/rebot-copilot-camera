@@ -48,8 +48,28 @@ export function useControlSocket() {
     };
 
     open();
+
+    // Phones suspend timers and can kill the socket while the tab is
+    // backgrounded; `onclose` may already have fired with the reconnect timer
+    // frozen. On return, reopen at once instead of waiting out the timer. A
+    // live socket needs nothing — state streams continuously, so it self-heals
+    // within a frame.
+    const resyncOnVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (
+        socket &&
+        (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+      ) {
+        return;
+      }
+      window.clearTimeout(timer.current);
+      open();
+    };
+    document.addEventListener("visibilitychange", resyncOnVisible);
+
     return () => {
       disposed = true;
+      document.removeEventListener("visibilitychange", resyncOnVisible);
       window.clearTimeout(timer.current);
       socket?.close();
     };

@@ -1960,6 +1960,36 @@ select:focus {
   }
 }
 
+/* ── phone (≤760px): tap-to-go face only, no 3D viewer ──────────────────────
+ * App forces the simple face at this width and MonitorPanel unmounts the
+ * viewer, so what is left to do here is layout and thumbs: the flat monitor
+ * must not keep the 900px block's 240px floor, the tuning panel stacks below
+ * it, and the small secondary buttons grow to 44px. The estop bar's own
+ * narrow rules live with the bar (styles above) — same breakpoint. */
+@media (max-width: 760px) {
+  .monitor--flat {
+    min-height: 0;
+  }
+  .monitor-area {
+    flex-direction: column;
+  }
+  .tuning-panel {
+    width: auto;
+  }
+  /* The library is the main surface on a phone — give it the space the
+   * viewer used to take. */
+  .lib {
+    flex: 1;
+    max-height: none;
+  }
+  .seq-bar .ghost,
+  .lib__collapse,
+  .monitor__tuning-btn .ghost,
+  .wizard__pose button {
+    min-height: 44px;
+  }
+}
+
 /* ── sheet ───────────────────────────────────────────────────────────────── */
 
 .sheet__backdrop {

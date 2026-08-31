@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api";
 import type { AppMode, Block, HoldBlock, Pose } from "./types";
 import { useControlSocket } from "./useControlSocket";
+import { useMediaQuery } from "./useMediaQuery";
 import { useNumberKeys } from "./useNumberKeys";
 import { usePreview } from "./preview/usePreview";
 import { makeHold, markerSchedule, maxJointDelta, playbackAbsTime, sequenceDuration } from "./timeline/model";
@@ -100,6 +101,16 @@ function Workspace() {
     localStorage.setItem(UI_MODE_KEY, next);
     if (next === "simple") preview.stop();
   };
+
+  /** Narrow viewport (a phone next to the arm): the clip editor is a desktop
+   * workflow, so the tap-to-go face is forced and its tab hidden. Same width
+   * as the estop bar's narrow breakpoint — the whole UI switches at one width.
+   * The stored preference is left alone, so a desktop window keeps its face. */
+  const narrow = useMediaQuery("(max-width: 760px)");
+  useEffect(() => {
+    if (narrow && uiMode === "edit") switchMode("simple");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrow]);
 
   const mode = state?.mode ?? null;
   const latched = state?.estop.latched ?? false;
@@ -405,6 +416,7 @@ function Workspace() {
       <EstopBar estop={state?.estop ?? null} mode={mode} connected={connected} appMode={appMode} moving={executing} />
 
       <header className="seq-bar">
+        {narrow ? null : (
         <div className="mode-tabs" role="tablist" aria-label="界面模式">
           <button
             type="button"
@@ -423,6 +435,7 @@ function Workspace() {
             剪辑
           </button>
         </div>
+        )}
         {uiMode === "edit" ? (
           <>
             <span className="engrave seq-bar__tag">序列</span>
@@ -501,10 +514,12 @@ function Workspace() {
             onGhostClick={(pose) => void gotoPose(pose)}
             onToggleTuning={() => setTuningOpen((v) => !v)}
             tuningOpen={tuningOpen}
+            hideViewer={narrow}
           />
           <TuningPanel
             visible={tuningOpen}
             appMode={appMode}
+            floatOnly={narrow}
             onClose={() => setTuningOpen(false)}
           />
         </div>

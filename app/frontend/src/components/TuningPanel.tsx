@@ -18,6 +18,10 @@ import { api, ApiError } from "../api";
 interface Props {
   visible: boolean;
   appMode: "sim" | "prod" | null;
+  /** Phones get float gains only — tuning while drag-teaching is the mobile
+   * scenario; everything else is gated on not-floating anyway and its
+   * sliders are mistap bait on a small screen. */
+  floatOnly?: boolean;
   onClose: () => void;
 }
 
@@ -116,7 +120,7 @@ function defaultsFromState(state: TuningState): Params {
   };
 }
 
-export function TuningPanel({ visible, appMode, onClose }: Props) {
+export function TuningPanel({ visible, appMode, floatOnly = false, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<Pane | null>(null);
   const paramsRef = useRef<Params | null>(null);
@@ -250,6 +254,7 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
     };
 
     // ── 负载 ────────────────────────────────────────────────────────────────
+    if (!floatOnly) {
     const payloadFolder = pane.addFolder({ title: "负载" });
     foldersRef.current.payload = payloadFolder;
     payloadFolder
@@ -276,6 +281,7 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
     payloadFolder
       .addBinding(params, "comZ", { label: "COM Z (m)", min: -0.5, max: 0.5, step: 0.001 })
       .on("change", on("comZ"));
+    }
 
     // ── 浮动手感 ────────────────────────────────────────────────────────────
     const floatFolder = pane.addFolder({ title: "浮动手感" });
@@ -288,6 +294,7 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
       .on("change", on("kd"));
 
     // ── 浮动/锁定 ───────────────────────────────────────────────────────────
+    if (!floatOnly) {
     const floatlockFolder = pane.addFolder({ title: "浮动/锁定" });
     foldersRef.current.floatlock = floatlockFolder;
     floatlockFolder
@@ -362,6 +369,7 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
     biasBinding("g4b", "J4");
     scaleBinding("g5s", "J5");
     biasBinding("g5b", "J5");
+    }
 
     // Initial dirty markers.
     const dirty = new Set(state.dirty);
@@ -379,7 +387,7 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
       paramsRef.current = null;
       foldersRef.current = {};
     };
-  }, [visible, showProdGate, loaded]);
+  }, [visible, showProdGate, loaded, floatOnly]);
 
   // ── save / reset ───────────────────────────────────────────────────────────
   const handleSave = useCallback(() => {
@@ -434,9 +442,11 @@ export function TuningPanel({ visible, appMode, onClose }: Props) {
           {error}
         </div>
       ) : null}
-      <div className="tuning-panel__hint">
-          切到「相机」负载前，先填相机质量（kg）——没填不能切。
-      </div>
+      {floatOnly ? null : (
+        <div className="tuning-panel__hint">
+            切到「相机」负载前，先填相机质量（kg）——没填不能切。
+        </div>
+      )}
       <div className="tuning-panel__pane" ref={containerRef} />
       <div className="tuning-panel__footer">
         <button type="button" className="ghost" onClick={handleSave}>
