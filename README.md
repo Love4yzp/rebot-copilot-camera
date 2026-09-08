@@ -271,6 +271,25 @@ Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
 
 ---
 
+## Optional headless physics validation
+
+The application does not require MuJoCo. Install the opt-in extra and run the
+deterministic baseline when validating playback changes:
+
+```bash
+cd app
+uv sync --frozen --extra physics
+uv run --frozen --extra physics python -m backend.validation \
+  --output data/validation/current.json --check
+```
+
+This drives the production `ArmSession` through an injected MIT transport and
+keeps the last command in a headless MuJoCo plant. Optional tests run with
+`uv run --frozen --extra physics pytest -q tests/test_physics_model.py tests/test_physics_playback.py`; the
+default sync path does not install MuJoCo. See
+[`docs/motion-validation.md`](./docs/motion-validation.md) for model checks,
+metrics and limitations.
+
 ## More
 
 | | |
