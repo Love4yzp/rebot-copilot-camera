@@ -55,8 +55,8 @@ def test_rejects_unknown_joints(arm: SimArm):
 
 
 def test_timed_move_is_between_start_and_goal_at_halfway(arm: SimArm, clock: FakeClock):
-    arm.move_to({"joint1": 1.0}, duration_s=2.0)
-    for _ in range(100):
+    accepted = arm.move_to({"joint1": 1.0}, duration_s=2.0)
+    for _ in range(int(accepted / 0.01 / 2)):
         clock.now += 0.01
         arm.step(0.01)
     q = arm.read_state().positions["joint1"]
@@ -248,9 +248,9 @@ def test_a_self_driven_arm_moves_with_nothing_stepping_it():
     clock = FakeClock()
     arm = SimArm(("joint1",), clock=clock, tau=0.05, self_driven=True)
     arm.connect()
-    arm.move_to({"joint1": 1.0}, 1.0)
+    accepted = arm.move_to({"joint1": 1.0}, 1.0)
 
-    clock.now += 1.0
+    clock.now += accepted
     assert arm.read_state().positions["joint1"] == pytest.approx(1.0, abs=0.01)
 
 

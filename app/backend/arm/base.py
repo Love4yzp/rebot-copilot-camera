@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence, runtime_checkable
+from .profile import DEFAULT_LIMITS, MotionLimits, PreparedMotion
 
 if TYPE_CHECKING:
     from ..tuning import PayloadTuning
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
 #: at the limit — easing alone would silently raise it. User-chosen transition
 #: durations are not stretched: the operator already picked that time, and the
 #: easing still removes the start/stop jerk.
-EASE_PEAK = 1.5
+EASE_PEAK = 1.875
 
 
 @dataclass(frozen=True)
@@ -100,7 +101,7 @@ class ArmDriver(Protocol):
         """
         ...
 
-    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
+    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> float:
         """Travel to ``q_target`` over roughly ``duration_s``.
 
         Distinct from :meth:`hold` on purpose. Holding is "be here now" and is
@@ -114,6 +115,10 @@ class ArmDriver(Protocol):
         sanctioned exception to the "call upstream, never reimplement" rule.
         """
         ...
+
+    def prepare_move(self, q_target: Mapping[str, float], requested_duration: float, *, limits: MotionLimits = DEFAULT_LIMITS) -> PreparedMotion: ...
+
+    def commit_move(self, prepared: PreparedMotion) -> float: ...
 
     def relax(self) -> None:
         """Drop torque at the zero pose so the arm rests on its stops.

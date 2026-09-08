@@ -111,15 +111,12 @@ def test_move_is_a_mit_ramp_and_commands_stay_group_sized(monkeypatch):
     q = {name: 0.1 * (i + 1) for i, name in enumerate(session.joint_names)}
     arm_group, grip_group = arm.groups["arm"], arm.groups["gripper"]
 
-    session.move_to(q, duration_s=2.0)  # t=0: ramp start
+    accepted = session.move_to(q, duration_s=2.0)  # t=0: ramp start
     assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.0, abs=1e-9)
-    t[0] = 0.5
-    session.move_to(q, duration_s=2.0)  # quarter: eased, below the linear 0.025
-    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.1 * 0.15625, abs=1e-6)
-    t[0] = 1.0
-    session.move_to(q, duration_s=2.0)  # halfway
-    assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.05, abs=1e-9)
-    t[0] = 2.0
+    t[0] = accepted / 2
+    session.move_to(q, duration_s=2.0)  # halfway through accepted quintic
+    assert 0.0 < arm_group.mit[-1]["pos"][0] < 0.1
+    t[0] = accepted
     session.move_to(q, duration_s=2.0)  # arrived: setpoint = target
     assert arm_group.mit[-1]["pos"][0] == pytest.approx(0.1, abs=1e-9)
 

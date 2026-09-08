@@ -28,14 +28,15 @@ import numpy as np
 
 from .. import assets
 from .base import ArmState
+from .limits import expanded_joint_bounds
+from .profile import DEFAULT_LIMITS, MotionLimits, PreparedMotion, prepare_profiles
 
 if TYPE_CHECKING:
     from ..tuning import PayloadTuning
 
 log = logging.getLogger(__name__)
 
-#: MIT-mode gains for holding position. Overridden per joint from the hardware
-#: yaml when it has them; these are the fallback.
+#: Deployed MIT hold gains. Hardware YAML gains are not consumed in this path.
 DEFAULT_HOLD_KP = 50.0
 DEFAULT_HOLD_KD = 3.0
 
@@ -54,14 +55,17 @@ class ArmSession:
         self,
         hardware_yaml: str | None = None,
         clock: Callable[[], float] | None = None,
+        transport: object | None = None,
     ) -> None:
         import time
 
-        from reBotArm_control_py.actuator.rebotarm import RebotArm
-
         assets.assert_rs_model()
         self._clock = clock or time.monotonic
-        self._arm = RebotArm(hardware_yaml or str(assets.effective_hardware_yaml()))
+        if transport is None:
+            from reBotArm_control_py.actuator.rebotarm import RebotArm
+
+            transport = RebotArm(hardware_yaml or str(assets.effective_hardware_yaml()))
+        self._arm = transport
         self._lock = threading.RLock()
         self._connected = False
         self._floating = False
@@ -91,7 +95,11 @@ class ArmSession:
         #: The real arm stays in MIT mode for its whole life (see connect),
         #: so a move is a MIT ramp streamed every tick — the executor
         #: re-issues move_to and this re-computes the interpolated setpoint.
-        self._motion: tuple[np.ndarray, np.ndarray, float, float] | None = None
+        self._motion: PreparedMotion | None = None
+        self._motion_started_at: float | None = None
+        self._generation = 0
+        self._reference: dict[str, tuple[float, float, float]] = {}
+        self._requested_target: dict[str, float] | None = None
 
     def _verify_joint_names(self) -> None:
         expected = tuple(assets.joint_names())
@@ -173,9 +181,11 @@ class ArmSession:
         with self._lock:
             self._floating = False
             self._motion = None
+            self._requested_target = None
+            self._generation += 1
             self._send_mit(self._to_array(q_target), kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
 
-    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
+    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> float:
         """One tick of a point-to-point move toward ``q_target``.
 
         The firmware latches its mode at enable and ignores runtime switches,
@@ -191,21 +201,43 @@ class ArmSession:
             raise ValueError("duration_s must be positive")
 
         with self._lock:
-            self._floating = False
-            target = self._to_array(q_target)
             now = self._clock()
-            if self._motion is None or not np.array_equal(self._motion[1], target):
-                current, _, _ = self._arm.get_state()
-                self._motion = (np.array(current, dtype=float), target, now, float(duration_s))
-            q0, tgt, t0, dur = self._motion
-            frac = min(max((now - t0) / dur, 0.0), 1.0)
-            # Ease in/out (smoothstep): zero setpoint velocity at both ends, so
-            # the arm does not jerk off the line or slam to a stop the way a
-            # linear ramp does. Peak velocity is EASE_PEAK× the average — the
-            # executor stretches speed-limited moves to keep that peak legal.
-            frac = frac * frac * (3.0 - 2.0 * frac)
-            setpoint = q0 + (tgt - q0) * frac
-            self._send_mit(setpoint, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
+            requested = self._full_target(q_target)
+            if self._motion is None or requested != (self._requested_target or {}):
+                self.commit_move(self.prepare_move(q_target, duration_s))
+            assert self._motion is not None and self._motion_started_at is not None
+            values = [self._motion.profiles[name].eval(now - self._motion_started_at) for name in self._names]
+            self._send_mit(np.array([v[0] for v in values]), vel=np.array([v[1] for v in values]), kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
+            self._reference = {name: values[i][:3] for i, name in enumerate(self._names)}
+            self._generation += 1
+            return self._motion.duration
+
+    def prepare_move(self, q_target: Mapping[str, float], requested_duration: float, *, limits: MotionLimits = DEFAULT_LIMITS) -> PreparedMotion:
+        with self._lock:
+            target = self._full_target(q_target)
+            current, _, _ = self._arm.get_state()
+            if self._motion is not None and self._motion_started_at is not None:
+                # Bind the handoff to the last transmitted reference. A clock
+                # advance alone is not a command sent to the motors.
+                starts = dict(self._reference)
+            else:
+                starts = {name: (float(current[i]), 0.0, 0.0) for i, name in enumerate(self._names)}
+            return prepare_profiles(
+                starts, target, requested_duration, self._generation + 1, limits,
+                joint_bounds=expanded_joint_bounds(),
+            )
+
+    def commit_move(self, prepared: PreparedMotion) -> float:
+        with self._lock:
+            if prepared.generation != self._generation + 1:
+                raise RuntimeError("prepared motion is stale")
+            self._generation = prepared.generation
+            self._motion = prepared
+            self._reference = {name: p.eval(0.0)[:3] for name, p in prepared.profiles.items()}
+            self._motion_started_at = self._clock()
+            self._requested_target = dict(prepared.target)
+            self._floating = False
+            return prepared.duration
 
     def relax(self) -> None:
         """Zero-gain MIT at the current position: the motors command no torque
@@ -215,6 +247,8 @@ class ArmSession:
         with self._lock:
             self._floating = False
             self._motion = None
+            self._requested_target = None
+            self._generation += 1
             q, _, _ = self._arm.get_state()
             for group in self._arm.groups.values():
                 idxs = [self._index[name] for name in group.joint_names]
@@ -240,6 +274,8 @@ class ArmSession:
         with self._lock:
             self._floating = enabled
             self._motion = None
+            self._requested_target = None
+            self._generation += 1
             if not enabled:
                 q, _, _ = self._arm.get_state()
                 self._send_mit(q, kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
@@ -257,6 +293,7 @@ class ArmSession:
                 return
             q, _, _ = self._arm.get_state()
             self._send_mit(q, kp=self._float_kp, kd=self._float_kd)
+            self._generation += 1
 
     def set_gravity_correction(
         self, scale: Mapping[str, float], bias: Mapping[str, float]
@@ -289,37 +326,44 @@ class ArmSession:
 
     # ── internals ────────────────────────────────────────────────────────────
 
-    def _to_array(self, joints: Mapping[str, float]) -> np.ndarray:
+    def _full_target(self, joints: Mapping[str, float]) -> dict[str, float]:
         """Map a joint dict onto upstream's positional array.
 
         Unmentioned joints keep their current commanded value rather than
         defaulting to zero — a missing key must not mean "go to the rest pose".
         """
-        current, _, _ = self._arm.get_state()
-        target = np.array(current, copy=True, dtype=float)
-
         unknown = set(joints) - set(self._index)
         if unknown:
             raise KeyError(f"unknown joints: {sorted(unknown)}")
 
-        for name, value in joints.items():
-            target[self._index[name]] = value
+        if self._motion is not None:
+            target = dict(self._motion.target)
+        else:
+            current, _, _ = self._arm.get_state()
+            target = {name: float(current[i]) for i, name in enumerate(self._names)}
+        target.update({name: float(value) for name, value in joints.items()})
         return target
 
-    def _send_mit(self, q: np.ndarray, kp: float, kd: float) -> None:
+    def _to_array(self, joints: Mapping[str, float]) -> np.ndarray:
+        target = self._full_target(joints)
+        return np.array([target[name] for name in self._names], dtype=float)
+
+    def _send_mit(self, q: np.ndarray, kp: float, kd: float, vel: np.ndarray | None = None) -> None:
         # Each group receives arrays sized to its own joints, in its own
         # order. Upstream's JointGroup indexes pos[i]/vel[i]/kp[i]/… by the
         # group's joint list: a full-arm array silently makes the gripper
         # read joint1's value, and send_pos_vel walks off the end of the arm
         # group's joint list (IndexError). The real arm pays for both; the
         # simulator never does, because SimArm has no groups.
-        tau = self._gravity_torque(q)
+        measured, _, _ = self._arm.get_state()
+        tau = self._gravity_torque(np.asarray(measured, dtype=float))
+        velocity = np.zeros(len(self._names)) if vel is None else vel
         for group in self._arm.groups.values():
             idxs = [self._index[name] for name in group.joint_names]
             n = len(idxs)
             group.send_mit(
                 q[idxs],
-                vel=np.zeros(n),
+                vel=velocity[idxs],
                 kp=np.full(n, kp),
                 kd=np.full(n, kd),
                 tau=tau[idxs],

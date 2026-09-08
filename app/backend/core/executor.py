@@ -48,6 +48,7 @@ from ..actions.base import ActionContext, ActionError, ActionProvider
 from ..actions.runner import ActionRunner, Job
 from ..actions.shoot import SHUTTER_PROVIDER_ID, ShutterParams
 from ..arm.base import ArmDriver, EASE_PEAK
+from ..arm.profile import PreparedMotion
 from ..sequences.models import (
     DEFAULT_TRANSITION_S,
     WAIT_KIND,
@@ -56,6 +57,7 @@ from ..sequences.models import (
     HoldBlock,
     Pose,
     Sequence,
+    TransitionBlock,
 )
 from ..sequences.normalize import nearest_hold
 from . import events
@@ -180,6 +182,7 @@ class SequenceExecutor:
         goto: Pose | None = None,
         on_progress: Callable[[Progress], None] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
+        before_motion: Callable[[], bool] | None = None,
     ) -> None:
         self._sequence = sequence
         self._poses = poses
@@ -193,6 +196,10 @@ class SequenceExecutor:
         self._goto = goto
         self._on_progress = on_progress
         self._on_event = on_event
+        # A controller may use this final, non-blocking check to close the
+        # gap between publishing SEQUENCE_STARTED and the first arm command.
+        # The executor remains independent of the safety latch itself.
+        self._before_motion = before_motion
 
         #: None until start(); the wire never sees an "idle" phase.
         self._phase: Phase | None = None
@@ -204,6 +211,10 @@ class SequenceExecutor:
         self._timing_started_at: float | None = None
         self._arrival_deadline = 0.0
         self._move_duration_s = DEFAULT_TRANSITION_S
+        self._initial_move_duration = DEFAULT_TRANSITION_S
+        self._motion_started_at: float | None = None
+        self._last_commit_at: float | None = None
+        self._transition_nominal_scale = 1.0
         #: Whether the current transition's target has been reached.
         self._arrived = False
         #: Settle dwell bookkeeping: when the arm first entered the arrival
@@ -222,6 +233,8 @@ class SequenceExecutor:
         #: Where a wait marker suspended the run, in block time, so resume can
         #: pick the clock up exactly there — suspension time is not block time.
         self._suspended_t = 0.0
+        self._nominal_offset = 0.0
+        self._wait_hold_target: dict[str, float] | None = None
 
         #: The marker currently executing, the job it is running on a worker
         #: thread, and the burst bookkeeping. A burst is paced here, one frame
@@ -255,6 +268,17 @@ class SequenceExecutor:
         return self._phase is Phase.WAIT
 
     @property
+    def wait_hold_target(self) -> Mapping[str, float] | None:
+        """The pose frozen when the current wait marker suspended the run.
+
+        A copy is returned so callers can observe the watchdog target without
+        being able to change the executor's hold command.
+        """
+        if self._wait_hold_target is None:
+            return None
+        return dict(self._wait_hold_target)
+
+    @property
     def error(self) -> str | None:
         return self._error
 
@@ -279,7 +303,11 @@ class SequenceExecutor:
             return self._suspended_t
         if self._timing_started_at is None:
             return 0.0
-        return self._clock() - self._timing_started_at
+        elapsed = self._clock() - self._timing_started_at
+        scale = self._transition_nominal_scale if self._phase is Phase.TRANSITION else 1.0
+        block = self._current_block()
+        value = self._nominal_offset + elapsed * scale
+        return min(block.duration_s if block is not None else value, value)
 
     def _current_block(self) -> Block | None:
         if 0 <= self._block_index < len(self._sequence.blocks):
@@ -319,7 +347,7 @@ class SequenceExecutor:
 
     # ── control ──────────────────────────────────────────────────────────────
 
-    def start(self) -> None:
+    def start(self, prepared: PreparedMotion | None = None) -> None:
         """Begin. An empty sequence finishes immediately rather than hanging —
         the API refuses empties with 400 before this can happen."""
         if self._phase is not None:
@@ -338,8 +366,11 @@ class SequenceExecutor:
                 "blocks": len(self._sequence.blocks),
             },
         )
+        if self._before_motion is not None and not self._before_motion():
+            self.abort("motion rejected before start")
+            return
         self._block_index = 0
-        self._enter_block()
+        self._enter_block(prepared=prepared)
 
     def abort(self, reason: str) -> None:
         """Stop the sequence. Idempotent, and never resumes.
@@ -372,7 +403,7 @@ class SequenceExecutor:
         )
         self._emit()
 
-    def resume(self) -> bool:
+    def resume(self, before_motion: Callable[[], bool] | None = None) -> bool:
         """Continue past the wait marker the run is suspended on.
 
         The clock picks up at the marker's own time: the suspension is not
@@ -384,14 +415,72 @@ class SequenceExecutor:
         block = self._current_block()
         if block is None:  # pragma: no cover — a waiting run always has one
             return False
+        # ``_nominal_offset`` is the offset used by the currently active
+        # transition profile.  It may precede this wait marker when a block
+        # has already been resumed once; using the marker time here makes the
+        # physical-duration ratio collapse toward one on every later wait.
+        previous_remaining = max(block.duration_s - self._nominal_offset, 0.0)
+        self._last_commit_at = None
+        prepared = None
+        remaining_nominal = max(block.duration_s - self._suspended_t, 0.0)
+        remaining_physical = None
+        if isinstance(block, TransitionBlock):
+            target = self._block_pose
+            remaining_nominal = max(block.duration_s - self._suspended_t, 0.0)
+            if target is not None:
+                remaining_physical = max(
+                    self._move_duration_s * remaining_nominal / max(previous_remaining, 1e-9),
+                    1e-6,
+                )
+                try:
+                    prepared = self._arm.prepare_move(target.joints, remaining_physical)
+                except Exception:
+                    return False
+        if before_motion is not None and not before_motion():
+            return False
+        accepted = None
+        if prepared is not None:
+            try:
+                accepted = self._start_move(
+                    self._block_pose.joints if self._block_pose is not None else {},
+                    remaining_physical or self._move_duration_s,
+                    prepared=prepared,
+                    before_motion=before_motion,
+                )
+            except Exception:
+                return False
+            if accepted is None:
+                return False
+
+        # Take the timestamp only after the candidate has passed the callback
+        # and commit. A slow prepare must not consume nominal block time.
+        now = self._last_commit_at if accepted is not None else self._clock()
+
+        # No observable state changes before prepare/callback/commit succeed.
         self._phase = Phase.HOLD if isinstance(block, HoldBlock) else Phase.TRANSITION
-        self._timing_started_at = self._clock() - self._suspended_t
+        self._timing_started_at = now
+        self._motion_started_at = now
+        self._nominal_offset = self._suspended_t
+        self._wait_hold_target = None
+        if accepted is not None:
+            self._motion_started_at = now
+            self._move_duration_s = accepted
+            self._transition_nominal_scale = remaining_nominal / accepted
+            self._arrival_deadline = now + max(ARRIVAL_TIMEOUT_FLOOR_S, accepted * ARRIVAL_TIMEOUT_FACTOR)
+            self._arrived = False
+            self._settle_since = None
+            self._settle_ref = None
         self._emit()
         return True
 
     def tick(self) -> None:
         """Advance by at most one step. Safe to call after finishing."""
-        if self._phase is None or self.is_finished or self._phase is Phase.WAIT:
+        if self._phase is None or self.is_finished:
+            return
+        if self._phase is Phase.WAIT:
+            if self._wait_hold_target is None:
+                self._wait_hold_target = dict(self._arm.read_state().positions)
+            self._arm.hold(self._wait_hold_target)
             return
 
         self._poll_job()
@@ -408,7 +497,7 @@ class SequenceExecutor:
 
     # ── block walking ────────────────────────────────────────────────────────
 
-    def _enter_block(self) -> None:
+    def _enter_block(self, *, prepared: PreparedMotion | None = None) -> None:
         block = self._sequence.blocks[self._block_index]
         self._fired = set()
         self._marker_cursor = 0
@@ -418,6 +507,9 @@ class SequenceExecutor:
         self._arrived = False
         self._settle_since = None
         self._settle_ref = None
+        self._nominal_offset = 0.0
+        self._wait_hold_target = None
+        self._motion_started_at = None
         now = self._clock()
 
         if isinstance(block, HoldBlock):
@@ -437,11 +529,26 @@ class SequenceExecutor:
                 # teaching left it, so the move is speed-limited (v1 parity).
                 self._timing_started_at = None
                 duration = self._move_duration(DEFAULT_APPROACH_S, pose.joints)
-                self._move_duration_s = duration
-                self._arrival_deadline = now + max(
-                    ARRIVAL_TIMEOUT_FLOOR_S, duration * ARRIVAL_TIMEOUT_FACTOR
+                in_window = all(
+                    abs(self._arm.read_state().positions.get(name, 0.0) - value) <= self._arrival_eps
+                    for name, value in pose.joints.items()
                 )
-                self._arm.move_to(pose.joints, duration)
+                if in_window:
+                    accepted = 0.0
+                    self._motion_started_at = now
+                    self._arm.hold(pose.joints)
+                else:
+                    accepted = self._start_move(pose.joints, duration)
+                    if accepted is None:
+                        self.abort("motion rejected before hold")
+                        return
+                    now = self._last_commit_at
+                    self._motion_started_at = now
+                self._move_duration_s = accepted
+                self._initial_move_duration = accepted
+                self._arrival_deadline = now + max(
+                    ARRIVAL_TIMEOUT_FLOOR_S, accepted * ARRIVAL_TIMEOUT_FACTOR
+                )
                 self._emit()
             return
 
@@ -451,14 +558,60 @@ class SequenceExecutor:
             self.abort("transition block has no target pose")
             return
         self._block_pose = target
-        self._timing_started_at = now
-        duration = self._move_duration(block.duration_s, target.joints)
-        self._move_duration_s = duration
-        self._arrival_deadline = now + max(
-            ARRIVAL_TIMEOUT_FLOOR_S, duration * ARRIVAL_TIMEOUT_FACTOR
+        # A caller-supplied plan already includes its speed limits and frozen
+        # start. Reading a self-driven arm here would advance that reference
+        # and invalidate the candidate before it can be committed.
+        duration = prepared.duration if prepared is not None else self._move_duration(
+            block.duration_s, target.joints
         )
-        self._arm.move_to(target.joints, duration)
+        accepted = self._start_move(target.joints, duration, prepared=prepared)
+        if accepted is None:
+            self.abort("motion rejected before transition")
+            return
+        now = self._last_commit_at
+        self._timing_started_at = now
+        self._motion_started_at = now
+        self._move_duration_s = accepted
+        self._initial_move_duration = accepted
+        self._transition_nominal_scale = block.duration_s / accepted
+        self._arrival_deadline = now + max(
+            ARRIVAL_TIMEOUT_FLOOR_S, accepted * ARRIVAL_TIMEOUT_FACTOR
+        )
         self._emit()
+
+    def _start_move(
+        self,
+        target: Mapping[str, float],
+        duration: float,
+        *,
+        prepared: PreparedMotion | None = None,
+        before_motion: Callable[[], bool] | None = None,
+    ) -> float | None:
+        """Prepare, gate, commit, then publish the first motion command.
+
+        ``move_to`` prepares internally, so calling it after a safety check
+        would leave a prepare/commit window outside the check.  The explicit
+        candidate keeps that window closed.  Later ticks use
+        :meth:`_stream_move`, which only re-sends an already accepted target.
+        """
+        candidate = prepared
+        if candidate is None:
+            candidate = self._arm.prepare_move(target, duration)
+        check = before_motion if before_motion is not None else self._before_motion
+        if check is not None and not check():
+            return None
+        accepted = self._arm.commit_move(candidate)
+        self._last_commit_at = self._clock()
+        # The first actuator publication is deliberately after commit.  With
+        # the same target, ArmSession/SimArm stream the committed profile
+        # instead of planning a second one.
+        return self._arm.move_to(target, accepted)
+
+    def _stream_move(self, target: Mapping[str, float], duration: float) -> float | None:
+        """Continue an accepted move after checking the motion gate."""
+        if self._before_motion is not None and not self._before_motion():
+            return None
+        return self._arm.move_to(target, duration)
 
     def _transition_target(self) -> Pose | None:
         """Where a transition goes: the next hold's pose, or the goto pose for
@@ -559,15 +712,21 @@ class SequenceExecutor:
 
         if isinstance(block, HoldBlock):
             if self._timing_started_at is not None:
+                if self._block_pose is not None:
+                    self._arm.hold(self._block_pose.joints)
                 return  # already arrived; the countdown is running
             pose = self._block_pose
-            if pose is not None and self._has_arrived(pose.joints):
+            if pose is not None and self._profile_complete() and self._has_arrived(pose.joints):
                 self._begin_hold_timing()
             elif pose is not None:
                 # The ramp only exists while streamed: re-issue every tick
                 # until arrival (same target continues the profile).
                 if self._clock() < self._arrival_deadline:
-                    self._arm.move_to(pose.joints, self._move_duration_s)
+                    if self._move_duration_s > 0:
+                        if self._stream_move(pose.joints, self._move_duration_s) is None:
+                            self.abort("motion rejected while streaming hold approach")
+                    else:
+                        self._arm.hold(pose.joints)
                 else:
                     self.abort(
                         f"block {self._block_index}: pose "
@@ -576,14 +735,20 @@ class SequenceExecutor:
             return
 
         # Transition: arrival is confirmed by position, not by the clock.
+        if self._arrived:
+            if self._block_pose is not None:
+                self._arm.hold(self._block_pose.joints)
+            return
         if not self._arrived:
             target = self._block_pose
-            if target is not None and self._has_arrived(target.joints):
+            if target is not None and self._profile_complete() and self._has_arrived(target.joints):
                 self._arrived = True
+                self._arm.hold(target.joints)
             elif target is not None:
                 # Stream the MIT ramp every tick (see the hold-approach note).
                 if self._clock() < self._arrival_deadline:
-                    self._arm.move_to(target.joints, self._move_duration_s)
+                    if self._stream_move(target.joints, self._move_duration_s) is None:
+                        self.abort("motion rejected while streaming transition")
                 else:
                     self.abort(
                         f"block {self._block_index}: pose "
@@ -714,8 +879,10 @@ class SequenceExecutor:
             self._marker_cursor += 1
             self._fired.add(marker.id)
             if marker.kind == WAIT_KIND:
-                self._suspended_t = self._marker_time(block, marker)
+                self._suspended_t = t
                 self._phase = Phase.WAIT
+                self._wait_hold_target = dict(self._arm.read_state().positions)
+                self._arm.hold(self._wait_hold_target)
                 self._emit()
                 return
             self._begin_marker(marker)
@@ -799,3 +966,8 @@ class SequenceExecutor:
             return
         if self._arrived and self._t_in_block() >= block.duration_s:
             self._advance()
+
+    def _profile_complete(self) -> bool:
+        if self._motion_started_at is None:
+            return False
+        return self._clock() - self._motion_started_at >= self._move_duration_s

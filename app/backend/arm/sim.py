@@ -20,6 +20,8 @@ import threading
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
 from .base import ArmState
+from .limits import expanded_joint_bounds
+from .profile import DEFAULT_LIMITS, MotionLimits, PreparedMotion, prepare_profiles
 
 if TYPE_CHECKING:
     from ..tuning import PayloadTuning
@@ -61,7 +63,11 @@ class SimArm:
         self._floating = False
         self._connected = False
         #: Timed profile: (q0, target, t0, duration_s). Same shape as ArmSession.
-        self._motion: tuple[dict[str, float], dict[str, float], float, float] | None = None
+        self._motion: PreparedMotion | None = None
+        self._motion_started_at: float | None = None
+        self._generation = 0
+        self._reference: dict[str, tuple[float, float, float]] = {}
+        self._requested_target: dict[str, float] | None = None
         self._tau_extra: dict[str, float] = {}
 
         # Previous sample, for finite-differencing velocity. `None` until the
@@ -70,6 +76,7 @@ class SimArm:
         self._prev_t: float | None = None
         self._velocities: dict[str, float] = {}
         self._t = clock()
+        self._joint_bounds = dict(expanded_joint_bounds())
 
     # ── ArmDriver ────────────────────────────────────────────────────────────
 
@@ -115,9 +122,11 @@ class SimArm:
             if unknown:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
             self._motion = None
+            self._requested_target = None
+            self._generation += 1
             self._q_target.update(q_target)
 
-    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> None:
+    def move_to(self, q_target: Mapping[str, float], duration_s: float) -> float:
         """One tick of a timed smoothstep ramp, matching ArmSession.move_to.
 
         The same target continues the profile; a new target starts a new one
@@ -130,11 +139,57 @@ class SimArm:
             unknown = set(q_target) - set(self._joint_names)
             if unknown:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
-            target = {n: float(q_target.get(n, self._q[n])) for n in self._joint_names}
             now = self._t
-            if self._motion is None or target != self._motion[1]:
-                self._motion = (dict(self._q), target, now, float(duration_s))
+            target = dict(self._motion.target) if self._motion is not None else dict(self._q)
+            target.update({n: float(v) for n, v in q_target.items()})
+            if self._motion is None or target != (self._requested_target or {}):
+                self.commit_move(self.prepare_move(q_target, duration_s))
             self._apply_motion(now)
+            assert self._motion is not None
+            return self._motion.duration
+
+    def prepare_move(self, q_target: Mapping[str, float], requested_duration: float, *, limits: MotionLimits = DEFAULT_LIMITS) -> PreparedMotion:
+        with self._lock:
+            unknown = set(q_target) - set(self._joint_names)
+            if unknown:
+                raise KeyError(f"unknown joints: {sorted(unknown)}")
+            target = dict(self._motion.target) if self._motion is not None else dict(self._q)
+            target.update({n: float(v) for n, v in q_target.items()})
+            if self._motion is not None and self._motion_started_at is not None:
+                starts = dict(self._reference)
+            else:
+                starts = {n: (self._q[n], 0.0, 0.0) for n in self._joint_names}
+            return prepare_profiles(
+                starts, target, requested_duration, self._generation + 1, limits,
+                joint_bounds=self._joint_bounds,
+            )
+
+    def commit_move(self, prepared: PreparedMotion) -> float:
+        with self._lock:
+            # In the live simulator, a caller may prepare a move and only
+            # commit it after some wall-clock time has elapsed. Catch up the
+            # state first so a new profile starts at the actual commit time.
+            # This catch-up intentionally does not publish the old profile;
+            # an actual read/step/send still changes generation and makes the
+            # candidate stale through the check below.
+            if self._self_driven:
+                dt = self._clock() - self._t
+                if dt > 0:
+                    # Catch up the plant to the commit instant using the last
+                    # published target. This is elapsed actuator response,
+                    # not a new reference publication: a delayed commit must
+                    # not turn a valid candidate into a stale one merely
+                    # because the old profile was not sent another tick.
+                    self._step_state(dt, advance_reference=False)
+            if prepared.generation != self._generation + 1:
+                raise RuntimeError("prepared motion is stale")
+            self._generation = prepared.generation
+            self._motion = prepared
+            self._reference = {name: p.eval(0.0)[:3] for name, p in prepared.profiles.items()}
+            self._motion_started_at = self._t
+            self._requested_target = dict(prepared.target)
+            self._floating = False
+            return prepared.duration
 
     def relax(self) -> None:
         """Recorded, not applied: the simulator has no torque loop to drop.
@@ -143,6 +198,9 @@ class SimArm:
         against the same positions either way."""
         with self._lock:
             self._floating = False
+            self._motion = None
+            self._requested_target = None
+            self._generation += 1
 
     def set_float(self, enabled: bool) -> None:
         """Enter or leave float. Leaving re-targets wherever the arm now is.
@@ -154,6 +212,8 @@ class SimArm:
         with self._lock:
             self._floating = enabled
             self._motion = None
+            self._requested_target = None
+            self._generation += 1
             if not enabled:
                 self._q_target = dict(self._q)
 
@@ -168,6 +228,7 @@ class SimArm:
         with self._lock:
             if self._floating:
                 self._q_target = dict(self._q)
+                self._generation += 1
 
     def set_gravity_correction(
         self, scale: Mapping[str, float], bias: Mapping[str, float]
@@ -209,11 +270,12 @@ class SimArm:
     def _apply_motion(self, now: float) -> None:
         if self._motion is None:
             return
-        q0, tgt, t0, dur = self._motion
-        frac = min(max((now - t0) / dur, 0.0), 1.0)
-        eased = frac * frac * (3.0 - 2.0 * frac)
-        for name in self._joint_names:
-            self._q_target[name] = q0[name] + (tgt[name] - q0[name]) * eased
+        assert self._motion_started_at is not None
+        for name, profile in self._motion.profiles.items():
+            value = profile.eval(now - self._motion_started_at)
+            self._q_target[name] = value[0]
+            self._reference[name] = value[:3]
+        self._generation += 1
 
     def drag(self, delta: Mapping[str, float]) -> None:
         """Simulate a human pushing the arm by ``delta`` radians per joint.
@@ -235,24 +297,24 @@ class SimArm:
                 raise KeyError(f"unknown joints: {sorted(unknown)}")
             for name, d in delta.items():
                 self._q[name] += d
+            self._generation += 1
             if self._floating:
                 # Nothing pulls a floating arm back, so it stays put on release.
                 self._q_target = dict(self._q)
 
-    def step(self, dt: float) -> None:
-        """Advance the simulation by ``dt`` seconds.
+    def _step_state(self, dt: float, *, advance_reference: bool) -> None:
+        """Advance plant time, optionally publishing the active profile.
 
-        Driven by the caller rather than by wall time, so tests stay
-        deterministic and never sleep.
+        Normal simulation ticks publish the active profile and invalidate
+        prepared handoffs through ``_apply_motion``. Commit-time catch-up only
+        integrates the plant toward the last published target, so elapsed
+        wall time alone does not change the candidate's generation.
         """
-        if dt < 0:
-            raise ValueError("dt must not be negative")
-
         with self._lock:
             prev_q = dict(self._q)
             prev_t = self._t
 
-            if self._motion is not None:
+            if self._motion is not None and advance_reference:
                 self._apply_motion(self._t + dt)
             if not self._floating and dt > 0:
                 # Exponential approach: exact solution of q' = (target - q)/tau,
@@ -266,3 +328,14 @@ class SimArm:
                 {n: (self._q[n] - prev_q[n]) / dt for n in self._joint_names} if dt > 0 else {}
             )
             self._prev_q, self._prev_t = prev_q, prev_t
+
+    def step(self, dt: float) -> None:
+        """Advance the simulation by ``dt`` seconds.
+
+        Driven by the caller rather than by wall time, so tests stay
+        deterministic and never sleep.
+        """
+        if dt < 0:
+            raise ValueError("dt must not be negative")
+
+        self._step_state(dt, advance_reference=True)

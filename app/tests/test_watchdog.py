@@ -47,8 +47,8 @@ def test_on_time_ticks_never_trip(dog: Watchdog, latch: SafetyLatch, clock: Fake
     assert latch.is_latched is False
 
 
-def test_a_single_late_tick_is_tolerated(dog: Watchdog, latch: SafetyLatch, clock: FakeClock):
-    """Jitter happens. One hiccup must not stop a shoot."""
+def test_a_single_excessive_gap_engages(dog: Watchdog, latch: SafetyLatch, clock: FakeClock):
+    """A gap beyond the absolute control bound is unsafe on its own."""
     clock.advance(PERIOD)
     dog.observe_tick(PERIOD)
 
@@ -58,7 +58,8 @@ def test_a_single_late_tick_is_tolerated(dog: Watchdog, latch: SafetyLatch, cloc
     clock.advance(PERIOD)
     dog.observe_tick(PERIOD)
 
-    assert latch.is_latched is False
+    assert latch.is_latched is True
+    assert "gap" in latch.snapshot().reason
 
 
 def test_sustained_lateness_engages(dog: Watchdog, latch: SafetyLatch, clock: FakeClock):
@@ -73,7 +74,7 @@ def test_sustained_lateness_engages(dog: Watchdog, latch: SafetyLatch, clock: Fa
 
     assert latch.is_latched is True
     assert latch.snapshot().source is LatchSource.WATCHDOG
-    assert "running late" in latch.snapshot().reason
+    assert "gap" in latch.snapshot().reason
 
 
 def test_the_first_tick_cannot_trip(dog: Watchdog, latch: SafetyLatch, clock: FakeClock):

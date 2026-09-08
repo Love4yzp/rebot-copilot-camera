@@ -1,6 +1,7 @@
 """Control state, execution control, teaching, the websocket, shutter endpoints."""
 
 from pathlib import Path
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,14 +65,17 @@ def client(rig) -> TestClient:
     return rig[0]
 
 
-def run_loop(controller, arm, clock, max_steps: int = 5000) -> None:
+def run_loop(controller, arm, clock, max_steps: int = 5000) -> int:
     """Drive the control loop by hand until the executor finishes."""
+    steps = 0
     for _ in range(max_steps):
+        steps += 1
         clock.now += 0.01
         arm.step(0.01)
         controller.tick()
         if not controller.is_playing:
             break
+    return steps
 
 
 def make_playing_sequence(client: TestClient, hold_s: float = 30.0) -> str:
@@ -220,17 +224,32 @@ def test_websocket_streams_seq_playback_progress(rig):
         {"type": "hold", "pose_id": pose, "duration_s": 0.3, "markers": []}]})
 
     with client.websocket_connect("/ws") as ws:
+        seen_playback = None
+        consumer_errors = []
+
+        def consume_until_done():
+            nonlocal seen_playback
+            try:
+                # The loop has a fixed upper bound; consuming concurrently
+                # prevents the broadcaster queue from filling with approach
+                # frames before the terminal state is observed.
+                for _ in range(5010):
+                    message = ws.receive_json()
+                    if message["type"] == "state" and message["data"]["playback"]:
+                        seen_playback = message["data"]["playback"]
+                        if seen_playback["phase"] == "done":
+                            return
+            except Exception as exc:  # pragma: no cover - reported below
+                consumer_errors.append(exc)
+
+        consumer = threading.Thread(target=consume_until_done)
+        consumer.start()
         client.post(f"/api/sequences/{sid}/execute")
         run_loop(controller, arm, clock)
         controller.tick()
-
-        seen_playback = None
-        for _ in range(100):
-            message = ws.receive_json()
-            if message["type"] == "state" and message["data"]["playback"]:
-                seen_playback = message["data"]["playback"]
-            if seen_playback and seen_playback["phase"] == "done":
-                break
+        consumer.join(timeout=2.0)
+        assert not consumer.is_alive(), "websocket consumer exceeded bounded budget"
+        assert not consumer_errors, consumer_errors[0]
 
     assert seen_playback is not None
     assert set(seen_playback) == {
