@@ -28,6 +28,11 @@ dependencies = [
     "motorbridge>=0.4.9",
 ]
 
+[project.optional-dependencies]
+physics = [
+    "mujoco>=3.3,<3.4",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
@@ -71,3 +76,8 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Keep Ruff's original default checks stable across tool upgrades. New rules
+# must be enabled deliberately so CI does not widen its scope silently.
+select = ["E4", "E7", "F"]

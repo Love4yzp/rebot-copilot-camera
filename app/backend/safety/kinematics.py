@@ -31,12 +31,9 @@ import numpy as np
 import pinocchio as pin
 
 from .. import assets
+from ..arm.limits import LIMIT_TOLERANCE_RAD
 
 log = logging.getLogger(__name__)
-
-#: Slack on both ends of every joint limit. Covers encoder noise and the fact
-#: that the rest pose sits exactly on joint2/joint3's lower bound.
-LIMIT_TOLERANCE_RAD = 0.02
 
 #: Hardware joints that map one-to-one onto URDF joints of the same name.
 #: ``gripper`` is absent on purpose — see the module docstring. Derived from

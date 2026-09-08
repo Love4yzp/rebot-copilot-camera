@@ -315,7 +315,7 @@ def test_a_marker_pinned_to_a_transition_fires_mid_move():
         h.step()
 
     assert h.shutter.shots == 1
-    assert h.clock.now - entered_at == pytest.approx(1.0, abs=0.1), "50% of a 2s move"
+    assert h.clock.now - entered_at == pytest.approx(h.executor._move_duration_s / 2, abs=0.1)
 
 
 def test_a_block_stretches_when_its_marker_is_still_running():
@@ -341,7 +341,7 @@ def test_a_block_stretches_when_its_marker_is_still_running():
         sequence, poses, arm=h.arm, actions=h.actions, clock=h.clock)
     h.executor.start()
 
-    for _ in range(2000):
+    for _ in range(5000):
         h.step()
         if h.actions.jobs:
             break
@@ -364,7 +364,7 @@ def test_a_stuck_arm_faults_instead_of_waiting_forever():
     h.executor.start()
 
     # Arm never moves: step the clock and the executor but not the simulation.
-    for _ in range(2000):
+    for _ in range(5000):
         h.clock.now += DT
         h.executor.tick()
         if h.executor.is_finished:
@@ -686,7 +686,7 @@ def test_approaching_is_false_for_aborted_run():
     h.executor.start()
 
     # Arm never moves — the arrival deadline will trigger an abort.
-    for _ in range(2000):
+    for _ in range(5000):
         h.clock.now += DT
         h.executor.tick()
         if h.executor.is_finished:
@@ -739,7 +739,7 @@ def test_later_moves_are_not_stretched():
         h.step()
 
     assert h.executor.progress().block_index == 1
-    assert h.executor._arrival_deadline - h.clock.now == pytest.approx(1.0 * 3, abs=0.05)
+    assert h.executor._arrival_deadline - h.clock.now == pytest.approx(15.0 * 3, abs=0.05)
 
 
 # ── goto ─────────────────────────────────────────────────────────────────────

@@ -271,6 +271,24 @@ export REBOT_HOST_SSH=recomputer@<设备IP>   # recomputer 是 reComputer 的出
 
 ---
 
+## 可选的无界面物理验证
+
+应用默认不需要 MuJoCo。验证回放改动时，可以安装可选依赖并运行确定性的
+baseline：
+
+```bash
+cd app
+uv sync --frozen --extra physics
+uv run --frozen --extra physics python -m backend.validation \
+  --output data/validation/current.json --check
+```
+
+验证程序通过注入的 MIT transport 驱动生产 `ArmSession`，在无界面的 MuJoCo
+plant 中保持最后一条命令。可选测试命令是
+`uv run --frozen --extra physics pytest -q tests/test_physics_model.py tests/test_physics_playback.py`；默认
+同步不会安装 MuJoCo。模型检查、指标和限制见
+[`docs/motion-validation.md`](./docs/motion-validation.md)。
+
 ## 更多
 
 | | |

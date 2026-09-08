@@ -29,6 +29,7 @@ from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shoot import ShutterProvider
 from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
+from ..arm.profile import DEFAULT_LIMITS, MotionLimits
 from ..safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
@@ -37,7 +38,7 @@ from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
 from .activity import Activity, Effect, Intent, decide
 from .broadcaster import Broadcaster
-from .executor import DEFAULT_APPROACH_S, SequenceExecutor
+from .executor import DEFAULT_APPROACH_S, Phase, SequenceExecutor
 from .floatlock import FloatLock, FloatLockConfig
 
 log = logging.getLogger(__name__)
@@ -356,6 +357,7 @@ class Controller:
                 settle_s=self._tuning.settle.min_s,
                 settle_drift=self._tuning.settle.drift_rad,
                 first_approach_max_speed=self._tuning.approach.first_max_speed,
+                before_motion=lambda: not self.latch.is_latched,
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": progress_payload(p)}
                 ),
@@ -415,12 +417,31 @@ class Controller:
         with self._lock:
             decision = self._require(Intent.GOTO)
             self.note_client()
-            if decision.effect is Effect.RETARGET:
-                if self._executor is not None and not self._executor.is_finished:
-                    self._executor.abort("retargeted to a new pose")
-                self._executor = None
-            if self._resting:
-                self._wake_from_rest()
+            preparation_started = self._clock()
+            # Prepare and preflight the replacement while the old executor is
+            # still intact. A rejected plan must leave the active move valid.
+            prepared = self.arm.prepare_move(
+                target.joints, duration_s,
+                limits=MotionLimits(
+                    velocity=min(DEFAULT_LIMITS.velocity, self._tuning.approach.first_max_speed),
+                    acceleration=DEFAULT_LIMITS.acceleration,
+                    jerk=DEFAULT_LIMITS.jerk,
+                ),
+            )
+            violations = self.preflight_path([dict(sample) for sample in prepared.samples])
+            if violations:
+                raise RuntimeError("motion preflight rejected: " + "; ".join(violations))
+            # The loop cannot send during this locked transaction. Never send
+            # a replacement after validation has consumed the watchdog budget.
+            if self.watchdog is not None and (
+                self._clock() - preparation_started > self.watchdog.config.excessive_gap_s
+            ):
+                raise RuntimeError("motion preparation exceeded the control gap limit")
+            # Preparation and preflight may run long enough for an emergency
+            # stop to arrive. Keep the old executor intact and send nothing
+            # once the latch has engaged during that window.
+            if self.latch.is_latched:
+                raise RuntimeError("emergency stop is engaged")
 
             executor = SequenceExecutor(
                 ephemeral,
@@ -432,16 +453,30 @@ class Controller:
                 settle_s=self._tuning.settle.min_s,
                 settle_drift=self._tuning.settle.drift_rad,
                 first_approach_max_speed=self._tuning.approach.first_max_speed,
+                before_motion=lambda: not self.latch.is_latched,
                 on_progress=lambda p: self.broadcaster.publish(
                     {"type": "playback", "data": progress_payload(p)}
                 ),
                 on_event=self.emit_event,
             )
-            self._playback_source = source
-            log.info("goto %r at the request of %r", target.name, source)
-            executor.start()
+            previous = self._executor
+            executor.start(prepared=prepared)
+            if self.latch.is_latched or executor.is_finished:
+                # The start event can synchronously engage the stop latch.
+                # Preserve the old run in that case; retargeting it would
+                # turn a stop during the handoff into an abort of valid work.
+                if self.latch.is_latched and previous is not None and not previous.is_finished:
+                    self._executor = previous
+                    self._set_activity(Activity.PLAYING)
+                reason = executor.error or "motion rejected before start"
+                raise RuntimeError(reason)
+            if decision.effect is Effect.RETARGET and previous is not None and not previous.is_finished:
+                previous.abort("retargeted to a new pose")
             self._executor = executor
+            self._playback_source = source
+            self._rest_snapshot = None
             self._set_activity(Activity.PLAYING)
+            log.info("goto %r at the request of %r", target.name, source)
             return executor
 
     def resume(self) -> bool:
@@ -449,7 +484,18 @@ class Controller:
         with self._lock:
             if self._executor is None:
                 return False
-            return self._executor.resume()
+            if self.latch.is_latched:
+                return False
+            resumed = self._executor.resume(
+                before_motion=lambda: not self.latch.is_latched
+            )
+            if resumed:
+                self._hold_target = (
+                    dict(self._last_state.positions)
+                    if self._executor.phase is Phase.HOLD
+                    else None
+                )
+            return resumed
 
     def stop_playback(self, reason: str = "stopped by operator") -> bool:
         """Abort any running sequence. Returns whether one was running.
@@ -519,9 +565,10 @@ class Controller:
         )
         try:
             return self.goto(pose, source="shutdown")
-        except RuntimeError:
-            # The latch engaged between the check above and the goto.
-            log.warning("stop latch engaged mid-park — holding the frozen pose")
+        except RuntimeError as exc:
+            # Rejection can also be a path or profile violation. stop_playback
+            # has already pinned the arm; report the actual reason.
+            log.warning("park rejected; retaining hold: %s", exc)
             return None
 
     # ── teaching ─────────────────────────────────────────────────────────────
@@ -709,6 +756,13 @@ class Controller:
             self._tick_teaching()
             return
         if self._executor is not None and not self._executor.is_finished:
+            if self._executor.is_waiting:
+                # The executor captured the wait pose at the marker. Let it
+                # stream that same target each tick; recapturing from the
+                # latest state would make a dragged arm redefine the hold.
+                self._executor.tick()
+                self._hold_target = self._executor.wait_hold_target
+                return
             self._executor.tick()
             # Mid-move a large error is the point, so drift is only judged
             # against a hold, never against a moving target.

@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class WatchdogConfig:
+    #: One missed control interval beyond this absolute gap is unsafe even if
+    #: the loop is otherwise healthy; sustained lateness has its own grace.
+    excessive_gap_s: float = 0.1
     #: A tick is "late" past this multiple of the expected period.
     late_tick_factor: float = 3.0
     #: How long ticks may keep arriving late before the stop engages.
@@ -81,7 +84,11 @@ class Watchdog:
             return
 
         limit = expected_period_s * self.config.late_tick_factor
-        if now - previous <= limit:
+        gap = now - previous
+        if gap > self.config.excessive_gap_s + 1e-9:
+            self._engage(f"control loop gap {gap:.3f}s exceeded {self.config.excessive_gap_s:.3f}s")
+            return
+        if gap <= limit:
             self._late_since = None
             return
 

@@ -23,7 +23,10 @@ from backend.safety import LatchSource, SafetyLatch
 from backend.shutter import SimShutter
 
 JOINTS = ("joint1", "joint2")
-START = {"joint1": 1.0, "joint2": -0.5}
+# SimArm's canonical URDF has a non-negative lower bound for joint2.  Keep
+# the fixture inside the physical range so park tests exercise shutdown
+# behavior rather than rejecting the initial state during preflight.
+START = {"joint1": 1.0, "joint2": 0.5}
 DT = 0.01
 
 
