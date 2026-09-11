@@ -6,7 +6,7 @@
 
 - 交互骨架的布局/行为 → [`docs/TIMELINE.md`](./TIMELINE.md)
 - 硬件数值与已验证事实 → [`docs/HARDWARE_NOTES.md`](./HARDWARE_NOTES.md)
-- 现在做到哪 → [`PROGRESS.md`](../PROGRESS.md)
+- 现在做到哪 → [`PROGRESS.md`](./PROGRESS.md)
 - 怎么使用与部署 → [`README.md`](../README.md)
 - 扩展点怎么用 → [`docs/PLUGINS.md`](./PLUGINS.md)
 

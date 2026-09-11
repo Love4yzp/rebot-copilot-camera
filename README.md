@@ -14,7 +14,7 @@ drag → release → record → ordered waypoints + actions → arrive → settl
 
 The first deployment is automated multi-view photography: a reBot-RS six-axis arm holds a Canon camera, the subject stays put. Photos land on the camera's SD card — this project only drives the arm to the pose and presses the shutter.
 
-> Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors). What's done and blocked is in **[PROGRESS.md](./PROGRESS.md)**.
+> Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors). What's done and blocked is in **[PROGRESS.md](./docs/PROGRESS.md)**.
 
 ---
 
@@ -25,7 +25,7 @@ The first deployment is automated multi-view photography: a reBot-RS six-axis ar
 | Program | `app/backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `app/frontend/` (UI + dev mock + contract runner), `app/firmware/esp32-shutter/`, `app/vendor/reBotArm_control_py/` (pinned submodule) |
 | Config & data | `app/config/` (hardware yaml + operator tuning), `app/data/` (runtime poses / sequences / templates, gitignored) |
 | Deploy | `app/deploy/` (systemd units + udev rule) |
-| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture, hardware, interaction), `PROGRESS.md` (current), this README |
+| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture, hardware, interaction, `PROGRESS.md` current status), this README |
 | Verification | `app/tests/`, `app/contract/cases/` (golden contract cases) |
 | Entries | `./dev.sh` (everything on this machine), `./device.sh` (everything over ssh to the device) |
 
@@ -296,7 +296,7 @@ metrics and limitations.
 |---|---|
 | [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, conventions |
 | [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts — **verified** vs **to-be-measured** |
-| [PROGRESS.md](./PROGRESS.md) | Current status and blockers |
+| [PROGRESS.md](./docs/PROGRESS.md) | Current status and blockers |
 | [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | Flashing, pairing, serial protocol |
 
 The arm layer is not written here — kinematics, dynamics, gravity compensation, trajectory planning and URDF all come from [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py).

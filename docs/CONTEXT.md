@@ -3,7 +3,7 @@
 A teach-and-repeat platform: named poses, sequences of holds and transitions, and an arm that goes and holds.
 示教回放平台：命名的位姿素材库、由保持与过渡块排成的时间轴序列，以及一台精准前往并稳定保持的机械臂。
 
-这份词典是全项目唯一的**领域通用语言 (Ubiquitous Language)** 基准。无论代码命名、界面文案、接口错误还是开发文档，凡同一概念必用同一最优词汇。架构实现详见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
+这份词典是全项目唯一的**领域通用语言 (Ubiquitous Language)** 基准。无论代码命名、界面文案、接口错误还是开发文档，凡同一概念必用同一最优词汇。架构实现详见 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)。
 
 ---
 

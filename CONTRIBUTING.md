@@ -2,7 +2,7 @@
 
 这份文档干两件别处不干的事:**把贡献流程串成一条可跑的清单**,和**给一次架构体检(它够不够好、哪里会断)**。
 
-规则、设计、状态不在重复——改代码前读 [`AGENTS.md`](./AGENTS.md)(铁律 + 代码地图 + 约定),设计意图读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md),现在做到哪读 [`PROGRESS.md`](./PROGRESS.md)。本文件是指针 + 判断,不是副本。
+规则、设计、状态不在重复——改代码前读 [`AGENTS.md`](./AGENTS.md)(铁律 + 代码地图 + 约定),设计意图读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md),现在做到哪读 [`PROGRESS.md`](./docs/PROGRESS.md)。本文件是指针 + 判断,不是副本。
 
 > **命名说明:** 用 GitHub 约定的 `CONTRIBUTING.md`(不是 `CONTRIBUTION.md`),因为 GitHub 在开 PR/issue 时会自动把它链接到表单上方——这是实打实的好处,值得遵循约定。
 
@@ -12,10 +12,10 @@
 
 一次改动走完这几步。每步都指向该读的地方,不抄规则。
 
-1. **开工前读三份**: [`AGENTS.md`](./AGENTS.md)(四条铁律——违反了不报错只是结果错)、[`PROGRESS.md`](./PROGRESS.md) 的 `▶ 当前` 段、看 `git log` 想改的那块为什么这么写。这个仓库里**好几个决定的理由只存在于 commit message 里**。
+1. **开工前读三份**: [`AGENTS.md`](./AGENTS.md)(四条铁律——违反了不报错只是结果错)、[`PROGRESS.md`](./docs/PROGRESS.md) 的 `▶ 当前` 段、看 `git log` 想改的那块为什么这么写。这个仓库里**好几个决定的理由只存在于 commit message 里**。
 2. **所有 `uv` 命令在 `app/` 下执行**(布局说明见 AGENTS)。`cd app && uv sync` 装依赖;`git submodule update --init` 拉臂层 submodule(漏了 import 就失败)。
 3. **改完跑三道闸**:`cd app && uv run pytest` 绿、`cd app && uvx ruff check backend tests` 绿、`cd app/frontend && npm run build` 绿(改了前端才需要)。每个 commit 结束时代码库必须能跑。
-4. **同 commit 更新 [`PROGRESS.md`](./PROGRESS.md) 的状态**——不要分开提交,否则状态和代码漂移。`进行中`/`上一个完成的` 两行说清现在在哪。
+4. **同 commit 更新 [`PROGRESS.md`](./docs/PROGRESS.md) 的状态**——不要分开提交,否则状态和代码漂移。`进行中`/`上一个完成的` 两行说清现在在哪。
 5. **commit message 写正常英文散文,说清为什么**,尤其是偏离原计划的地方。
 6. **碰硬件相关代码前读 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)**——「已验证」与「待实测」严格分开;四条铁律的源码级证据在那。
 
@@ -102,7 +102,7 @@
 | 要做什么 | 读哪 |
 |---|---|
 | 改代码(任何) | [`AGENTS.md`](./AGENTS.md) |
-| 接手一个 session | [`PROGRESS.md`](./PROGRESS.md) `▶ 当前` |
+| 接手一个 session | [`PROGRESS.md`](./docs/PROGRESS.md) `▶ 当前` |
 | 用这个服务 / 排故障 | [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) |
 | 谈产品定位 / 改交互 / 加插件 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) / [`docs/TIMELINE.md`](./docs/TIMELINE.md) / [`docs/PLUGINS.md`](./docs/PLUGINS.md) |
 | 碰硬件 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) |

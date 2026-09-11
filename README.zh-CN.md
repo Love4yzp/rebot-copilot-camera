@@ -14,7 +14,7 @@
 
 第一个落地场景是自动化多视角拍摄：reBot-RS 六轴臂夹佳能相机，被拍物体固定不动。照片留在相机 SD 卡里 —— 本项目只管把臂开到位、把快门按下去。
 
-> 改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。做到哪了见 **[PROGRESS.md](./PROGRESS.md)**。
+> 改代码前读 **[AGENTS.md](./AGENTS.md)**（四条违反了不报错、只让结果错的铁律）。做到哪了见 **[PROGRESS.md](./docs/PROGRESS.md)**。
 
 ---
 
@@ -25,7 +25,7 @@
 | 程序 | `app/backend/`（内核、编排引擎、插件层、API —— 分层见 `docs/ARCHITECTURE.md`）、`app/frontend/`（界面 + 开发 mock + 契约 runner）、`app/firmware/esp32-shutter/`、`app/vendor/reBotArm_control_py/`（锁版本的 submodule） |
 | 配置与数据 | `app/config/`（硬件 yaml + 操作者调参）、`app/data/`（运行时位姿 / 序列 / 模板，不入 git） |
 | 部署 | `app/deploy/`（systemd unit + udev 规则） |
-| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构、硬件、交互）、`PROGRESS.md`（现状）、本 README |
+| 知识 | `AGENTS.md`（agent 手册）、`docs/`（架构、硬件、交互、`PROGRESS.md` 现状）、本 README |
 | 验证 | `app/tests/`、`app/contract/cases/`（golden 契约用例） |
 | 入口 | `./dev.sh`（全在本机跑）、`./device.sh`（每条命令经 ssh 落到设备） |
 
@@ -295,7 +295,7 @@ plant 中保持最后一条命令。可选测试命令是
 |---|---|
 | [AGENTS.md](./AGENTS.md) | 改代码前读：四条铁律、代码地图、约定 |
 | [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | 硬件事实，**已验证** vs **待实测** |
-| [PROGRESS.md](./PROGRESS.md) | 现在做到哪、什么卡住 |
+| [PROGRESS.md](./docs/PROGRESS.md) | 现在做到哪、什么卡住 |
 | [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | 烧录、配对、串口协议 |
 
 臂层不自己写 —— 运动学、动力学、重力补偿、轨迹规划、URDF 全部来自 [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py)。

@@ -1,6 +1,6 @@
 # 做到哪了
 
-现在在哪、下一步、什么卡住。铁律在 [`AGENTS.md`](./AGENTS.md)，交互约束在 [`docs/TIMELINE.md`](./docs/TIMELINE.md)，硬件事实在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。为什么这么写：`git log`。
+现在在哪、下一步、什么卡住。铁律在 [`AGENTS.md`](../AGENTS.md)，交互约束在 [`docs/TIMELINE.md`](./TIMELINE.md)，硬件事实在 [`docs/HARDWARE_NOTES.md`](./HARDWARE_NOTES.md)。为什么这么写：`git log`。
 
 后端只由人用 `./dev.sh sim` / `./dev.sh prod` 起。Agent 不跑 `backend.app`、不占用 18790。状态变了才改本文件，changelog 不写在这。
 
