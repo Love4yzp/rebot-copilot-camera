@@ -20,18 +20,24 @@ export function useControlSocket() {
   useEffect(() => {
     let socket: WebSocket | null = null;
     let disposed = false;
+    let lastState: number | null = null;
 
     const open = () => {
       if (disposed) return;
+      lastState = null;
 
       const scheme = location.protocol === "https:" ? "wss" : "ws";
       socket = new WebSocket(`${scheme}://${location.host}/ws`);
 
-      socket.onopen = () => setConnected(true);
+      socket.onopen = () => {
+        lastState = performance.now();
+      };
 
       socket.onmessage = (event) => {
         const message: SocketMessage = JSON.parse(event.data);
         if (message.type === "state") {
+          lastState = performance.now();
+          setConnected(true);
           setState(message.data);
           setPlayback(message.data.playback);
         } else if (message.type === "playback") {
@@ -48,6 +54,12 @@ export function useControlSocket() {
     };
 
     open();
+    const staleTimer = window.setInterval(() => {
+      if (lastState !== null && performance.now() - lastState > 1500) {
+        setConnected(false);
+        socket?.close();
+      }
+    }, 500);
 
     // Phones suspend timers and can kill the socket while the tab is
     // backgrounded; `onclose` may already have fired with the reconnect timer
@@ -71,6 +83,7 @@ export function useControlSocket() {
       disposed = true;
       document.removeEventListener("visibilitychange", resyncOnVisible);
       window.clearTimeout(timer.current);
+      window.clearInterval(staleTimer);
       socket?.close();
     };
   }, []);

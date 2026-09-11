@@ -58,8 +58,8 @@ def test_pose_rejects_non_finite_angles():
         Pose(name="x", joints={"joint1": float("nan")})
 
 
-def test_sequence_carries_schema_version_2():
-    assert Sequence(name="x").schema_version == 2 == SCHEMA_VERSION
+def test_sequence_carries_schema_version_3():
+    assert Sequence(name="x").schema_version == 3 == SCHEMA_VERSION
 
 
 def test_blocks_round_trip_to_their_concrete_types():
@@ -67,8 +67,11 @@ def test_blocks_round_trip_to_their_concrete_types():
     original = Sequence(
         name="x",
         blocks=[
-            HoldBlock(pose_id="abc", duration_s=2.0,
-                      markers=[EventMarker(kind="wait", at=1.0, estimate_s=0.0)]),
+            HoldBlock(
+                pose_id="abc",
+                duration_s=2.0,
+                markers=[EventMarker(kind="wait", at=1.0, estimate_s=0.0)],
+            ),
             TransitionBlock(duration_s=1.5, easing="linear"),
         ],
     )
@@ -91,8 +94,11 @@ def test_summary_counts_stations_and_plan_ruler_duration():
         blocks=[
             HoldBlock(pose_id="a", duration_s=3.0),
             TransitionBlock(duration_s=2.0),
-            HoldBlock(pose_id="b", duration_s=5.0,
-                      markers=[EventMarker(kind="wait", at=1.0, estimate_s=0.0)]),
+            HoldBlock(
+                pose_id="b",
+                duration_s=5.0,
+                markers=[EventMarker(kind="wait", at=1.0, estimate_s=0.0)],
+            ),
         ],
     )
     summary = SequenceSummary.of(sequence)
@@ -139,10 +145,14 @@ def test_pose_delete_removes_and_then_raises(stores):
 
 def test_sequence_round_trip_keeps_blocks(stores):
     _, sequences, _ = stores
-    sequence = sequences.save(a_sequence(blocks=[
-        HoldBlock(pose_id="abc", duration_s=1.0),
-        TransitionBlock(duration_s=2.0, easing="ease_out"),
-    ]))
+    sequence = sequences.save(
+        a_sequence(
+            blocks=[
+                HoldBlock(pose_id="abc", duration_s=1.0),
+                TransitionBlock(duration_s=2.0, easing="ease_out"),
+            ]
+        )
+    )
     loaded = sequences.get(sequence.id)
     assert [b.type for b in loaded.blocks] == ["hold", "transition"]
     assert loaded.blocks[1].easing == "ease_out"
@@ -151,8 +161,9 @@ def test_sequence_round_trip_keeps_blocks(stores):
 def test_sequence_list_returns_summaries_in_creation_order(stores):
     _, sequences, _ = stores
     sequences.save(a_sequence(name="old", created_at=100.0))
-    sequences.save(a_sequence(name="new", created_at=200.0,
-                              blocks=[HoldBlock(pose_id="a", duration_s=3.0)]))
+    sequences.save(
+        a_sequence(name="new", created_at=200.0, blocks=[HoldBlock(pose_id="a", duration_s=3.0)])
+    )
     summaries = sequences.list()
     assert [s.name for s in summaries] == ["old", "new"]
     assert summaries[1].station_count == 1
@@ -218,15 +229,17 @@ def test_store_creates_its_directory(tmp_path: Path):
 
 def test_template_round_trip(stores):
     _, _, templates = stores
-    template = templates.save(SeqTemplate(
-        name="四方位",
-        station_count=2,
-        recipe=[
-            HoldBlock(pose_id="slot:1", duration_s=3.0),
-            TransitionBlock(duration_s=2.0),
-            HoldBlock(pose_id="slot:2", duration_s=3.0),
-        ],
-    ))
+    template = templates.save(
+        SeqTemplate(
+            name="四方位",
+            station_count=2,
+            recipe=[
+                HoldBlock(pose_id="slot:1", duration_s=3.0),
+                TransitionBlock(duration_s=2.0),
+                HoldBlock(pose_id="slot:2", duration_s=3.0),
+            ],
+        )
+    )
     loaded = templates.get(template.id)
     assert loaded.station_count == 2
     assert loaded.recipe[0].pose_id == "slot:1"

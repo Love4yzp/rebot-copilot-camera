@@ -14,7 +14,7 @@ from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.safety import SafetyLatch
-from backend.shutter import SimShutter
+
 from backend.tuning import TuningStore
 
 
@@ -27,7 +27,6 @@ def rig(tmp_path: Path):
     app.state.tuning_store = TuningStore(tmp_path / "tuning.yaml")
     app.state.controller = Controller(
         arm=arm,
-        shutter=SimShutter(),
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=lambda: 0.0,
@@ -94,9 +93,7 @@ def test_reset_reloads_the_saved_file(rig):
 
 def test_put_is_refused_while_a_sequence_executes(rig, monkeypatch):
     client, _ = rig
-    monkeypatch.setattr(
-        Controller, "is_playing", property(lambda self: True)
-    )
+    monkeypatch.setattr(Controller, "is_playing", property(lambda self: True))
     r = client.put("/api/config/tuning", json={"float": {"kp": 3.0}})
     assert r.status_code == 409
     assert "executing" in r.json()["detail"]

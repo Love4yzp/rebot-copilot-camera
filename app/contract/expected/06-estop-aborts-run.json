@@ -1,0 +1,285 @@
+[
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:1>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0,
+        "joint2": 0.35,
+        "joint3": 0.3,
+        "joint4": 0,
+        "joint5": 0.1,
+        "joint6": 0
+      },
+      "name": "A",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:2>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0.8,
+        "joint2": 0.45,
+        "joint3": 0.5,
+        "joint4": 0,
+        "joint5": 0.25,
+        "joint6": 0.2
+      },
+      "name": "B",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "blocks": [],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "打断",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 2,
+          "easing": "ease_in_out",
+          "id": "<id:5>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:6>",
+          "markers": [],
+          "pose_id": "<id:2>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "打断",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "playback",
+      "mode": "playback",
+      "playback": {
+        "approaching": true,
+        "block_index": 0,
+        "block_total": 3,
+        "finished": false,
+        "phase": "hold",
+        "sequence_id": "<id:3>",
+        "sequence_name": "打断",
+        "t_in_block": 0
+      },
+      "playing": true,
+      "rate_hz": "<volatile>",
+      "source": "脚本",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "playback",
+      "mode": "playback",
+      "playback": {
+        "approaching": true,
+        "block_index": 0,
+        "block_total": 3,
+        "finished": false,
+        "phase": "hold",
+        "sequence_id": "<id:3>",
+        "sequence_name": "打断",
+        "t_in_block": 0
+      },
+      "playing": true,
+      "rate_hz": "<volatile>",
+      "source": "脚本",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": true,
+      "engaged_at": "<ts>",
+      "latched": true,
+      "reason": "operator engaged emergency stop",
+      "source": "api"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "estop",
+      "playback": {
+        "approaching": false,
+        "block_index": 0,
+        "block_total": 3,
+        "error": "emergency stop engaged",
+        "finished": true,
+        "phase": "aborted",
+        "sequence_id": "<id:3>",
+        "sequence_name": "打断",
+        "t_in_block": 0
+      },
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "source": "脚本",
+      "teaching": false
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": {
+        "engaged_at": "<ts>",
+        "error": "estop_latched",
+        "message": "Emergency stop is engaged; clear it before commanding motion.",
+        "reason": "operator engaged emergency stop",
+        "source": "api"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": {
+        "engaged_at": "<ts>",
+        "error": "estop_latched",
+        "message": "Emergency stop is engaged; clear it before commanding motion.",
+        "reason": "operator engaged emergency stop",
+        "source": "api"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": {
+        "engaged_at": "<ts>",
+        "error": "estop_latched",
+        "message": "Emergency stop is engaged; clear it before commanding motion.",
+        "reason": "operator engaged emergency stop",
+        "source": "api"
+      }
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": {
+        "engaged_at": "<ts>",
+        "error": "estop_latched",
+        "message": "Emergency stop is engaged; clear it before commanding motion.",
+        "reason": "operator engaged emergency stop",
+        "source": "api"
+      }
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:1>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0,
+        "joint2": 0.35,
+        "joint3": 0.3,
+        "joint4": 0,
+        "joint5": 0.1,
+        "joint6": 0
+      },
+      "name": "急停中仍可改",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:7>",
+      "joints": {
+        "gripper": 0,
+        "joint1": 0,
+        "joint2": 0,
+        "joint3": 0,
+        "joint4": 0,
+        "joint5": 0,
+        "joint6": 0
+      },
+      "name": "急停中录",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": true,
+      "latched": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playback": {
+        "approaching": false,
+        "block_index": 0,
+        "block_total": 3,
+        "error": "emergency stop engaged",
+        "finished": true,
+        "phase": "aborted",
+        "sequence_id": "<id:3>",
+        "sequence_name": "打断",
+        "t_in_block": 0
+      },
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "source": "脚本",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": "no wait marker to resume from"
+    }
+  }
+]

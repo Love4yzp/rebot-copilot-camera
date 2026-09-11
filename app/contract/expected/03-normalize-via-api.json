@@ -1,0 +1,174 @@
+[
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:1>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0,
+        "joint2": 0.35,
+        "joint3": 0.3,
+        "joint4": 0,
+        "joint5": 0.1,
+        "joint6": 0
+      },
+      "name": "A",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:2>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0.8,
+        "joint2": 0.45,
+        "joint3": 0.5,
+        "joint4": 0,
+        "joint5": 0.25,
+        "joint6": 0.2
+      },
+      "name": "B",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "blocks": [],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "归一化",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 1,
+          "id": "<id:5>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "归一化",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "归一化",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 7,
+          "easing": "ease_in",
+          "id": "<id:6>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:5>",
+          "markers": [],
+          "pose_id": "<id:2>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 7,
+          "easing": "ease_in",
+          "id": "<id:7>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 2,
+          "id": "<id:8>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "归一化",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 2,
+          "easing": "ease_in_out",
+          "id": "<id:9>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:5>",
+          "markers": [],
+          "pose_id": "<id:2>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "归一化",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  }
+]

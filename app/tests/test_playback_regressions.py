@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from backend import assets
-from backend.actions import InlineRunner
+
 from backend.arm import SimArm
 from backend.arm.session import ArmSession
 from backend.core import Phase, SequenceExecutor
@@ -31,13 +31,15 @@ class _Group:
         self.mit: list[dict] = []
 
     def send_mit(self, pos, vel=None, kp=None, kd=None, tau=None) -> None:
-        self.mit.append({
-            "pos": np.asarray(pos, dtype=float).copy(),
-            "vel": np.asarray(vel, dtype=float).copy(),
-            "kp": np.asarray(kp, dtype=float).copy(),
-            "kd": np.asarray(kd, dtype=float).copy(),
-            "tau": np.asarray(tau, dtype=float).copy(),
-        })
+        self.mit.append(
+            {
+                "pos": np.asarray(pos, dtype=float).copy(),
+                "vel": np.asarray(vel, dtype=float).copy(),
+                "kp": np.asarray(kp, dtype=float).copy(),
+                "kd": np.asarray(kd, dtype=float).copy(),
+                "tau": np.asarray(tau, dtype=float).copy(),
+            }
+        )
 
 
 class _Transport:
@@ -151,7 +153,6 @@ def test_every_transition_is_stretched_to_the_profile_limits():
         sequence,
         {first.id: first, second.id: second},
         arm=arm,
-        actions=InlineRunner([]),
         clock=clock,
         settle_s=0.0,
     )
@@ -191,9 +192,15 @@ def test_executor_streams_holds_during_settling_and_after_arrival():
     second = Pose(name="second", joints={"joint1": 0.1})
     sequence = Sequence(
         name="hold-stream",
-        blocks=[HoldBlock(pose_id=first.id, duration_s=0.2), TransitionBlock(duration_s=0.1), HoldBlock(pose_id=second.id, duration_s=0.2)],
+        blocks=[
+            HoldBlock(pose_id=first.id, duration_s=0.2),
+            TransitionBlock(duration_s=0.1),
+            HoldBlock(pose_id=second.id, duration_s=0.2),
+        ],
     )
-    executor = SequenceExecutor(sequence, {first.id: first, second.id: second}, arm=arm, actions=InlineRunner([]), clock=clock, settle_s=0.0)
+    executor = SequenceExecutor(
+        sequence, {first.id: first, second.id: second}, arm=arm, clock=clock, settle_s=0.0
+    )
     executor.start()
     initial = arm.hold_calls
     for _ in range(30):

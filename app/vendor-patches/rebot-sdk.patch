@@ -1,0 +1,1091 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 3ec1309..467838e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -12,3 +12,17 @@ dependencies = [
+     "matplotlib>=3.10.0",
+     "motorbridge>=0.4.9",
+ ]
++
++[project.optional-dependencies]
++physics = ["mujoco>=3.3,<3.4"]
++
++[build-system]
++requires = ["hatchling"]
++build-backend = "hatchling.build"
++
++[tool.hatch.build.targets.wheel]
++packages = ["reBotArm_control_py"]
++
++[tool.hatch.build.targets.wheel.force-include]
++"urdf" = "reBotArm_control_py/assets/urdf"
++"config" = "reBotArm_control_py/assets/config"
+diff --git a/reBotArm_control_py/kinematics/robot_model.py b/reBotArm_control_py/kinematics/robot_model.py
+index ca0360c..e88d0d3 100644
+--- a/reBotArm_control_py/kinematics/robot_model.py
++++ b/reBotArm_control_py/kinematics/robot_model.py
+@@ -11,7 +11,9 @@ import numpy as np
+ import pinocchio as pin
+ import yaml
+ 
+-_cfg_dir = Path(__file__).resolve().parents[2] / "config"
++_cfg_dir = Path(__file__).resolve().parents[2] / "config"
++if not _cfg_dir.is_dir():
++    _cfg_dir = Path(__file__).resolve().parents[1] / "assets" / "config"
+ _global_cfg = _cfg_dir / "rebotarm.yaml"
+ _project_root = _cfg_dir.parent
+ 
+diff --git a/reBotArm_control_py/collision.py b/reBotArm_control_py/collision.py
+new file mode 100644
+index 0000000..894eff5
+--- /dev/null
++++ b/reBotArm_control_py/collision.py
+@@ -0,0 +1,208 @@
++"""Explicit-model collision, joint limit and frame queries. No hardware access."""
++
++from __future__ import annotations
++import logging
++from dataclasses import dataclass
++from typing import Mapping
++import numpy as np
++import pinocchio as pin
++
++log = logging.getLogger(__name__)
++LIMIT_TOLERANCE_RAD = 0.02
++PATH_SAMPLES = 12
++
++
++@dataclass(frozen=True)
++class LimitViolation:
++    joint: str
++    value: float
++    lower: float
++    upper: float
++
++    def __str__(self) -> str:
++        return f"{self.joint}={self.value:.4f} rad is outside [{self.lower:.4f}, {self.upper:.4f}]"
++
++
++@dataclass(frozen=True)
++class CollisionHit:
++    first: str
++    second: str
++
++    def __str__(self) -> str:
++        return f"{self.first} collides with {self.second}"
++
++
++class RobotModel:
++    """Explicit model with per-query data, safe for concurrent readers."""
++
++    def __init__(
++        self,
++        *,
++        urdf_path: str,
++        package_dir: str,
++        joint_names,
++        end_effector_frame: str,
++        structural_urdf_path: str | None = None,
++    ) -> None:
++        urdf = urdf_path
++        self.joint_names = tuple(joint_names)
++        self.model = pin.buildModelFromUrdf(urdf)
++        self.data = self.model.createData()
++        self.ee_frame = end_effector_frame
++
++        self.geom = pin.buildGeomFromUrdf(
++            self.model, urdf, pin.GeometryType.COLLISION, package_dirs=package_dir
++        )
++        self.geom.addAllCollisionPairs()
++        self._drop_pairs_touching_at_rest(structural_urdf_path, package_dir)
++        self.geom_data = self.geom.createData()
++
++        self._q_index = {
++            name: self.model.joints[self.model.getJointId(name)].idx_q
++            for name in self.joint_names
++            if self.model.existJointName(name)
++        }
++        missing = [n for n in self.joint_names if n not in self._q_index]
++        if missing:
++            raise RuntimeError(f"URDF is missing expected joints: {missing}")
++
++    def _drop_pairs_touching_at_rest(self, reference_path=None, package_dir=None) -> None:
++        """Remove pairs that are in contact with the arm at rest.
++
++        The URDF ships no SRDF, so every link pair is a candidate, including
++        adjacent links that are bolted together and therefore always touching.
++        The rest pose is by definition not a self-collision, so whatever
++        collides there is structural rather than a fault. On this URDF that is
++        exactly the eight parent/child pairs, leaving 36 real ones.
++        """
++        # Determine exclusions from the validated stock assembly, not a newly
++        # fitted tool: a tool intersecting the base at neutral is NOT structural.
++        reference = self.model if reference_path is None else pin.buildModelFromUrdf(reference_path)
++        geometry = (
++            self.geom
++            if reference_path is None
++            else pin.buildGeomFromUrdf(
++                reference, reference_path, pin.GeometryType.COLLISION, package_dirs=package_dir
++            )
++        )
++        if reference_path is not None:
++            geometry.addAllCollisionPairs()
++        data = reference.createData()
++        geom_data = geometry.createData()
++        pin.computeCollisions(reference, data, geometry, geom_data, pin.neutral(reference), False)
++        excluded = {
++            frozenset(
++                (
++                    geometry.geometryObjects[pair.first].name,
++                    geometry.geometryObjects[pair.second].name,
++                )
++            )
++            for pair, result in zip(geometry.collisionPairs, geom_data.collisionResults)
++            if result.isCollision()
++        }
++
++        structural = [
++            i
++            for i, pair in enumerate(self.geom.collisionPairs)
++            if frozenset(
++                (
++                    self.geom.geometryObjects[pair.first].name,
++                    self.geom.geometryObjects[pair.second].name,
++                )
++            )
++            in excluded
++        ]
++        for index in reversed(structural):
++            pair = self.geom.collisionPairs[index]
++            log.debug(
++                "excluding structural pair %s <-> %s",
++                self.geom.geometryObjects[pair.first].name,
++                self.geom.geometryObjects[pair.second].name,
++            )
++            self.geom.removeCollisionPair(pair)
++
++    # ── configuration vectors ────────────────────────────────────────────────
++
++    def to_q(self, joints: Mapping[str, float]) -> np.ndarray:
++        """Build a full configuration vector, defaulting unmentioned joints to rest."""
++        q = pin.neutral(self.model)
++        for name, value in joints.items():
++            index = self._q_index.get(name)
++            if index is not None:
++                q[index] = value
++        return q
++
++    # ── checks ───────────────────────────────────────────────────────────────
++
++    def check_limits(
++        self, joints: Mapping[str, float], tolerance: float = LIMIT_TOLERANCE_RAD
++    ) -> list[LimitViolation]:
++        violations = []
++        for name, value in joints.items():
++            index = self._q_index.get(name)
++            if index is None:
++                continue  # gripper, or an unknown name — not ours to judge
++            lower = float(self.model.lowerPositionLimit[index])
++            upper = float(self.model.upperPositionLimit[index])
++            if not (lower - tolerance <= value <= upper + tolerance):
++                violations.append(LimitViolation(name, float(value), lower, upper))
++        return violations
++
++    def check_self_collision(self, joints: Mapping[str, float]) -> list[CollisionHit]:
++        q = self.to_q(joints)
++        data, geom_data = self.model.createData(), self.geom.createData()
++        pin.computeCollisions(self.model, data, self.geom, geom_data, q, False)
++
++        hits = []
++        for i, result in enumerate(geom_data.collisionResults):
++            if result.isCollision():
++                pair = self.geom.collisionPairs[i]
++                hits.append(
++                    CollisionHit(
++                        self.geom.geometryObjects[pair.first].name,
++                        self.geom.geometryObjects[pair.second].name,
++                    )
++                )
++        return hits
++
++    def check_path(
++        self,
++        start: Mapping[str, float],
++        end: Mapping[str, float],
++        samples: int = PATH_SAMPLES,
++    ) -> list[CollisionHit]:
++        """Sample the straight line between two poses.
++
++        Coarse on purpose. This catches an arm folding through itself on the
++        way between two legal poses; it is not a proof of clearance.
++        """
++        names = set(start) | set(end)
++        for step in range(1, samples + 1):
++            t = step / (samples + 1)
++            mid = {n: start.get(n, 0.0) * (1 - t) + end.get(n, 0.0) * t for n in names}
++            hits = self.check_self_collision(mid)
++            if hits:
++                return hits
++        return []
++
++    def forward_kinematics(self, joints: Mapping[str, float]) -> pin.SE3:
++        """Pose of the end-effector frame — where the camera is pointing.
++
++        Returns a copy. ``data.oMf`` is live storage that the next
++        forwardKinematics call overwrites, so handing it out directly means an
++        earlier result silently changes under the caller.
++        """
++        q = self.to_q(joints)
++        data = self.model.createData()
++        pin.forwardKinematics(self.model, data, q)
++        pin.updateFramePlacements(self.model, data)
++        return pin.SE3(data.oMf[self.model.getFrameId(self.ee_frame)])
++
++    def limits(self) -> dict[str, tuple[float, float]]:
++        return {
++            name: (
++                float(self.model.lowerPositionLimit[index]),
++                float(self.model.upperPositionLimit[index]),
++            )
++            for name, index in self._q_index.items()
++        }
+diff --git a/reBotArm_control_py/end_effector.py b/reBotArm_control_py/end_effector.py
+new file mode 100644
+index 0000000..a2effd5
+--- /dev/null
++++ b/reBotArm_control_py/end_effector.py
+@@ -0,0 +1,103 @@
++"""Fixed end-effector descriptions shared by gravity, physics and rendering."""
++
++from dataclasses import dataclass, field
++from pathlib import Path
++import tempfile
++import xml.etree.ElementTree as ET
++
++import numpy as np
++
++
++@dataclass(frozen=True)
++class EndEffectorSpec:
++    name: str
++    mass: float
++    com: tuple[float, float, float]
++    inertia: tuple[float, float, float, float, float, float] | None = None
++    box: tuple[float, float, float] | None = None
++    frame: str = "gripper_end"
++    inertia_estimated: bool = field(default=False, init=False)
++
++    def __post_init__(self):
++        if not self.name or self.frame != "gripper_end":
++            raise ValueError("this RS adapter supports the gripper_end attachment frame")
++        if not np.isfinite(self.mass) or self.mass <= 0:
++            raise ValueError("mass must be finite and positive")
++        if len(self.com) != 3 or not np.isfinite(self.com).all():
++            raise ValueError("com must contain three finite metres")
++        if (
++            self.box is None
++            or len(self.box) != 3
++            or not all(np.isfinite(x) and x > 0 for x in self.box)
++        ):
++            raise ValueError("provide a positive collision box in metres")
++        if self.inertia is None:
++            object.__setattr__(self, "inertia_estimated", True)
++            x, y, z = self.box
++            object.__setattr__(
++                self,
++                "inertia",
++                (
++                    self.mass * (y * y + z * z) / 12,
++                    self.mass * (x * x + z * z) / 12,
++                    self.mass * (x * x + y * y) / 12,
++                    0.0,
++                    0.0,
++                    0.0,
++                ),
++            )
++        if len(self.inertia) != 6 or not np.isfinite(self.inertia).all():
++            raise ValueError("inertia must contain six finite kg m² values")
++        xx, yy, zz, xy, xz, yz = self.inertia
++        eig = np.linalg.eigvalsh([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]])
++        if eig[0] <= 0 or eig[2] > eig[0] + eig[1] + 1e-12:
++            raise ValueError("inertia must be positive and satisfy the triangle inequality")
++
++
++def build_end_effector_model(urdf_path: str, *, profile: str, spec: EndEffectorSpec | None = None):
++    """Return (TemporaryDirectory owner, path). Keep the owner alive while in use.
++
++    The stock gripper is fixed for visualization/physics; finger motor mapping
++    is deliberately not invented. Bare removes its mass AND geometry.
++    """
++    if profile not in {"bare", "gripper", "custom"}:
++        raise ValueError("profile must be bare, gripper or custom")
++    if profile == "custom" and spec is None:
++        raise ValueError("custom end effector requires a complete specification")
++    source = Path(urdf_path)
++    root = ET.parse(source).getroot()
++    for mesh in root.findall(".//mesh"):
++        path = Path(mesh.get("filename"))
++        if not path.is_absolute():
++            path = source.parent / path
++            if not path.exists():
++                path = source.parent.parent / mesh.get("filename")
++        if not path.exists():
++            raise FileNotFoundError(path)
++        mesh.set("filename", str(path.resolve()))
++    if profile != "gripper":
++        for link in root.findall("link"):
++            if link.get("name") not in {"gripper_end", "gripper_left", "gripper_right"}:
++                continue
++            for child in list(link):
++                if child.tag in {"inertial", "visual", "collision"}:
++                    link.remove(child)
++            if profile == "custom" and link.get("name") == spec.frame:
++                inertial = ET.SubElement(link, "inertial")
++                ET.SubElement(inertial, "mass", value=str(spec.mass))
++                ET.SubElement(inertial, "origin", xyz=" ".join(map(str, spec.com)), rpy="0 0 0")
++                ET.SubElement(
++                    inertial,
++                    "inertia",
++                    dict(zip(("ixx", "iyy", "izz", "ixy", "ixz", "iyz"), map(str, spec.inertia))),
++                )
++                for tag in ("visual", "collision"):
++                    element = ET.SubElement(link, tag)
++                    ET.SubElement(element, "origin", xyz=" ".join(map(str, spec.com)), rpy="0 0 0")
++                    ET.SubElement(
++                        ET.SubElement(element, "geometry"), "box", size=" ".join(map(str, spec.box))
++                    )
++    owner = tempfile.TemporaryDirectory(prefix="rebot-rs-model-")
++    path = Path(owner.name) / source.name
++    ET.ElementTree(root).write(path, encoding="unicode")
++    return owner, path
+diff --git a/reBotArm_control_py/motion_profiles.py b/reBotArm_control_py/motion_profiles.py
+new file mode 100644
+index 0000000..0c7799f
+--- /dev/null
++++ b/reBotArm_control_py/motion_profiles.py
+@@ -0,0 +1,173 @@
++"""Small analytical quintic motion profiles used by both arm drivers."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from types import MappingProxyType
++from typing import Mapping
++
++import numpy as np
++
++
++@dataclass(frozen=True)
++class MotionLimits:
++    velocity: float = 0.25
++    acceleration: float = 0.5
++    jerk: float = 2.0
++
++    def __post_init__(self) -> None:
++        if not all(np.isfinite(x) and x > 0 for x in (self.velocity, self.acceleration, self.jerk)):
++            raise ValueError("motion limits must be finite and positive")
++
++
++DEFAULT_LIMITS = MotionLimits()
++
++
++class MotionRejected(RuntimeError):
++    """A candidate motion cannot satisfy the configured analytic limits."""
++
++
++@dataclass(frozen=True)
++class Quintic:
++    """A boundary-value polynomial in normalized time ``u=t/duration``."""
++
++    q0: float
++    v0: float
++    a0: float
++    q1: float
++    duration: float
++    coefficients: tuple[float, ...]
++
++    @classmethod
++    def create(cls, q0: float, v0: float, a0: float, q1: float, duration: float) -> "Quintic":
++        if not all(np.isfinite(x) for x in (q0, v0, a0, q1)):
++            raise MotionRejected("motion boundary values must be finite")
++        if duration <= 0 or not np.isfinite(duration):
++            raise MotionRejected("duration must be finite and positive")
++        d = float(duration)
++        # Coefficients are in u, therefore derivatives below are converted by d.
++        c0, c1, c2 = q0, v0 * d, 0.5 * a0 * d * d
++        r0 = q1 - (c0 + c1 + c2)
++        r1 = -c1 - 2 * c2
++        r2 = -2 * c2
++        c3 = 10 * r0 - 4 * r1 + 0.5 * r2
++        c4 = -15 * r0 + 7 * r1 - r2
++        c5 = 6 * r0 - 3 * r1 + 0.5 * r2
++        return cls(q0, v0, a0, q1, d, (c0, c1, c2, c3, c4, c5))
++
++    def eval(self, elapsed: float) -> tuple[float, float, float, float]:
++        u = min(max(float(elapsed) / self.duration, 0.0), 1.0)
++        c = np.asarray(self.coefficients)
++        q = float(np.polynomial.polynomial.polyval(u, c))
++        d1 = float(np.polynomial.polynomial.polyval(u, np.arange(1, 6) * c[1:])) / self.duration
++        d2 = (
++            float(np.polynomial.polynomial.polyval(u, np.arange(2, 6) * np.arange(1, 5) * c[2:]))
++            / self.duration**2
++        )
++        d3 = (
++            float(np.polynomial.polynomial.polyval(u, np.array([6, 24, 60]) * c[3:]))
++            / self.duration**3
++        )
++        return q, d1, d2, d3
++
++    def extrema(self) -> tuple[float, float, float, float]:
++        c = np.asarray(self.coefficients, dtype=float)
++        points = [0.0, 1.0]
++        for order in (1, 2, 3, 4):
++            d = np.polynomial.polynomial.polyder(c, order)
++            for root in np.roots(d[::-1]):
++                if abs(root.imag) < 1e-8 and 0.0 < root.real < 1.0:
++                    points.append(float(root.real))
++        values = [self.eval(u * self.duration) for u in points]
++        return (
++            max(abs(v[1]) for v in values),
++            max(abs(v[2]) for v in values),
++            max(abs(v[3]) for v in values),
++            max(v[0] for v in values) - min(v[0] for v in values),
++        )
++
++    def position_extrema(self) -> tuple[float, float]:
++        c = np.asarray(self.coefficients, dtype=float)
++        points = [0.0, 1.0]
++        for root in np.roots(np.polynomial.polynomial.polyder(c)[::-1]):
++            if abs(root.imag) < 1e-8 and 0.0 < root.real < 1.0:
++                points.append(float(root.real))
++        values = [self.eval(u * self.duration)[0] for u in points]
++        return min(values), max(values)
++
++
++@dataclass(frozen=True)
++class PreparedMotion:
++    requested: Mapping[str, float]
++    target: Mapping[str, float]
++    duration: float
++    generation: int
++    profiles: Mapping[str, Quintic]
++    samples: tuple[Mapping[str, float], ...]
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "requested", MappingProxyType(dict(self.requested)))
++        object.__setattr__(self, "target", MappingProxyType(dict(self.target)))
++        object.__setattr__(self, "profiles", MappingProxyType(dict(self.profiles)))
++
++
++def minimum_duration(
++    displacements: Mapping[str, float], limits: MotionLimits = DEFAULT_LIMITS
++) -> float:
++    result = 0.0
++    for delta in displacements.values():
++        distance = abs(float(delta))
++        result = max(result, 1.875 * distance / limits.velocity)
++        result = max(result, np.sqrt((10.0 / np.sqrt(3.0)) * distance / limits.acceleration))
++        result = max(result, np.cbrt(60.0 * distance / limits.jerk))
++    return float(result)
++
++
++def prepare_profiles(
++    starts: Mapping[str, tuple[float, float, float]],
++    target: Mapping[str, float],
++    requested_duration: float,
++    generation: int,
++    limits: MotionLimits = DEFAULT_LIMITS,
++    joint_bounds: Mapping[str, tuple[float, float]] | None = None,
++) -> PreparedMotion:
++    if requested_duration <= 0 or not np.isfinite(requested_duration):
++        raise MotionRejected("duration must be finite and positive")
++    if any(not np.isfinite(v) for start in starts.values() for v in start) or any(
++        not np.isfinite(v) for v in target.values()
++    ):
++        raise MotionRejected("motion values must be finite")
++    if joint_bounds is not None and any(
++        lo > hi or not np.isfinite(lo) or not np.isfinite(hi) for lo, hi in joint_bounds.values()
++    ):
++        raise MotionRejected("joint bounds must be finite and ordered")
++    duration = max(
++        float(requested_duration),
++        minimum_duration({n: target[n] - starts[n][0] for n in target}, limits),
++    )
++    for _ in range(32):
++        profiles = {n: Quintic.create(*starts[n], target[n], duration) for n in target}
++        within_derivatives = all(
++            (
++                p.extrema()[0] <= limits.velocity + 1e-8
++                and p.extrema()[1] <= limits.acceleration + 1e-8
++                and p.extrema()[2] <= limits.jerk + 1e-8
++            )
++            for p in profiles.values()
++        )
++        within_positions = joint_bounds is None or all(
++            name not in joint_bounds
++            or (
++                joint_bounds[name][0] - 1e-9 <= p.position_extrema()[0]
++                and p.position_extrema()[1] <= joint_bounds[name][1] + 1e-9
++            )
++            for name, p in profiles.items()
++        )
++        if within_derivatives and within_positions:
++            samples = tuple(
++                MappingProxyType({n: p.eval(t)[0] for n, p in profiles.items()})
++                for t in np.linspace(0.0, duration, 21)
++            )
++            return PreparedMotion(dict(target), target, duration, generation, profiles, samples)
++        duration *= 1.25
++    raise MotionRejected("motion cannot satisfy velocity, acceleration and jerk limits")
+diff --git a/reBotArm_control_py/physics.py b/reBotArm_control_py/physics.py
+new file mode 100644
+index 0000000..67ea6ec
+--- /dev/null
++++ b/reBotArm_control_py/physics.py
+@@ -0,0 +1,394 @@
++"""MuJoCo plant and an injected MIT transport for motion validation.
++
++The plant receives the exact commands emitted by :class:`ArmSession`. It
++holds the last command between sends and never interpolates an application
++trajectory itself. The two prismatic finger joints remain fixed; there is no
++calibrated mapping from the single gripper motor to finger travel.
++"""
++
++from __future__ import annotations
++
++import json
++import shutil
++import tempfile
++import time
++import threading
++from collections import deque
++import xml.etree.ElementTree as ET
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++
++try:  # Optional dependency: ordinary app imports must work without MuJoCo.
++    import mujoco
++except ImportError as exc:  # pragma: no cover - exercised by CLI error path
++    raise ImportError(
++        "MuJoCo validation is optional; install it with `uv sync --extra physics`"
++    ) from exc
++
++
++@dataclass(frozen=True)
++class MitCommand:
++    t: float
++    q_des: dict[str, float]
++    v_des: dict[str, float]
++    kp: dict[str, float]
++    kd: dict[str, float]
++    tau_ff: dict[str, float]
++
++
++class _Group:
++    def __init__(self, transport: "RecordingTransport", names: list[str]) -> None:
++        self._transport = transport
++        self.joint_names = names
++
++    def mode_mit(self, kp=None, kd=None) -> None:
++        return None
++
++    def send_mit(self, pos, vel=None, kp=None, kd=None, tau=None) -> None:
++        self._transport.record(self.joint_names, pos, vel, kp, kd, tau)
++
++
++class RecordingTransport:
++    """RebotArm-shaped transport with deterministic state injection."""
++
++    def __init__(
++        self,
++        q0: dict[str, float] | None = None,
++        clock=None,
++        *,
++        joint_names,
++        arm_joint_names,
++        recording=True,
++    ) -> None:
++        self._names = tuple(joint_names)
++        self._arm_names = tuple(arm_joint_names)
++        self._lock = threading.RLock()
++        self.num_joints = len(self._names)
++        self.rate = 100
++        self._clock = clock or time.monotonic
++        self._q = np.array([float((q0 or {}).get(n, 0.0)) for n in self._names])
++        self._v = np.zeros(len(self._names))
++        self._tau = np.zeros(len(self._names))
++        self.commands = [] if recording else deque(maxlen=4)
++        self._index = {n: i for i, n in enumerate(self._names)}
++        self.groups = {
++            "arm": _Group(self, list(self._arm_names)),
++            "gripper": _Group(self, [n for n in self._names if n not in self._arm_names]),
++        }
++
++    @property
++    def joint_names(self) -> list[str]:
++        return list(self._names)
++
++    def get_state(self):
++        return self._q.copy(), self._v.copy(), self._tau.copy()
++
++    def connect(self) -> None:
++        return None
++
++    def disconnect(self) -> None:
++        return None
++
++    def enable_all(self) -> None:
++        return None
++
++    def record(self, names, pos, vel, kp, kd, tau) -> None:
++        def values(value, default=0.0):
++            if value is None:
++                return [default] * len(names)
++            return np.asarray(value, dtype=float).tolist()
++
++        vv, pp, dd, tt = values(vel), values(kp), values(kd), values(tau)
++        qq = np.asarray(pos, dtype=float).tolist()
++        self.commands.append(
++            MitCommand(
++                float(self._clock()),
++                dict(zip(names, map(float, qq))),
++                dict(zip(names, map(float, vv))),
++                dict(zip(names, map(float, pp))),
++                dict(zip(names, map(float, dd))),
++                dict(zip(names, map(float, tt))),
++            )
++        )
++
++    def set_feedback(self, q: np.ndarray, v: np.ndarray, tau: np.ndarray | None = None) -> None:
++        self._q[:] = q
++        self._v[:] = v
++        if tau is not None:
++            self._tau[:] = tau
++
++
++@dataclass
++class ModelBundle:
++    model: Any
++    data: Any
++    root: Path
++    urdf: Path
++    body_ids: dict[str, int]
++    joint_ids: dict[str, int]
++    actuator_ids: dict[str, int]
++    qpos_addr: dict[str, int]
++    dof_addr: dict[str, int]
++    effort_limits: dict[str, float]
++    arm_joint_names: tuple[str, ...]
++
++    def close(self) -> None:
++        shutil.rmtree(self.root, ignore_errors=True)
++
++
++def load_model(*, urdf_path: str, arm_joint_names, fixed_joint_names=()) -> ModelBundle:
++    """Load the shipped RS URDF with mesh paths fixed in a temporary tree."""
++    source = Path(urdf_path)
++    JOINTS = tuple(arm_joint_names)
++    root = Path(tempfile.mkdtemp(prefix="rebot-mujoco-"))
++    try:
++        (root / "urdf").mkdir()
++        (root / "meshes").mkdir()
++        root_xml = ET.fromstring(source.read_text(encoding="utf-8"))
++        effort = {
++            joint.get("name"): float(joint.find("limit").get("effort"))
++            for joint in root_xml.findall("joint")
++            if joint.get("name") in JOINTS and joint.find("limit") is not None
++        }
++        for joint in root_xml.findall("joint"):
++            if joint.get("name") in fixed_joint_names:
++                joint.set("type", "fixed")
++                for child in list(joint):
++                    if child.tag in {"axis", "limit"}:
++                        joint.remove(child)
++        mujoco_ext = ET.SubElement(root_xml, "mujoco")
++        ET.SubElement(mujoco_ext, "compiler", {"fusestatic": "false"})
++        xml = ET.tostring(root_xml, encoding="unicode").replace(
++            'filename="meshes/', 'filename="../meshes/'
++        )
++        urdf = root / "urdf" / source.name
++        urdf.write_text(xml, encoding="utf-8")
++        for mesh in root_xml.findall(".//mesh"):
++            filename = mesh.get("filename", "")
++            path = Path(filename)
++            if not path.is_absolute():
++                path = source.parent / filename
++                if not path.exists():
++                    path = source.parent.parent / filename
++            if not path.exists():
++                raise FileNotFoundError(path)
++            link = root / "urdf" / path.name
++            if not link.exists():
++                link.symlink_to(path.resolve())
++        spec = mujoco.MjSpec.from_file(str(urdf))
++        for name in JOINTS:
++            actuator = spec.add_actuator()
++            actuator.name = f"mit_{name}"
++            actuator.target = name
++            actuator.trntype = mujoco.mjtTrn.mjTRN_JOINT
++            actuator.gaintype = mujoco.mjtGain.mjGAIN_FIXED
++            actuator.biastype = mujoco.mjtBias.mjBIAS_AFFINE
++            actuator.gainprm[0] = 1.0
++            actuator.forcelimited = True
++            actuator.forcerange = [-effort[name], effort[name]]
++        model = spec.compile()
++        # MIT velocity feedback is stiff relative to the small wrist inertias;
++        # implicitfast keeps the validation integrator stable without changing
++        # deployed gains or the physical model.
++        model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
++        data = mujoco.MjData(model)
++        model.actuator_gainprm[:, :] = 0.0
++        model.actuator_biasprm[:, :] = 0.0
++        bodies = {model.body(i).name: i for i in range(model.nbody)}
++        joints = {model.joint(i).name: i for i in range(model.njnt)}
++        actuators = {model.actuator(i).name: i for i in range(model.nu)}
++        required = set()
++        if not required <= bodies.keys():
++            raise RuntimeError(
++                f"fixed bodies were fused; missing {sorted(required - bodies.keys())}"
++            )
++        if tuple(joints) != JOINTS:
++            raise RuntimeError(f"unexpected physical joints: {tuple(joints)}")
++        if len(actuators) != len(JOINTS):
++            raise RuntimeError(f"expected six MIT actuators, got {len(actuators)}")
++        qpos_addr = {name: int(model.jnt_qposadr[joints[name]]) for name in JOINTS}
++        dof_addr = {name: int(model.jnt_dofadr[joints[name]]) for name in JOINTS}
++        return ModelBundle(
++            model, data, root, urdf, bodies, joints, actuators, qpos_addr, dof_addr, effort, JOINTS
++        )
++    except Exception:
++        shutil.rmtree(root, ignore_errors=True)
++        raise
++
++
++@dataclass
++class PhysicsPlant:
++    bundle: ModelBundle
++    transport: RecordingTransport
++    t: float = 0.0
++    _initialized: bool = False
++    samples: list[dict[str, Any]] = field(default_factory=list)
++    external: dict[str, tuple[float, float]] = field(default_factory=dict)
++
++    def step(self, dt: float) -> None:
++        """Advance one physics step using the last received MIT command."""
++        JOINTS = self.bundle.arm_joint_names
++        if dt <= 0:
++            raise ValueError("dt must be positive")
++        model, data = self.bundle.model, self.bundle.data
++        model.opt.timestep = float(dt)
++        cmd = next(
++            (
++                candidate
++                for candidate in reversed(self.transport.commands)
++                if JOINTS[0] in candidate.q_des
++            ),
++            None,
++        )
++        if not self._initialized:
++            for i, name in enumerate(JOINTS):
++                data.qpos[self.bundle.qpos_addr[name]] = self.transport._q[i]
++                data.qvel[self.bundle.dof_addr[name]] = self.transport._v[i]
++            mujoco.mj_forward(model, data)
++            self._initialized = True
++        if cmd is not None:
++            q = np.array([cmd.q_des.get(n, data.qpos[self.bundle.qpos_addr[n]]) for n in JOINTS])
++            v = np.array([cmd.v_des.get(n, 0.0) for n in JOINTS])
++            kp = np.array([cmd.kp.get(n, 0.0) for n in JOINTS])
++            kd = np.array([cmd.kd.get(n, 0.0) for n in JOINTS])
++            ff = np.array([cmd.tau_ff.get(n, 0.0) for n in JOINTS])
++            for i, name in enumerate(JOINTS):
++                aid = self.bundle.actuator_ids[f"mit_{name}"]
++                data.ctrl[aid] = kp[i] * q[i] + kd[i] * v[i] + ff[i]
++                model.actuator_gainprm[aid, 0] = 1.0
++                model.actuator_biasprm[aid, 0] = 0.0
++                model.actuator_biasprm[aid, 1] = -kp[i]
++                model.actuator_biasprm[aid, 2] = -kd[i]
++        else:
++            data.ctrl[:] = 0.0
++            model.actuator_gainprm[:, :] = 0.0
++            model.actuator_biasprm[:, :] = 0.0
++        data.qfrc_applied[:] = 0
++        now = self.transport._clock()
++        for name, (torque, deadline) in list(self.external.items()):
++            if now < deadline:
++                data.qfrc_applied[self.bundle.dof_addr[name]] = torque
++            else:
++                self.external.pop(name, None)
++        mujoco.mj_step(model, data, nstep=1)
++        self.t = float(data.time)
++        q = self.transport._q.copy()
++        vout = self.transport._v.copy()
++        for i, name in enumerate(JOINTS):
++            q[i] = data.qpos[self.bundle.qpos_addr[name]]
++            vout[i] = data.qvel[self.bundle.dof_addr[name]]
++        tau = np.zeros(len(self.transport.joint_names), dtype=float)
++        for i, name in enumerate(JOINTS):
++            tau[i] = data.qfrc_actuator[self.bundle.dof_addr[name]]
++        self.transport.set_feedback(q, vout, tau)
++        self.samples.append(
++            {
++                "t": self.t,
++                "q": q[:6].tolist(),
++                "v": vout[:6].tolist(),
++                "tau": tau[:6].tolist(),
++                "ncon": int(data.ncon),
++                "error": [
++                    float(
++                        cmd.q_des.get(n, q[self.transport._index[n]]) - q[self.transport._index[n]]
++                    )
++                    if cmd is not None
++                    else 0.0
++                    for n in JOINTS
++                ],
++                "saturated": [
++                    abs(float(tau[i])) >= self.bundle.effort_limits[name] - 1e-6
++                    for i, name in enumerate(JOINTS)
++                ],
++            }
++        )
++
++
++class MujocoTransport(RecordingTransport):
++    """A torque-driven plant. Getters never advance time; start() is explicit."""
++
++    def __init__(self, *, urdf_path, joint_names, arm_joint_names, clock=None):
++        super().__init__(
++            clock=clock, joint_names=joint_names, arm_joint_names=arm_joint_names, recording=False
++        )
++        self.bundle = load_model(
++            urdf_path=str(urdf_path),
++            arm_joint_names=arm_joint_names,
++            fixed_joint_names=("joint_left", "joint_right"),
++        )
++        self.plant = PhysicsPlant(self.bundle, self, samples=deque(maxlen=1))
++        self._stop = threading.Event()
++        self._thread = None
++        self.wall_lag_s = 0.0
++        self.worker_error = None
++
++    def get_state(self):
++        with self._lock:
++            if self.worker_error is not None:
++                raise RuntimeError(f"physical simulation stopped: {self.worker_error}")
++            return super().get_state()
++
++    def record(self, *args, **kwargs):
++        with self._lock:
++            return super().record(*args, **kwargs)
++
++    def step(self, dt=0.001):
++        with self._lock:
++            self.plant.step(dt)
++
++    def perturb(self, joint: str, torque: float, duration_s: float):
++        if joint not in self.bundle.effort_limits:
++            raise ValueError("unknown simulated arm joint")
++        if not np.isfinite(torque) or abs(torque) > 0.2 * self.bundle.effort_limits[joint]:
++            raise ValueError("perturbation exceeds 20% of joint effort")
++        if not np.isfinite(duration_s) or not 0 < duration_s <= 0.2:
++            raise ValueError("duration must be in (0, 0.2] seconds")
++        with self._lock:
++            self.plant.external[joint] = (torque, self._clock() + duration_s)
++
++    def clear_perturbations(self):
++        with self._lock:
++            self.plant.external.clear()
++
++    def diagnostics(self):
++        with self._lock:
++            sample = dict(self.plant.samples[-1]) if self.plant.samples else {}
++            sample["wall_lag_s"] = self.wall_lag_s
++            sample["model_source"] = "simulation"
++            return sample
++
++    def start(self):
++        if self._thread is not None:
++            return
++        self._stop.clear()
++        self._thread = threading.Thread(target=self._run, name="mujoco-plant", daemon=True)
++        self._thread.start()
++
++    def _run(self):
++        deadline = self._clock()
++        try:
++            while not self._stop.is_set():
++                now = self._clock()
++                if now < deadline:
++                    self._stop.wait(min(deadline - now, 0.01))
++                    continue
++                self.wall_lag_s = max(0.0, now - deadline)
++                self.step()
++                deadline += 0.001
++        except Exception as exc:
++            with self._lock:
++                self.worker_error = str(exc)
++            self._stop.set()
++
++    def close(self):
++        self._stop.set()
++        if self._thread is not None:
++            self._thread.join(timeout=2.0)
++            if self._thread.is_alive():
++                raise RuntimeError("physics worker did not stop")
++            self._thread = None
++        self.bundle.close()
+diff --git a/reBotArm_control_py/viewer.py b/reBotArm_control_py/viewer.py
+new file mode 100644
+index 0000000..e6510b4
+--- /dev/null
++++ b/reBotArm_control_py/viewer.py
+@@ -0,0 +1,113 @@
++"""Read-only MeshCat projection of robot feedback, isolated from control ticks."""
++
++import logging
++import json
++import subprocess
++import sys
++from pathlib import Path
++import threading
++from urllib.parse import urlsplit
++
++import meshcat
++import numpy as np
++import pinocchio as pin
++from pinocchio.visualize import MeshcatVisualizer
++import zmq
++
++log = logging.getLogger(__name__)
++
++
++def viewer_assets() -> Path:
++    return Path(meshcat.__file__).parent / "viewer" / "dist"
++
++
++class ViewerSession:
++    """Latest-value mailbox. All ZMQ calls belong to the visualization worker."""
++
++    def __init__(self, *, urdf_path: str, joint_names):
++        self.urdf_path = urdf_path
++        self.joint_names = tuple(joint_names)
++        self._lock = threading.Lock()
++        self._latest = None
++        self._stop = threading.Event()
++        self._ready = threading.Event()
++        self._thread = None
++        self._process = None
++        self.url = None
++        self.error = None
++
++    def start(self):
++        self._thread = threading.Thread(target=self._run, name="meshcat-feedback", daemon=True)
++        self._thread.start()
++        if not self._ready.wait(20) or self.error:
++            self.close()
++            raise RuntimeError(self.error or "MeshCat startup timed out")
++
++    def publish(self, joints):
++        with self._lock:
++            self._latest = dict(joints)
++
++    def _run(self):
++        visualizer = None
++        try:
++            model = pin.buildModelFromUrdf(self.urdf_path)
++            geometry = pin.buildGeomFromUrdf(
++                model,
++                self.urdf_path,
++                pin.GeometryType.VISUAL,
++                package_dirs=str(Path(self.urdf_path).parent.parent),
++            )
++            self._process = subprocess.Popen(
++                [sys.executable, "-u", "-m", "reBotArm_control_py.viewer_server"],
++                stdout=subprocess.PIPE,
++                stderr=subprocess.DEVNULL,
++                text=True,
++                start_new_session=True,
++            )
++            addresses = json.loads(self._process.stdout.readline())
++            visualizer = meshcat.Visualizer(zmq_url=addresses["zmq"])
++            socket = visualizer.window.zmq_socket
++            socket.setsockopt(zmq.RCVTIMEO, 1000)
++            socket.setsockopt(zmq.SNDTIMEO, 1000)
++            socket.setsockopt(zmq.LINGER, 0)
++            viewer = MeshcatVisualizer(model, collision_model=None, visual_model=geometry)
++            viewer.initViewer(visualizer, loadModel=False)
++            viewer.loadViewerModel(color=np.array([0.65, 0.65, 0.68, 1.0]))
++            visualizer["/Axes"].set_property("visible", False)
++            visualizer["/Background"].set_property("top_color", [0.039, 0.039, 0.043])
++            visualizer["/Background"].set_property("bottom_color", [0.039, 0.039, 0.043])
++            url = urlsplit(visualizer.url())
++            if url.hostname not in {"127.0.0.1", "localhost"}:
++                raise RuntimeError("MeshCat must bind to loopback")
++            self.url = f"ws://127.0.0.1:{url.port}/"
++            self._ready.set()
++            while not self._stop.is_set():
++                with self._lock:
++                    joints, self._latest = self._latest, None
++                if joints is not None:
++                    q = pin.neutral(model)
++                    for name in self.joint_names:
++                        if name in joints and model.existJointName(name):
++                            q[model.joints[model.getJointId(name)].idx_q] = joints[name]
++                    viewer.display(q)
++                self._stop.wait(0.05)
++        except Exception as exc:
++            self.error = str(exc)
++            log.exception("visualization unavailable")
++            self._ready.set()
++        finally:
++            if visualizer is not None:
++                visualizer.window.zmq_socket.close(linger=0)
++            if self._process is not None and self._process.poll() is None:
++                self._process.terminate()
++                try:
++                    self._process.wait(timeout=2)
++                except Exception:
++                    self._process.kill()
++
++    def close(self):
++        self._stop.set()
++        if self._process is not None and self._process.poll() is None:
++            self._process.terminate()
++        if self._thread is not None:
++            self._thread.join(timeout=3)
+diff --git a/reBotArm_control_py/viewer_server.py b/reBotArm_control_py/viewer_server.py
+new file mode 100644
+index 0000000..f2bde95
+--- /dev/null
++++ b/reBotArm_control_py/viewer_server.py
+@@ -0,0 +1,27 @@
++"""MeshCat's internal server, with HTTP and ZMQ explicitly loopback-only.
++
++meshcat 0.3.2's host parameter controls its URL and ZMQ, not HTTP listen.
++Constrain Tornado in this isolated subprocess; never patch the host process.
++"""
++
++import json
++import sys
++import tornado.web
++from meshcat.servers.zmqserver import ZMQWebSocketBridge
++
++
++def main():
++    original = tornado.web.Application.listen
++
++    def loopback_listen(self, port, address=None, **kwargs):
++        return original(self, port, address="127.0.0.1", **kwargs)
++
++    tornado.web.Application.listen = loopback_listen
++    bridge = ZMQWebSocketBridge(host="127.0.0.1")
++    print(json.dumps({"zmq": bridge.zmq_url, "web": bridge.web_url}), flush=True)
++    sys.stdout = sys.stderr
++    bridge.run()
++
++
++if __name__ == "__main__":
++    main()

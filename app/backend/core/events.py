@@ -39,9 +39,6 @@ SEQUENCE_ABORTED = "sequence.aborted"
 #: usually wants: it is the moment the scene is what the pose said it would be.
 POSE_ARRIVED = "pose.arrived"
 
-ACTION_STARTED = "action.started"
-ACTION_DONE = "action.done"
-ACTION_FAILED = "action.failed"
 
 ESTOP_ENGAGED = "estop.engaged"
 ESTOP_CLEARED = "estop.cleared"

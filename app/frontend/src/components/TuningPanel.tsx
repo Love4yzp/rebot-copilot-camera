@@ -256,6 +256,7 @@ export function TuningPanel({ visible, appMode, floatOnly = false, onClose }: Pr
     // ── 负载 ────────────────────────────────────────────────────────────────
     if (!floatOnly) {
     const payloadFolder = pane.addFolder({ title: "负载" });
+    payloadFolder.disabled = state.model_locked;
     foldersRef.current.payload = payloadFolder;
     payloadFolder
       .addBinding(params, "profile", {
@@ -444,7 +445,7 @@ export function TuningPanel({ visible, appMode, floatOnly = false, onClose }: Pr
       ) : null}
       {floatOnly ? null : (
         <div className="tuning-panel__hint">
-            切到「相机」负载前，先填相机质量（kg）——没填不能切。
+            末端模型在本次运行期间固定；更换质量、质心或几何需停止并重启。
         </div>
       )}
       <div className="tuning-panel__pane" ref={containerRef} />

@@ -121,13 +121,6 @@ def patch_sequence(sid: str, body: PatchSequence, request: Request) -> Sequence:
                 status.HTTP_400_BAD_REQUEST,
                 {"error": "marker_out_of_range", "reasons": out_of_range},
             )
-        # And the same for marker params, against each provider's own model: a
-        # bad param found now is a typo; found mid-run it is an aborted shoot.
-        bad = _controller(request).preflight_marker_params(blocks, request.app.state.plugins)
-        if bad:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, {"error": "bad_marker_params", "reasons": bad}
-            )
         sequence.blocks = blocks
     if body.name is not None:
         name = body.name.strip()
@@ -173,10 +166,6 @@ def execute_sequence(
     if problems["unsafe"]:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, {"error": "unsafe_sequence", "reasons": problems["unsafe"]}
-        )
-    if problems["missing"]:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, {"error": "missing_providers", "reasons": problems["missing"]}
         )
 
     try:

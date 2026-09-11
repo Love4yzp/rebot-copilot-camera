@@ -118,7 +118,7 @@ class FloatLockTuning(BaseModel):
 
 
 class SettleTuning(BaseModel):
-    """"Arrived" = inside the eps window *and* drifting less than this."""
+    """ "Arrived" = inside the eps window *and* drifting less than this."""
 
     drift_rad: float = Field(0.003, gt=0, le=0.05)
     min_s: float = Field(0.15, gt=0, le=2.0)
@@ -201,8 +201,9 @@ class TuningStore:
     sequence stores. A missing file is defaults, not an error: a fresh
     checkout behaves exactly like the code constants it mirrors."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, hardware_constraints: bool = True) -> None:
         self._path = path
+        self.hardware_constraints = hardware_constraints
 
     @property
     def path(self) -> Path:
@@ -218,7 +219,11 @@ class TuningStore:
         # the profile must be "gripper" — the mass hangs off the arm whether
         # the file says so or not. A rig that was saved as bare/camera and
         # then got the motor wired must not come up inconsistent.
-        if assets.has_gripper() and config.payload.profile is not PayloadProfile.GRIPPER:
+        if (
+            self.hardware_constraints
+            and assets.has_gripper()
+            and config.payload.profile is not PayloadProfile.GRIPPER
+        ):
             log.warning(
                 "gripper motor is on the bus — coercing payload profile %s -> gripper",
                 config.payload.profile.value,

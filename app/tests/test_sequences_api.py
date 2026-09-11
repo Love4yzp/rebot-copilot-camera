@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
+
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import SafetyLatch
-from backend.shutter import SimShutter
+
 
 JOINTS = ("joint1", "joint2")
 
@@ -35,20 +35,14 @@ def rig(tmp_path: Path):
     app.state.sequence_store = SequenceStore(tmp_path / "sequences")
     app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
-    shutter = SimShutter()
-    runner = InlineRunner()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
     app.state.controller = Controller(
         arm=arm,
-        shutter=shutter,
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=clock,
         # Inline, so the fake clock above drives everything and no assertion
         # depends on thread scheduling. That the threaded runner keeps the loop
         # free while a provider blocks is tested in test_action_runner.py.
-        actions=runner,
     )
     return TestClient(app), app.state.controller, arm, clock
 
@@ -69,13 +63,16 @@ def make_sequence(client: TestClient, name: str = "shoot") -> str:
 
 
 def hold(pose_id: str, duration_s: float = 1.0, markers=()) -> dict:
-    return {"type": "hold", "pose_id": pose_id, "duration_s": duration_s,
-            "markers": list(markers)}
+    return {"type": "hold", "pose_id": pose_id, "duration_s": duration_s, "markers": list(markers)}
 
 
 def shutter(at: float, **params) -> dict:
-    return {"kind": "shutter", "params": {"count": 1, "interval_s": 0.0,
-            "focus_first": True, **params}, "at": at, "estimate_s": 0.3}
+    return {
+        "kind": "shutter",
+        "params": {"count": 1, "interval_s": 0.0, "focus_first": True, **params},
+        "at": at,
+        "estimate_s": 0.3,
+    }
 
 
 def set_blocks(client: TestClient, sid: str, blocks: list[dict]):
@@ -99,7 +96,7 @@ def test_create_list_get_patch_delete(client: TestClient):
     created = client.post("/api/sequences", json={"name": "first"})
     assert created.status_code == 201
     sid = created.json()["id"]
-    assert created.json()["schema_version"] == 2
+    assert created.json()["schema_version"] == 3
     assert created.json()["blocks"] == []
 
     summaries = client.get("/api/sequences").json()
@@ -184,18 +181,20 @@ def test_marker_params_are_validated_on_write(client: TestClient):
     sid = make_sequence(client)
 
     r = set_blocks(client, sid, [hold(a, 1.0, [shutter(0.5, count=99)])])
-    assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "bad_marker_params"
-    assert "count" in r.json()["detail"]["reasons"][0]
+    assert r.status_code == 422
+    assert client.get(f"/api/sequences/{sid}").json()["blocks"] == []
 
 
 def test_a_marker_for_a_provider_nobody_installed_is_refused_on_write(client: TestClient):
     a = make_pose(client, 0.2)
     sid = make_sequence(client)
-    r = set_blocks(client, sid, [hold(a, 1.0, [
-        {"kind": "nobody", "params": {}, "at": 0.5, "estimate_s": 0.3}])])
-    assert r.status_code == 400
-    assert "nobody" in r.json()["detail"]["reasons"][0]
+    r = set_blocks(
+        client,
+        sid,
+        [hold(a, 1.0, [{"kind": "nobody", "params": {}, "at": 0.5, "estimate_s": 0.3}])],
+    )
+    assert r.status_code == 422
+    assert client.get(f"/api/sequences/{sid}").json()["blocks"] == []
 
 
 def test_a_malformed_block_is_422_and_nothing_is_written(client: TestClient):
@@ -297,12 +296,20 @@ def test_execute_preflights_the_path_between_legal_poses(client: TestClient):
     """Both poses are legal; the straight line between them goes through the
     base. Refuse before anything moves."""
     a = {
-        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
-        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
+        "joint1": -0.882,
+        "joint2": 3.107,
+        "joint3": 0.686,
+        "joint4": -0.132,
+        "joint5": 1.482,
+        "joint6": -3.098,
     }
     b = {
-        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
-        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
+        "joint1": -1.148,
+        "joint2": 2.579,
+        "joint3": 0.301,
+        "joint4": 1.345,
+        "joint5": 1.051,
+        "joint6": -2.242,
     }
     pa = client.post("/api/poses", json={"name": "a", "joints": a})
     pb = client.post("/api/poses", json={"name": "b", "joints": b})
@@ -409,7 +416,7 @@ def test_patch_rejects_marker_beyond_hold_duration(client: TestClient):
     clamps `at`, but the endpoint does not trust the editor."""
     pose = make_pose(client, 0.3)
     sid = make_sequence(client)
-    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[shutter(at=1.5)])])
+    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[{"kind": "wait", "at": 1.5}])])
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "marker_out_of_range"
 
@@ -418,12 +425,20 @@ def test_patch_rejects_marker_beyond_transition_proportion(client: TestClient):
     a = make_pose(client, 0.3)
     b = make_pose(client, -0.3, name="侧面")
     sid = make_sequence(client)
-    r = set_blocks(client, sid, [
-        hold(a, 1.0),
-        {"type": "transition", "duration_s": 2.0, "easing": "linear",
-         "markers": [{"kind": "wait", "params": {}, "at": 1.5, "estimate_s": 0.0}]},
-        hold(b, 1.0),
-    ])
+    r = set_blocks(
+        client,
+        sid,
+        [
+            hold(a, 1.0),
+            {
+                "type": "transition",
+                "duration_s": 2.0,
+                "easing": "linear",
+                "markers": [{"kind": "wait", "params": {}, "at": 1.5, "estimate_s": 0.0}],
+            },
+            hold(b, 1.0),
+        ],
+    )
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "marker_out_of_range"
 
@@ -431,5 +446,5 @@ def test_patch_rejects_marker_beyond_transition_proportion(client: TestClient):
 def test_patch_accepts_marker_at_block_boundary(client: TestClient):
     pose = make_pose(client, 0.3)
     sid = make_sequence(client)
-    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[shutter(at=1.0)])])
+    r = set_blocks(client, sid, [hold(pose, duration_s=1.0, markers=[{"kind": "wait", "at": 1.0}])])
     assert r.status_code == 200, r.text
