@@ -1,4 +1,4 @@
-Validation evidence captured after production worker compilation was restored:
+恢复了生产 worker 编译后捕获的验证证据：
 
 ```text
 cd app && .venv/bin/pytest -q tests/test_physics_playback.py -k checker
@@ -10,7 +10,6 @@ cd app && .venv/bin/pytest -q tests/test_physics_model.py
 13 passed in 7.35s
 ```
 
-The checker includes negative cases for empty/missing physical runs, missing
-scenario results, zero samples, WAIT command gaps, and drifting hold targets.
+检查器包含空/缺失物理运行、缺失场景结果、零采样、WAIT 指令间隔与保持目标漂移的负例。
 
-Exit codes: `CHECKER_RC=0`, `MODEL_RC=0`.
+退出码：`CHECKER_RC=0`、`MODEL_RC=0`。

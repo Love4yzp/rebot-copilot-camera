@@ -1,221 +1,81 @@
-# Playback control and optional physics validation
+# 回放控制与可选物理验证
 
-> Historical plan for offline motion validation. The current runtime architecture supersedes its lightweight-sim/default-dependency constraints; see [ARCHITECTURE](ARCHITECTURE.md). Preserve the evidence and hardware restrictions.
+> 离线运动验证的历史方案。当前运行时架构已取代其轻量仿真/默认依赖约束，见 [ARCHITECTURE](ARCHITECTURE.md)。保留证据与硬件限制。
 
-## Objective
+## 目标
 
-Reproduce playback discontinuities through the production command path without
-hardware, fix confirmed defects, and retain executable regression evidence.
-MuJoCo is an opt-in validation dependency. Existing application installation,
-lightweight simulation, API contracts, and default test collection must work
-without it. No real hardware or backend server is started by this work.
+在无硬件的情况下，沿生产指令路径复现回放不连续，修复确认的缺陷，并保留可执行的回归证据。MuJoCo 是可选验证依赖。现有应用安装、轻量仿真、API 契约与默认测试集必须在没有它的情况下照常工作。本工作不启动任何真实硬件或后端服务。
 
-## Baseline
+## 基线
 
-- Application revision: `176efb12d633f95bbabf982d13fd129d8c589061`.
-- Arm submodule: `d54040596faa94bdc4f8ad93f3f06b33dfe3a1bf`.
-- `app/backend/arm/session.py:178`: absolute-time cubic position profile;
-  desired velocity is zero and per-joint gains are overridden at line 320.
-- `app/backend/core/executor.py:471`: speed constraint only covers block zero.
-- `app/backend/core/executor.py:375`: resume changes block time but not motion
-  time or the arrival deadline.
-- `app/backend/safety/watchdog.py:74`: isolated long gaps escape the sustained
-  lateness rule.
-- `app/backend/arm/sim.py:244`: lightweight plant advances its own trajectory;
-  this is not a valid model of a motor holding the last received MIT command.
+- 应用版本：`176efb12d633f95bbabf982d13fd129d8c589061`。
+- 臂 submodule：`d54040596faa94bdc4f8ad93f3f06b33dfe3a1bf`。
+- `app/backend/arm/session.py:178`：绝对时间三次位置曲线；期望速度为零，各关节增益在第 320 行被覆盖。
+- `app/backend/core/executor.py:471`：速度约束只覆盖 0 号块。
+- `app/backend/core/executor.py:375`：恢复改变了块时间，但不改变运动时间或到位截止。
+- `app/backend/safety/watchdog.py:74`：孤立的长时间间隔躲开了持续性迟到规则。
+- `app/backend/arm/sim.py:244`：轻量 plant 自行推进其轨迹；这不是「电机保持最后收到的 MIT 指令」的有效模型。
 
-## Ownership and delivery order
+## 归属与交付顺序
 
-1. Environment probe: a luna worker prepares dependencies and imports the RS
-   model using temporary files; it does not edit tracked application files.
-2. Physics harness: a luna worker owns optional dependency metadata, validation
-   modules/tests, and validation documentation. Capture baseline evidence before
-   changing the production control implementation.
-3. Playback fix: a luna worker owns session/profile, simulator parity, executor,
-   watchdog/controller integration and their regression tests. Starts after the
-   harness has recorded baseline results.
-4. Independent review: a fresh read-only agent reviews the final diff against
-   this specification. The primary agent reruns key acceptance commands and
-   inspects evidence, resolving disagreements before accepting the change.
+1. 环境探测：一个 worker 使用临时文件准备依赖并导入 RS 模型；它不编辑受跟踪的应用文件。
+2. 物理测试台：一个 worker 负责可选依赖元数据、验证模块/测试与验证文档。在改动生产控制实现之前先采基线证据。
+3. 回放修复：一个 worker 负责 session/profile、simulator 对等、executor、watchdog/controller 集成及它们的回归测试。在测试台记录基线结果之后开始。
+4. 独立评审：一个新起的只读 agent 对照本规格评审最终 diff。主 agent 重跑关键验收命令并检查证据，接受改动前解决分歧。
 
-Do not change vendor sources/submodule revision, device scripts, deployment,
-firmware, frontend appearance, public pose/sequence schemas, or live hardware
-configuration. Preserve existing documentation sections and update both READMEs
-for any new user commands. No commits or remote publishing during implementation.
+不得改动 vendor 源/submodule 版本、设备脚本、部署、固件、前端外观、公开位姿/序列 schema 或真实硬件配置。保留既有文档段落，并为任何新的用户命令更新 README。实现期间不提交、不推送到远端。
 
-## Optional physics harness
+## 可选物理测试台
 
-Proposed paths (workers may choose an equally small layout with explanation):
+建议路径（worker 如选择同样小巧的布局须说明理由）：
 
-- `app/pyproject.toml:1` and `app/uv.lock`: optional extra `physics`, containing
-  MuJoCo only as needed. Do not add it to ordinary dependencies or default dev.
-- `app/backend/validation/`: opt-in headless CLI, model adapter, motor plant,
-  deterministic scenarios and JSON/CSV evidence output. Importing the normal app
-  must not import MuJoCo. No new repository, service or plugin abstraction.
-- `app/tests/test_physics_*.py`: optional tests skip only for absent MuJoCo;
-  an installed but broken model/runtime must fail, not silently skip.
-- `app/backend/arm/session.py:53`: if necessary, add a narrow optional injected
-  arm transport constructor argument. The default still constructs the upstream
-  RebotArm. Injection must bypass all physical connection/import side effects.
-- `docs/motion-validation.md`, README.md, README.zh-CN.md: installation, commands,
-  coverage, limitations, baseline/fixed comparisons and reproducibility details.
+- `app/pyproject.toml:1` 与 `app/uv.lock`：可选 extra `physics`，只按需包含 MuJoCo。不要把它加进常规依赖或默认 dev。
+- `app/backend/validation/`：可选的免界面 CLI、模型适配器、电机 plant、确定性场景与 JSON/CSV 证据输出。导入正常应用不得导入 MuJoCo。不新增仓库、服务或插件抽象。
+- `app/tests/test_physics_*.py`：可选测试只在缺 MuJoCo 时 skip；装上了但模型/运行时损坏必须失败，不能静默 skip。
+- `app/backend/arm/session.py:53`：如有必要，加一个窄的可选注入式臂 transport 构造参数。默认仍构造上游 RebotArm。注入必须绕过所有物理连接/导入副作用。
+- `docs/motion-validation.md`、README.md：安装、命令、覆盖范围、限制、基线/修复对比与可复现性细节。
 
-The harness must instantiate the real ArmSession. Gap, WAIT and retarget
-acceptance must also use the real Controller and SequenceExecutor. Supply an
-injected RebotArm-shaped transport exposing joint
-names, groups, get_state/connect and MIT sends. It records `q_des`, `v_des`, kp,
-kd, and feedforward torque per motor. At each physics substep apply
-`clip(kp*(q_des-q) + kd*(v_des-v) + tau_ff, -tau_limit, tau_limit)`.
-The plant must retain the last command until the next send; it must never
-interpolate the application's motion on its own. Fault scheduling and the
-physics clock are separate from application ticks. No time.sleep in tests.
+测试台必须实例化真实的 ArmSession。Gap、WAIT 与改向验收也必须使用真实的 Controller 与 SequenceExecutor。提供注入的 RebotArm 形状 transport，暴露关节名、组、get_state/connect 与 MIT 发送。它记录每个电机的 `q_des`、`v_des`、kp、kd 与前馈力矩。每个物理子步应用 `clip(kp*(q_des-q) + kd*(v_des-v) + tau_ff, -tau_limit, tau_limit)`。plant 必须保留最后一条指令直到下次发送；它绝不能自行插值应用的运动。故障调度与物理时钟与应用 tick 分开。测试里不出现 time.sleep。
 
-Import the existing RS URDF using a temporary derived model, resolving mesh
-paths and preserving joint axes, inertial frames and fixed base. Start with six
-actuated arm joints and fixed finger geometry, preserving gripper mass for the
-gripper payload. A motor-channel mock may expose gripper feedback separately;
-do not invent the uncalibrated finger-to-motor gearing. Clearly label this
-limitation. Verify named q/v mapping, FK at several legal configurations and
-static gravity against Pinocchio before using the plant to assess the fixes.
-Exclude structural adjacent contacts explicitly; do not disable all collisions
-or infer validity from an arbitrary nonzero posture. Do not silently replace
-invalid inertias. Camera payload dynamics requires explicit inertia assumptions;
-the current gravity-only payload model is not a calibrated dynamic camera model.
+用临时派生模型导入现有 RS URDF，解析 mesh 路径并保留关节轴、惯量框架与固定底座。以六个受驱动臂关节与固定手指几何起步，为夹爪负载保留夹爪质量。电机通道 mock 可以单独暴露夹爪反馈；不要虚构未标定的手指到电机齿轮传动。明确标注这一限制。在把 plant 用于评估修复之前，验证命名 q/v 映射、若干合法构型下的 FK 与相对 Pinocchio 的静态重力。显式排除结构相邻接触；不要禁用全部碰撞，也不要从任意非零姿态推断有效性。不要静默替换无效惯量。相机负载动力学需要显式惯量假设；当前仅重力的负载模型不是标定过的相机动力学模型。
 
-Initial physics timestep: 0.001 s, application commands: 0.01 s. Run a smaller
-step comparison for convergence. These are validation settings, not changes to
-the real controller frequency. A visual viewer is optional; headless execution
-and machine-readable evidence are mandatory.
+初始物理时间步：0.001 s，应用指令：0.01 s。跑一个更小步长的对比验证收敛。这些是验证设置，不是对真实控制器频率的改动。可视化查看器可选；免界面执行与机器可读证据是必须的。
 
-## Required reproductions before production changes
+## 生产改动前必须的复现
 
-Use identical scene/initial state/seed/settings for baseline and fixed runs.
-Preserve baseline JSON/CSV plus revision metadata outside temporary caches.
-Measure commands and actual plant response separately; never describe a command
-jump as a measured physical jump.
+基线与修复运行使用完全相同的场景/初始状态/seed/设置。把基线 JSON/CSV 与版本元数据保留在临时缓存之外。分别测量指令与实测 plant 响应；永远不要把指令跳变说成实测物理跳变。
 
-1. A later sequence transition with insufficient duration: show its peak command
-   speed exceeds the approach limit (use a collision-free physical path).
-2. Cubic start/finish acceleration discontinuity and zero desired velocity:
-   record emitted MIT command derivatives and tracking error.
-3. Omit control ticks for 0.1 and 1 s while the plant continues stepping:
-   show stale command persistence and the recovery target jump/abort behavior.
-4. Place WAIT inside a transition, pause for 0.1, 1 and 5 s, then resume:
-   show timebase inconsistency, including deadline expiry where applicable.
-5. Partial joint target while an unspecified feedback channel varies:
-   demonstrate profile restart or loss of progress.
-6. Retarget an in-progress move: quantify the reference discontinuity.
+1. 时长不足的后续序列转场：展示其指令速度峰值超过接近限位（使用无碰撞的物理路径）。
+2. 三次曲线起止加速度不连续与零期望速度：记录发出的 MIT 指令导数与跟踪误差。
+3. 在 plant 继续步进时省略控制 tick 0.1 s 与 1 s：展示陈旧指令持续与恢复目标跳变/中止行为。
+4. 在转场中放置 WAIT，暂停 0.1、1 与 5 s 后恢复：展示时基不一致，包括适用处的截止超时。
+5. 未指定反馈通道变化时的部分关节目标：演示曲线重启或进度丢失。
+6. 改向一个进行中的移动：量化参考不连续。
 
-If a suspected physical symptom cannot be reproduced, report that outcome and
-the tested assumptions. A command-layer reproduction remains valid evidence for
-a software defect, but is not proof of a particular real-world oscillation.
+如果疑似的物理症状无法复现，报告该结果与被测假设。指令层的复现仍是软件缺陷的有效证据，但不是某种真实世界振荡的证明。
 
-## Production fix design
+## 生产修复设计
 
-Keep FK, gravity and collision calculations in the existing upstream/Pinocchio
-paths. The local MIT motion-profile exception already permits a small shared
-profile helper used by ArmSession and lightweight SimArm; no custom IK or
-general trajectory framework.
+FK、重力与碰撞计算留在现有上游/Pinocchio 路径中。本地的 MIT 运动曲线例外已允许一个由 ArmSession 与轻量 SimArm 共用的小型曲线辅助件；不写自定义 IK 或通用轨迹框架。
 
-- Replace cubic with a quintic rest-to-rest profile. Return position and
-  analytical velocity/acceleration. For normal stationary moves its normalized
-  peak speed is 1.875, peak acceleration is 10/sqrt(3), peak jerk is 60.
-  Compute duration from displacement and configured v/a/j ceilings for every
-  move, not just the first. Preserve requested duration as a lower bound.
-  Initial software limits: 0.25 rad/s, 0.5 rad/s^2, 2 rad/s^3. These are
-  conservative validation defaults, not hardware calibration.
-- Keep motion limits in one backend configuration source with finite positive
-  validation; avoid changing the tuning API/frontend contract just to expose
-  additional knobs. Existing approach speed must still constrain first/goto
-  moves. `ArmDriver.move_to` returns the accepted physical duration in seconds;
-  repeated streaming returns the same duration without restarting. Both drivers
-  implement this. Executor sets its deadline after accepting the first command,
-  using the returned duration; no private driver introspection.
-- Retarget from the current reference q/v/a using a quintic boundary-value
-  segment ending at target with zero v/a. Check polynomial extrema including
-  intermediate joint positions, speed, acceleration and jerk. Increase duration
-  only within a bounded search; reject infeasible requests without destroying
-  the active valid motion. A narrow conservative rejection is acceptable;
-  complete feasibility or minimum-time search is not required. Never assert
-  that longer duration always removes overshoot. Do not use sparse time samples
-  as proof of polynomial bounds. Candidate curved retarget paths must also pass
-  the existing controller safety preflight (document its sampling limits).
-  If that requires a wider prepare/commit protocol, report before implementing.
-  Use a narrow prepare/commit protocol on ArmDriver: `prepare_move(target,
-  requested_duration) -> PreparedMotion`, `commit_move(prepared) -> float`.
-  Preparation has no actuator side effects; the immutable plan carries the
-  accepted duration and deterministic path samples for Controller preflight.
-  Driver checks exact polynomial joint/derivative bounds; Controller checks
-  collision samples through its existing safety entry point before commit.
-  Prepared motion carries a generation token and cannot overwrite a different
-  subsequently committed/held motion. The normal move_to streaming method
-  remains the executor's interface and returns accepted duration. For retarget,
-  Controller prepares, validates, commits and starts the replacement while
-  holding its existing lock; only then aborts the old executor. Ensure the new
-  executor's first command continues the committed profile rather than planning
-  again. Rejected retarget leaves old execution and its reference intact; tests
-  must exercise a near-limit reversal and a collision preflight rejection.
-  A committed profile starts from the last reference actually transmitted by
-  the driver. Each subsequent transmission advances the driver's motion
-  revision, so a stale prepared profile cannot replace a newer send or hold.
-  Position-bound checks use the shared `0.02 rad` tolerance; keep this value
-  consistent across the profile and safety paths.
-  Sampling is only the existing conservative collision check, never the proof
-  of q/v/a/jerk bounds. Do not add continuous-collision or generic planner APIs.
-- Freeze unspecified target joints at command acceptance. Compare the original
-  requested targets for continuation; feedback noise must not create a command.
-- Send the reference velocity. Compute gravity from measured posture. Capture
-  those effects separately. Keep deployed hold gains at 50/3 for this iteration;
-  document that hardware YAML MIT gains are not yet consumed and correct the
-  misleading comment. Enabling 150/10 is not a prerequisite for passing physics
-  validation and requires later calibration. Gain configuration is deferred.
-- Maintain MIT sends during holds, settling and WAIT. A WAIT is a deliberate
-  hold interruption: capture measured pose once and send hold in that tick,
-  then stream that fixed hold on every WAIT tick. Replan remaining motion from
-  this stationary reference on resume with a fresh deadline. Preserve marker
-  ordering and never refire a completed marker. Pause time must not advance the
-  physical trajectory. Transition marker proportions follow normalized physical
-  segment progress. Keep public `t_in_block` in nominal seconds: for each active
-  segment, nominal time advances by remaining_nominal/accepted_physical_duration.
-  On resume begin at the frozen nominal progress and remap the remaining
-  proportion. Hold timing stays wall/simulation seconds. Once segment progress
-  reaches its endpoint, delayed actions may keep the block open but not restart
-  motion. Cover WAIT at 0/0.5/1, two waits, same-time marker order, delayed action
-  completion and no duplicate events. A WAIT delayed by an in-flight action
-  freezes actual current progress rather than rewinding to its scheduled time.
-- Treat a single excessive control gap separately from sustained lateness.
-  Initial absolute threshold: greater than 0.1 s, independently configurable
-  from sustained lateness. Test both sides with numerical timing tolerance.
-  Engage the existing holding latch before allowing the executor to advance on
-  recovery; no automatic resume. Preserve immediate torque-holding estop and
-  never call disable_all/estop on the upstream arm.
+- 把三次曲线替换为五次静止到静止曲线。返回位置与解析速度/加速度。对普通静止移动，其归一化峰值速度为 1.875，峰值加速度为 10/sqrt(3)，峰值加加速度为 60。对每次移动都按位移与配置的 v/a/j 上限计算时长，而不只是第一个。已请求的时长保留为下界。初始软件限位：0.25 rad/s、0.5 rad/s^2、2 rad/s^3。这些是保守的验证默认值，不是硬件标定。
+- 运动限位保持在一个后端配置源中，带有限正值校验；不要为了多暴露旋钮而改动调参 API/前端契约。现有接近速度仍约束 first/goto 移动。`ArmDriver.move_to` 以秒返回已接受的物理时长；连续流返回相同时长而不重启。两个驱动都实现它。执行器在接受第一条指令后按返回时长设定截止；不做私有驱动内省。
+- 从当前参考 q/v/a 用五次边界值段改向，末端到目标且 v/a 为零。检查多项式极值，包括中间关节位置、速度、加速度与加加速度。只在一个有限搜索内增加时长；拒绝不可行请求且不破坏正在生效的合法运动。窄而保守的拒绝可接受；不需要完整可行性或最小时间搜索。绝不断言更长时长总能消除过冲。不要用稀疏时间采样作为多项式边界的证明。候选弧形改向路径也必须通过现有控制器安全预检（记录其采样限制）。如果这需要更宽的 prepare/commit 协议，先报告再实现。
+  在 ArmDriver 上用窄的 prepare/commit 协议：`prepare_move(target, requested_duration) -> PreparedMotion`、`commit_move(prepared) -> float`。准备阶段无执行器副作用；不可变计划携带已接受时长与供 Controller 预检的确定性路径采样。驱动检查精确的多项式关节/导数边界；Controller 在提交前通过其现有安全入口检查碰撞采样。准备好的运动携带一代 token，不能覆盖之后被提交/保持的另一份运动。常规 move_to 流式方法仍是执行器的接口并返回已接受时长。对改向，Controller 在持有其现有锁时准备、校验、提交并启动替换；只在完成后中止旧执行器。确保新执行器的第一条指令延续已提交的曲线，而不是重新规划。被拒绝的改向保留旧执行及其参考不变；测试必须覆盖近限位反转与碰撞预检拒绝。
+  已提交的曲线从驱动最后实际发送的参考起步。之后每次发送都推进驱动的运动版本，因此陈旧的已准备曲线不能替换更新的发送或保持。位置边界检查使用共享的 `0.02 rad` 容差；让该值在曲线与安全路径之间保持一致。
+  采样只是现有的保守碰撞检查，绝不是 q/v/a/j 边界的证明。不新增连续碰撞或通用规划器 API。
+- 指令接受时冻结未指定的目标关节。比较原始请求目标以决定是否延续；反馈噪声不得制造指令。
+- 发送参考速度。从实测姿态计算重力。把这些效应分开记录。本轮保留已部署的保持增益 50/3；记录硬件 YAML 的 MIT 增益尚未被消费的事实并修正误导性注释。启用 150/10 不是通过物理验证的前提，需要之后标定。增益配置延后。
+- 保持、稳定与 WAIT 期间维持 MIT 发送。WAIT 是刻意的保持中断：捕获一次实测姿态并在该 tick 发送保持，然后在每个 WAIT tick 流式发送这个固定保持。恢复时从该静止参考重新规划剩余运动，带新截止。保留标记顺序，绝不重触发已完成的标记。暂停时间不得推进物理轨迹。转场标记比例按归一化的物理段进度推进。公开的 `t_in_block` 保持名义秒：对每个活跃段，名义时间按 remaining_nominal/accepted_physical_duration 前进。恢复时从冻结的名义进度开始并重映射剩余比例。保持时序维持墙钟/仿真秒。段进度到达端点后，延迟动作可以保持块打开，但不能重启运动。覆盖 WAIT 在 0/0.5/1、两个 WAIT、同时间标记顺序、延迟动作完成与无重复事件。被在途动作延后的 WAIT 冻结实际当前进度，而不是回退到其计划时刻。
+- 把单一过长控制间隔与持续性迟到分开处理。初始绝对阈值：大于 0.1 s，可独立于持续性迟到配置。两侧都用数值时间容差测试。恢复后先吸合现有保持闩锁，再允许执行器推进；不自动续跑。保留立即力矩保持的急停，绝不调用上游臂的 disable_all/estop。
 
-The implementation worker must report any conflict between these choices and
-existing contracts before making a broader change. Teaching threshold redesign,
-camera calibration, Cartesian planning and continuous collision detection are
-outside this playback-fix scope.
+实现 worker 必须在做更大改动前报告这些选择与既有契约之间的任何冲突。示教阈值重设计、相机标定、笛卡尔规划与连续碰撞检测不在本次回放修复范围内。
 
-## Acceptance
+## 验收
 
-- Default install/import/lightweight tests succeed without MuJoCo. Explicit
-  physics invocation without the extra gives an actionable error.
-- Fixed scenarios demonstrate bounded analytic reference speed/acceleration/jerk,
-  bounded adjacent sampled command differences, continuous
-  normal q/v/a transitions, no partial-target restart, explicit safe gap handling,
-  and successful resumed motion after short/long waits. Safety/WAIT hard holds
-  are reported as intentional interruptions, not silently excluded metrics.
-- Physical runs include finite state, tracking error, final arrival, torque
-  saturation, limit/contact events, and wall-time/RSS measurements. Do not pass
-  merely because the animation finishes or assert universally improved tracking.
-- Model consistency initial tolerances: FK translation/rotation 1e-6 m/rad,
-  static gravity 1e-5 N m. Step convergence: max joint position difference
-  0.002 rad for 1 ms versus 0.5 ms on the same smooth non-contact scenario.
-  Environment probe must report if these are inappropriate before fixed runs;
-  do not relax thresholds after seeing a failed fix. Do not call zero-order-held
-  digital commands mathematically continuous, or quintic jerk continuous.
-  Payload/friction variations are sensitivity tests, not calibration.
-- New core regressions fail against baseline behavior and pass after the fixes.
-  Optional physics tests run with the extra. Run the existing backend suite,
-  architecture/safety checks and relevant contracts; explain skips/failures.
-- Evidence includes exact commands, revisions, dependency versions, seeds,
-  configuration, before/after metrics, test outputs and limitations.
+- 默认安装/导入/轻量测试在无 MuJoCo 时成功。未装 extra 时显式调用物理验证给可操作的错误。
+- 修复场景展示有界的解析参考速度/加速度/加加速度、有界的相邻采样指令差、连续的常规 q/v/a 转变、无部分目标重启、显式的安全间隔处理、以及短/长等待后的成功恢复运动。安全/WAIT 硬保持作为有意的中断报告，不静默排除在指标外。
+- 物理运行包含有限状态、跟踪误差、最终到位、力矩饱和、限位/接触事件与墙钟/RSS 测量。不能只因为动画放完就通过，也不断言跟踪全面改善。
+- 模型一致性初始容差：FK 平移/旋转 1e-6 m/rad，静态重力 1e-5 N·m。步长收敛：同一平滑无接触场景下 1 ms 对 0.5 ms 的最大关节位置差 0.002 rad。环境探测必须在修复运行前报告这些值是否不合适；不要在看失败修复之后再放宽阈值。不要称零阶保持的数字指令数学连续，或五次加加速度连续。负载/摩擦变化是敏感性测试，不是标定。
+- 新核心回归在基线行为上失败、在修复后通过。可选物理测试在安装了 extra 时运行。跑现有后端套件、架构/安全检查与相关契约；说明 skip/失败。
+- 证据包含精确命令、版本、依赖版本、seeds、配置、前后指标、测试输出与限制。

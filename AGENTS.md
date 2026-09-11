@@ -155,7 +155,7 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | [`CONTEXT.md`](./CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
 | [`PROGRESS.md`](./PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
-| [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改）。改时两份同步 | 要用这个服务时 |
+| [`README.md`](./README.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
 | [`docs/CODEMAP.md`](./docs/CODEMAP.md) | 逐行代码地图：哪个文件干什么 + 超前模块 parked 标 | 碰任何 backend 文件前 |
