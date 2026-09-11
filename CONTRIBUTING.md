@@ -1,6 +1,6 @@
 # 贡献指引
 
-先读 [AGENTS](AGENTS.md)，再按 [CODEMAP](docs/CODEMAP.md) 找实现；硬件相关改动先读 [HARDWARE_NOTES](docs/HARDWARE_NOTES.md)。结构和复用边界在 [ARCHITECTURE](docs/ARCHITECTURE.md)，当前状态在 [PROGRESS](PROGRESS.md)。
+先读 [AGENTS](AGENTS.md)，再按 [CODEMAP](docs/CODEMAP.md) 找实现；硬件相关改动先读 [HARDWARE_NOTES](docs/HARDWARE_NOTES.md)。结构和复用边界在 [ARCHITECTURE](docs/ARCHITECTURE.md)，当前状态在 [PROGRESS](docs/PROGRESS.md)。
 
 ## 工作流程
 

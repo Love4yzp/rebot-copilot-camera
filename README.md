@@ -137,4 +137,4 @@ REST 对比已提交 golden，normalize 在 Python/TypeScript 双端执行。前
 | 日志为空 | 服务用户需要 systemd-journal 组权限 |
 | 没有绿色到位 | 旧 done、示教、停止、断连已使认领失效，需要明确的新运动 |
 
-[架构与复用边界](docs/ARCHITECTURE.md) · [代码地图](docs/CODEMAP.md) · [交互](docs/TIMELINE.md) · [未来接口](docs/PLUGINS.md) · [当前状态](PROGRESS.md)
+[架构与复用边界](docs/ARCHITECTURE.md) · [代码地图](docs/CODEMAP.md) · [交互](docs/TIMELINE.md) · [未来接口](docs/PLUGINS.md) · [当前状态](docs/PROGRESS.md)

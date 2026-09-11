@@ -4,6 +4,8 @@
 
 项目在做什么、怎么用，看 [`README.md`](./README.md)。这里只讲**做什么、怎么做、去哪查**。做过什么写 `git log`，不要往本文件追加。
 
+**技术栈速查**（细节只去对应文档，别在这层扩写）：后端 Python + FastAPI + uv（`app/`，测试 pytest）；前端 Vite + React + TS（`app/frontend/`，Vite 仅作运行后端的 HMR 客户端）；模型 / 算法 / 传输 / 查看器全部走 vendor SDK `reBotArm_control_py`（submodule + `app/vendor-patches/`，补丁由 `app/prepare_sdk.py` 应用）；物理仿真与验证走 SDK MuJoCo；部署 systemd + udev（`app/deploy/`）。
+
 ---
 
 ## 常用命令
@@ -65,7 +67,7 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 - `SafetyLatch` 是横切闩锁，**不是模式机的一态**——做成模式的话每加一个模式都要重审所有切换是否会绕过它。
 
 **命令缝**
-臂在做什么由 `decide(activity, intent)` 一张表决定。新行为加一行，不加 controller 上的 flag。HTTP 解析完调 `Controller.intend`，409 从表里来，不要每个端点自己发明一套。词汇 [`CONTEXT.md`](./CONTEXT.md)，决策 [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md)。Goto 再来一次改目的地；Play 再来一次拒绝。到位 / 停下 / 急停都是 Hold。内核的演进面是这张表和 `ArmDriver` 的动词，按行改，不要换一套叙事。
+臂在做什么由 `decide(activity, intent)` 一张表决定。新行为加一行，不加 controller 上的 flag。HTTP 解析完调 `Controller.intend`，409 从表里来，不要每个端点自己发明一套。词汇 [`CONTEXT.md`](./docs/CONTEXT.md)，决策 [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md)。Goto 再来一次改目的地；Play 再来一次拒绝。到位 / 停下 / 急停都是 Hold。内核的演进面是这张表和 `ArmDriver` 的动词，按行改，不要换一套叙事。
 
 **接触观测默认关**
 只在 playing 采样。打开它是真机标定，不是代码补齐。
@@ -141,7 +143,7 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 每个 commit 结束时代码库必须能跑（pytest 绿；后端由人用 `./dev.sh sim` 起，agent 不要自己起）。
 
-[`PROGRESS.md`](./PROGRESS.md) 只记现在在哪——**状态变了**才改，changelog 写 git commit，不要往文档里堆。
+[`PROGRESS.md`](./docs/PROGRESS.md) 只记现在在哪——**状态变了**才改，changelog 写 git commit，不要往文档里堆。
 
 commit message 说清**为什么**，尤其是偏离原计划的地方——好几个决定的理由只存在于 commit message 里。
 
@@ -152,9 +154,9 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
 | `AGENTS.md`（本文件） | 做什么、怎么做、索引。不记做过什么 | 开工前 |
-| [`CONTEXT.md`](./CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
+| [`CONTEXT.md`](./docs/CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
-| [`PROGRESS.md`](./PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
+| [`PROGRESS.md`](./docs/PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
 | [`README.md`](./README.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
@@ -162,8 +164,12 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴交互约束 | 动前端或编排交互时 |
 | [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 未来能力接口（设计，不是已安装插件） | 加动作、接外部触发时 |
 | [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份主从 demo 抄来的**数值和为什么**，代码一行都不能抄 | 写限速 / 回放 / 过热保护时 |
+| [`docs/motion-validation.md`](./docs/motion-validation.md) | 物理验证 harness（opt-in MuJoCo）的用法与基线/修复证据 | 跑或改 physics 验证时 |
+| [`docs/motion-validation-plan.md`](./docs/motion-validation-plan.md) | **归档**：回放修复的历史方案，文首已标注被现行架构取代；留的是证据与硬件限制，不是现行设计 | 溯源当时为什么这么修时 |
 | [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md) | Activity 互斥、Latch 横切 | 改命令缝时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。启动命令以 `./dev.sh --help` 为准。
+
+**一次性过程物不进 `docs/`。** 对账快照、任务规格书这类做完即废的东西，销完即删——历史在 git log。确要保留的归档件必须在文首标注历史方案、并登记进上表标明归档，不冒充活参考。
 
 **每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、现状在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。新约定写成祈使句，证据链到测试名或 HARDWARE_NOTES，不要写成「本轮 / 已修」。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。
