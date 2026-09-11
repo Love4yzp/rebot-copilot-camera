@@ -89,34 +89,11 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 **`0.0` 是假值**
 时间戳、角度、下标做判空一律用 `is None`，不要用真值判断。Agent 租约就栽在 `or now` 上：时间戳恰好为 0 时所有间隔算成零、租约永不过期。
 
-**界面的颜色是状态通道，不是调色板**
-底盘全灰阶。整套界面只有四个彩色，各自独占一个机器状态，**任何一个都不许拿去做强调、选中、品牌或装饰**：
+**前端安全交互**
+改颜色、状态认领、示教入口、监视器布局、遮罩层级或 sim/prod/断连呈现前，完整读取 [`docs/TIMELINE.md`](./docs/TIMELINE.md)「安全界面不变量」。界面规则只在那里维护。
 
-| Token | 含义 |
-|---|---|
-| `--stop` 红 | 已急停 |
-| `--motion` 琥珀 | 臂在动，别伸手 |
-| `--ready` 绿 | 到位、保持 |
-| `--expose` 白 | 快门触发 |
-
-需要强调时用灰阶层级、字重、尺寸 —— 颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
-
-**给操作者的界面指令用按钮上的真实字样**
-界面没有「示教」按钮：示教入口是素材库底部「+ 录位姿」（点开底部示教条「零重力 · 臂可推动，松手自动锁定」，看关节角用条上「详细数据」，退出用「× 取消」）。「示教 / 浮动」是内部术语，转述成操作指令前必须映射成按钮真名，否则会被「页面上没有这个按钮」顶回来。
-
-**界面不许猜臂在哪**
-「已到位」只能由 `phase === "done"` 点亮，且只在 done 的上升沿认领 —— controller 会保留已完成的 executor，socket 持续重播上一次的 `done`，陈旧的 `done` 不能当作新点击的答复。急停、进入示教、开始新一次执行都必须立刻作废「已到位」—— 臂被冻在别处、即将被人推走、或已在路上。另外 `_advance` 先自增后判断，收尾时 `block_index == block_total`，前端要夹紧。
-
-**布局不跟机器状态跳**
-监视器区 padding 固定（`46px 12px 12px`），不随执行 / 示教增减。状态走颜色通道，不走页面几何 —— 否则 goto 结束整页会挪一截。
-
-**示教范围**
-近零位手掰。展开肘会过补上冲。标定与禁区在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #B2，不要把展开姿态当默认测试姿态。真臂运动路径（MIT 终身、按组切片）见同文件 #10–#15。
-
-**急停在栈顶**
-`.estop-bar` 是 z-index 60，在所有遮罩（40）之上。prod 进入警告层 z-55，必须低于急停。新增任何浮层前先确认它不会盖住急停 —— 示教正是双手在臂上的那个模式。`Esc` 由弹层用**原生**监听截停（React 合成事件的 `stopPropagation` 拦不住 window 级监听）。
-
-模式徽标（sim 蓝 / prod 灰阶）与连接状态是两个维度：断连是徽标旁灰阶脉冲「已断连」，不覆盖模式徽标，也不占用红 / 绿。
+**真臂示教范围**
+改示教或做真机验证前读 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #B2；标定前只在近零位手掰。
 
 **退出路径先回零**
 Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零位（复用 goto 的进站限速与到位检测），到位后才停控制循环 —— 停循环永远是退出的最后一步。闩锁吸合时例外：原地冻结保持退出，不回零。已经在休息态（力矩已卸）时 `park_home` 直接跳过。shutdown 回零把 `_playback_source` 标成 `"shutdown"`，ClientWatchdog 不把这段沉默打成 SafeLock —— 加看门狗条件时保留这条豁免。信号归 `app/backend/app.py` 的 `ParkOnExitServer` 管，**别换回 `uvicorn.run`**：原版第二次 Ctrl+C 置 `force_exit` 并**跳过 lifespan shutdown**，回零整段就没了。systemd 的 `TimeoutStopSec=60` 是按最坏回零 ~37s 留的，别调小。配套：`main()` 在碰 CAN 之前先做端口预检（`_ensure_port_free`）—— 一个绑不上端口的实例若连了臂，它的退出回零就会去动一台归别的进程管的臂。
@@ -155,16 +132,18 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
 | `AGENTS.md`（本文件） | 做什么、怎么做、索引。不记做过什么 | 开工前 |
-| [`CONTEXT.md`](./CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
-| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
+| [`docs/START_HERE.md`](./docs/START_HERE.md) | 30 分钟心智模型 + 阅读路由 | 第一次接手仓库时 |
+| [`CONTEXT.md`](./CONTEXT.md) | 领域词的唯一来源 | 改命名、接口语义或活动表时 |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 一次改动如何开工、验证、提交 | 第一次贡献时 |
 | [`PROGRESS.md`](./PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
 | [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改）。改时两份同步 | 要用这个服务时 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
 | [`app/firmware/esp32-shutter/README.md`](./app/firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 产品边界、分层与依赖方向 | 改交互、加能力、谈产品定位时 |
 | [`docs/CODEMAP.md`](./docs/CODEMAP.md) | 逐行代码地图：哪个文件干什么 + 超前模块 parked 标 | 碰任何 backend 文件前 |
 | [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴交互约束 | 动前端或编排交互时 |
 | [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 动作插件 / 触发源 / 事件订阅 | 加动作、接外部触发时 |
+| [`docs/motion-validation.md`](./docs/motion-validation.md) | 无界面物理验证的运行与判读 | 改运动剖面或验证物理表现时 |
 | [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份主从 demo 抄来的**数值和为什么**，代码一行都不能抄 | 写限速 / 回放 / 过热保护时 |
 | [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md) | Activity 互斥、Latch 横切 | 改命令缝时 |
 

@@ -29,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, assets, config
 from .actions import ActionRegistry, ShutterProvider, ThreadedRunner
 from .agent import AgentLease
-from .api import agent, control, estop, logs, plugins, poses, sequences, templates
+from .api import agent, control, estop, logs, plugins, poses, sequences, sim, templates
 from .api import config as config_api
 from .arm import SimArm, create_arm
 from .core import Broadcaster, Controller
@@ -189,6 +189,7 @@ app.include_router(poses.router)
 app.include_router(sequences.router)
 app.include_router(templates.router)
 app.include_router(control.router)
+app.include_router(sim.router)
 app.include_router(agent.router)
 app.include_router(logs.router)
 app.include_router(plugins.router)

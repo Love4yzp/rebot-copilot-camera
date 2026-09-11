@@ -35,7 +35,7 @@ app/backend/
 
   core/
     activity.py     互斥活动表。decide(activity, intent) 是命令缝；闩锁不在这张表里
-    controller.py   控制循环。闩锁在任何东西能命令臂之前检查；idle/done/stop 持续 hold
+    controller.py   控制循环。闩锁在任何东西能命令臂之前检查；idle/done/stop 持续 hold；sim_drag 是「手」不是命令 —— 绕活动表，带限位夹紧转发 SimArm.drag
     events.py       语义事件名与信封。单向，不可否决
     executor.py     Sequence 执行器（块遍历）。纯逻辑，注入时钟/arm/shutter/已解析位姿
     floatlock.py    浮动/锁定判据。带迟滞与最短静止时间
@@ -63,11 +63,12 @@ app/backend/
     sequences.py    序列 CRUD（写入即 normalize）/ execute / 运行中锁定
     templates.py    模板快照与实例化（hold.pose_id 用 slot:N 占位）
     control.py      execute/stop+resume / 示教 / 快门自检 / WebSocket
+    sim.py          模拟器的「手」：POST /api/sim/drag 仅 SimArm 生效（prod 409），限位夹紧在 Controller.sim_drag
     agent.py        Agent 控制端点（OpenAPI 直接给 LLM 做 tool import）【⏸ parked：随 agent.py】
     config.py       调参端点 GET/PUT/save/reset —— 闸门在 Controller.apply_tuning（执行中拒一切、浮动中拒负载切换），不挂运动闸门，但要在 NON_MOTION_ROUTES 写明理由
     logs.py         journalctl 包装
 
-app/frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 app/backend/sequences/normalize.py 互为双语言端。调参面板 `components/TuningPanel.tsx`（Tweakpane，停靠监视器区右侧，全灰阶，prod 进入需确认）
+app/frontend/src/       Vite + React + TS。时间轴编辑器三区（素材库 / 监视器 / 时间轴）；`timeline/model.ts` 是纯逻辑，src 与 mock 共享，与 app/backend/sequences/normalize.py 互为双语言端。调参面板 `components/TuningPanel.tsx`（Tweakpane，停靠监视器区右侧，全灰阶，prod 进入需确认）；3D 视图 `components/ArmView3D.tsx` 的拖环 gizmo 只在 sim+示教启用（点连杆选关节、拖环推模拟臂，全灰阶）
 app/frontend/mock/      `npm run dev:mock` 的内存后端。数据形状与后端逐字段对齐，由 golden 契约测试守卫
 app/frontend/contract/  golden 契约的 mock 侧 runner（esbuild 打包，node 直跑）
 app/contract/cases/     golden 用例文件：REST 会话 + normalize 输入，两侧各跑一遍逐字段比对，见 app/tests/test_contract.py

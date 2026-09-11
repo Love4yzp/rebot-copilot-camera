@@ -689,6 +689,26 @@ export function handleApi(
     return json(200, tuningResponse(state));
   }
 
+  // ── simulator drag ────────────────────────────────────────────────────────
+  // The 3D teach gizmo pushes joints one delta at a time. No joint-limit
+  // clamping here — the preview has no URDF limit table, and a pose pushed
+  // past the stops is a demo-time inconvenience, not a safety surface.
+  if (pathname === "/api/sim/drag" && method === "POST") {
+    const deltas = reqBody.deltas;
+    if (!isPlainObject(deltas)) return badRequest("deltas must be an object");
+    const unknown = Object.keys(deltas)
+      .filter((joint) => !JOINTS.includes(joint))
+      .sort();
+    if (unknown.length > 0) return badRequest(`unknown joints: ${unknown.join(", ")}`);
+    for (const [joint, delta] of Object.entries(deltas)) {
+      if (typeof delta !== "number" || !Number.isFinite(delta)) {
+        return badRequest("deltas must be finite numbers");
+      }
+      state.positions[joint] = (state.positions[joint] ?? 0) + delta;
+    }
+    return json(200, { positions: { ...state.positions } });
+  }
+
   // ── logs ──────────────────────────────────────────────────────────────────
   if (pathname === "/api/logs" && method === "GET") {
     const stamp = new Date().toISOString().slice(0, 19).replace("T", " ");

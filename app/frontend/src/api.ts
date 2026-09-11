@@ -149,6 +149,17 @@ export const api = {
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
   /** Rest: zero torque at the zero pose, arm lying on its stops. */
   rest: (enabled: boolean) => post<PlaybackState>("/api/rest", { enabled }),
+
+  // ── simulator ───────────────────────────────────────────────────────────
+  sim: {
+    /**
+     * Push one joint of the simulated arm by a delta (radians), the way a
+     * hand pushes the real arm in teach. 409 on a real arm. The response
+     * positions are ignored — the next state broadcast carries the truth.
+     */
+    drag: (deltas: Record<string, number>) =>
+      post<{ positions: Record<string, number> }>("/api/sim/drag", { deltas }),
+  },
   testShutter: (shoot: boolean) => post<ShutterResult>(`/api/shutter/test?shoot=${shoot}`),
   /**
    * Attach the camera over BLE. Slow — the board scans for thirty seconds

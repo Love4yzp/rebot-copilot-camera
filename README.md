@@ -16,6 +16,8 @@ The first deployment is automated multi-view photography: a reBot-RS six-axis ar
 
 > Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors). What's done and blocked is in **[PROGRESS.md](./PROGRESS.md)**.
 
+New to the codebase? **[Understand it in 30 minutes](./docs/START_HERE.md)** before following the task-specific references.
+
 ---
 
 ## Where everything lives
@@ -67,7 +69,7 @@ Already cloned without `--recursive`: `git submodule update --init`.
 ./dev.sh sim
 ```
 
-Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags, walks waypoints and pretends to fire the shutter — the whole workflow runs. `./dev.sh status` reports who is on the port. `./dev.sh --help` is the command list.
+Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags — after "＋ 录位姿" opens teaching, click an arm link in the 3D monitor to select a joint, then drag the ring that appears to push it. It walks waypoints and pretends to fire the shutter — the whole workflow runs. `./dev.sh status` reports who is on the port. `./dev.sh --help` is the command list.
 
 Frontend work against a running backend: `cd app/frontend && npm run dev` (hot reload, proxies to 18790).
 Tests: `cd app && uv run pytest`.
@@ -111,7 +113,7 @@ Without `?shoot=true` no frame is burned, but both links are still checked: `con
 "＋ 录位姿" at the bottom of the library opens a teach bar:
 
 1. The arm **holds still first** — an arm that goes limp with nobody holding it will sag.
-2. **Give it a push** — it detects the motion and releases into zero-force float; drag it freely.
+2. **Give it a push** — it detects the motion and releases into zero-force float; drag it freely. In the simulator there is no hand: click an arm link in the 3D monitor to select a joint, then drag the ring that appears.
 3. Drag to the pose, **let go**. About 0.25 s after your hand stops, it locks in place.
 4. Name it, press "保存位姿" (Save pose). Repeat 2–4 for the next one.
 
@@ -294,6 +296,7 @@ metrics and limitations.
 
 | | |
 |---|---|
+| [docs/START_HERE.md](./docs/START_HERE.md) | Thirty-minute codebase orientation |
 | [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, conventions |
 | [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts — **verified** vs **to-be-measured** |
 | [PROGRESS.md](./PROGRESS.md) | Current status and blockers |

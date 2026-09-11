@@ -8,7 +8,8 @@
  *   - `/api/*`     — REST, handled by `./api.ts` against an in-memory `MockState`
  *   - `/ws`        — a real WebSocket streaming `{type:"state"}` ControlState
  *                    frames at 20 Hz, with a tiny arm simulation (playback
- *                    walks the block list, teach drifts the joints)
+ *                    walks the block list; teach motion arrives as
+ *                    POST /api/sim/drag deltas from the 3D drag gizmo)
  *   - `/assets/urdf/**` — URDF + STL meshes straight from the vendored
  *                    submodule, so the 3D view renders for real
  *
@@ -123,13 +124,7 @@ function simulateTick(state: MockState, nowMs: number, sim: SimContext): void {
 
   const prev = { ...state.positions };
 
-  if (state.mode === "teach") {
-    // Gentle random drift stands in for zero-force dragging, so the joint
-    // readout and capture button behave like the real thing.
-    for (const joint of JOINTS) {
-      state.positions[joint] += (Math.random() - 0.5) * 0.004;
-    }
-  } else if (state.mode === "playback" && state.playback) {
+  if (state.mode === "playback" && state.playback) {
     advancePlayback(state, sim);
   }
 

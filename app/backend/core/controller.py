@@ -29,7 +29,9 @@ from ..actions.runner import ActionRunner, ThreadedRunner
 from ..actions.shoot import ShutterProvider
 from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
+from ..arm.limits import urdf_joint_bounds
 from ..arm.profile import DEFAULT_LIMITS, MotionLimits
+from ..arm.sim import SimArm
 from ..safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
@@ -601,6 +603,36 @@ class Controller:
             self._hold_target = dict(self.arm.read_state().positions) if enabled else None
             if not enabled:
                 self.arm.set_float(False)
+
+    def sim_drag(self, deltas: Mapping[str, float]) -> dict[str, float]:
+        """Simulator-only drag push: ``deltas`` in radians per joint, clamped
+        to the URDF joint bounds, answered with the post-drag positions.
+
+        A hand, not a command: this deliberately bypasses the activity table,
+        so every activity accepts it -- a held arm pushed returns to its
+        target on the next tick, a teaching arm pushed engages the floatlock;
+        both paths already exist. The real arm has a real hand on it, so
+        there is no non-simulator route to build.
+        """
+        if not isinstance(self.arm, SimArm):
+            raise RuntimeError("drag is only available against the simulator")
+        unknown = set(deltas) - set(self.arm.joint_names)
+        if unknown:
+            raise ValueError(f"unknown joints: {', '.join(sorted(unknown))}")
+        bounds = urdf_joint_bounds()
+        positions = dict(self.arm.read_state().positions)
+        effective: dict[str, float] = {}
+        for name, delta in deltas.items():
+            # Joints without a URDF limit entry (the gripper is a pair of
+            # finger joints in the URDF, not a named joint) pass through --
+            # there is no limit to clamp against.
+            lower, upper = bounds.get(name, (float("-inf"), float("inf")))
+            q = min(max(positions[name] + delta, lower), upper)
+            step = q - positions[name]
+            if step != 0.0:
+                effective[name] = step
+        self.arm.drag(effective)
+        return dict(self.arm.read_state().positions)
 
     def set_resting(self, enabled: bool) -> None:
         """Enter or leave rest: zero torque, the arm lying on its stops.

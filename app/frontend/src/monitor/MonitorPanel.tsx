@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { Block, ControlState, Pose, SeqPlayback } from "../types";
+import type { AppMode, Block, ControlState, Pose, SeqPlayback } from "../types";
 import { ArmView3D } from "../components/ArmView3D";
 import { blockIndexAt } from "../timeline/model";
 import type { PreviewApi } from "../preview/usePreview";
@@ -28,6 +28,10 @@ interface Props {
    * the real arm, and an unmounted viewer costs no GPU or battery. The text
    * status lines above carry every machine state on their own. */
   hideViewer?: boolean;
+  /** sim/prod from the health poll — the teach drag gizmo only exists in sim. */
+  appMode?: AppMode | null;
+  /** A joint push from the 3D drag gizmo (radians), forwarded to the sim. */
+  onDragJoint?: (name: string, delta: number) => void;
 }
 
 function blockLabel(block: Block | undefined, poseName: (id: string) => string): string {
@@ -67,10 +71,14 @@ export function MonitorPanel({
   onToggleTuning,
   tuningOpen,
   hideViewer = false,
+  appMode = null,
+  onDragJoint,
 }: Props) {
   const latched = state?.estop.latched ?? false;
   const executing = state?.mode === "playback" && !latched;
   const teaching = state?.mode === "teach";
+  /** Pushing the arm by its ring only means something on the simulated arm. */
+  const dragEnabled = teaching && !latched && appMode === "sim";
 
   /** Ghost list is derived and referentially stable — the viewer's load
    * effect must not re-run on every 20 Hz broadcast. */
@@ -122,7 +130,7 @@ export function MonitorPanel({
   } else if (teaching) {
     banner = "零重力 · 臂可推动";
     status = "零重力 · 已卸力";
-    sub = "松手自动锁定 · 直接保存";
+    sub = dragEnabled ? "松手自动锁定 · 点选关节，拖圆环推动" : "松手自动锁定 · 直接保存";
   } else if (executing) {
     banner = "执行中 · 臂在动";
     status = "实况 · 臂在动";
@@ -187,6 +195,8 @@ export function MonitorPanel({
             ghosts={ghostPoses}
             targetPoseId={targetPoseId}
             targetAmber={executing}
+            dragEnabled={dragEnabled}
+            onDragJoint={onDragJoint}
             onGhostClick={(ghost) => {
               const pose = poses.find((p) => p.id === ghost.id);
               if (pose) onGhostClick?.(pose);

@@ -368,6 +368,12 @@ function Workspace() {
 
   useNumberKeys(poses, gotoPose);
 
+  /** A ring-drag push: fire-and-forget — a failed delta mid-gesture is one
+   * missed nudge, not something to toast about 30 times a second. */
+  const handleDragJoint = useCallback((name: string, delta: number) => {
+    void api.sim.drag({ [name]: delta }).catch(() => {});
+  }, []);
+
   /** Send the arm to the first station's pose, stopping preview first. */
   const goToStart = useCallback(() => {
     if (!firstHoldPose) return;
@@ -522,6 +528,8 @@ function Workspace() {
             onToggleTuning={() => setTuningOpen((v) => !v)}
             tuningOpen={tuningOpen}
             hideViewer={narrow}
+            appMode={appMode}
+            onDragJoint={handleDragJoint}
           />
           <TuningPanel
             visible={tuningOpen}
