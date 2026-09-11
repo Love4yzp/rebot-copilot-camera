@@ -11,7 +11,6 @@
 #   ./dev.sh --port <port>     端口（默认 18790，可用 REBOT_PORT）
 #
 # 其它：
-#   ./dev.sh ui                只起前端 mock（无 Python、无后端，调界面）
 #   ./dev.sh build             只构建前端，产物进 app/backend/static/
 #   ./dev.sh status            看 :18790 上是谁（simulated 与否）
 #   ./dev.sh --help
@@ -19,7 +18,6 @@
 # 快捷示例：
 #   ./dev.sh sim               # 本机无硬件全栈联调
 #   ./dev.sh prod              # 本机连接真实机械臂
-#   ./dev.sh ui                # 只调前端
 #   ./dev.sh status            # 端口被占时先看这个
 
 set -euo pipefail
@@ -46,6 +44,7 @@ usage() {
 require_submodule() {
 	[ -f "$APP/vendor/reBotArm_control_py/pyproject.toml" ] ||
 		die "app/vendor/reBotArm_control_py is empty — run: git submodule update --init"
+	python3 "$APP/prepare_sdk.py"
 }
 
 npm_install() {
@@ -103,6 +102,7 @@ PY
 }
 
 cmd_build() {
+	require_submodule
 	step "[本机] 构建前端"
 	npm_install
 	# 构建产物输出到 app/backend/static/，由 backend/app.py 挂载托管
@@ -130,8 +130,8 @@ import json, sys
 body = json.load(sys.stdin)
 mode = body.get("mode", "?")
 arm = (body.get("arm") or {}).get("simulated")
-shutter = (body.get("shutter") or {}).get("simulated")
-print(f"listening :{sys.argv[1]}  mode={mode}  arm.simulated={arm}  shutter.simulated={shutter}")
+backend = (body.get("arm") or {}).get("backend")
+print(f"listening :{sys.argv[1]}  mode={mode}  arm.simulated={arm}  arm.backend={backend}")
 print(json.dumps(body, indent=2, ensure_ascii=False))
 ' "$LISTEN_PORT" <<<"$body"
 	else
@@ -147,7 +147,9 @@ cmd_serve() {
 	ensure_listen_free
 
 	step "[本机] 安装 Python 依赖"
-	(cd "$APP" && uv sync)
+	local -a physics_extra=()
+	for arg in "$@"; do [[ "$arg" == "--sim" ]] && physics_extra=(--extra physics); done
+	(cd "$APP" && uv sync "${physics_extra[@]}")
 
 	if [ "${NO_BUILD:-}" = "1" ]; then
 		[ -f "$APP/backend/static/index.html" ] ||
@@ -161,8 +163,7 @@ cmd_serve() {
 
 	step "[本机] 启动后端：$LISTEN_HOST:$LISTEN_PORT"
 	# 硬件连接机制：
-	# 1. 未加 --sim 时，机械臂连不上就拒绝启动（ArmUnavailable），不会静默退回模拟器；
-	# 2. 快门连不上绝不退回模拟快门（防止假快门谎报成功）。启动后请核对日志或 ./dev.sh status。
+	# 未加 --sim 时，机械臂连不上就拒绝启动，不会静默退回模拟器。
 	#
 	# macOS 的 CAN 传输走 MacCAN 的 libPCBUSB.dylib（用户态驱动，装在 ~/.local/lib）。
 	# dyld 的裸名搜索不含这个目录，而 DYLD_* 只在进程启动时读取，所以必须在 exec 前注入。
@@ -175,7 +176,7 @@ cmd_serve() {
 	export LANG="${LANG:-zh_CN.UTF-8}"
 	# uv 项目根在 app/（pyproject.toml 所在），必须先 cd 进去再 exec
 	cd "$APP"
-	exec uv run -m backend.app "$@"
+	exec uv run "${physics_extra[@]}" -m backend.app "$@"
 }
 
 serve_from_cli() {
@@ -192,16 +193,6 @@ serve_from_cli() {
 	cmd_serve ${args+"${args[@]}"}
 }
 
-cmd_ui() {
-	require_submodule
-
-	step "[本机] 启动前端 mock（内存 API，无后端）"
-	# `vite --mode mock` 关闭后端代理，由 app/frontend/mock/ 在内存中响应 API 和 WebSocket，
-	# 并直接读取 submodule URDF。无需 Python 环境，亦不连接真实机械臂。
-	npm_install
-	cd "$APP/frontend"
-	exec npm run dev:mock -- "$@"
-}
 
 case "${1:-}" in
 help | -h | --help)
@@ -219,18 +210,11 @@ status)
 	shift
 	cmd_status "$@"
 	;;
-ui)
-	shift
-	cmd_ui "$@"
-	;;
-mock)
-	note "'./dev.sh mock' → './dev.sh ui'"
-	shift
-	cmd_ui "$@"
+ui|mock)
+	die "ui/mock was removed; use ./dev.sh sim (full backend + MuJoCo)"
 	;;
 sim)
-	# 全栈 + 模拟臂。历史上 `sim` 曾被刻意指到前端 mock（防手滑少打横杠起了个没后端的东西），
-	# 现在 sim 正式成为子命令，那个陷阱别名删除；flag 写法 --sim 仍透传可用。
+	# 全栈 + MuJoCo，flag 写法 --sim 仍可用。
 	shift
 	serve_from_cli "$@" --sim
 	;;

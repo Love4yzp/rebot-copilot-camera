@@ -13,9 +13,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from backend import assets
-from backend.arm.base import EASE_PEAK
-from backend.core.executor import DEFAULT_APPROACH_S, FIRST_APPROACH_MAX_SPEED
 from backend.sequences.models import WAIT_KIND
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,26 +28,6 @@ def _ts_const(text: str, name: str) -> str:
     return match.group(1).strip().strip("\"'")
 
 
-def test_approach_constants_match_executor():
-    text = MODEL_TS.read_text(encoding="utf-8")
-    assert _ts_const(text, "DEFAULT_APPROACH_S") == repr(DEFAULT_APPROACH_S)
-    assert _ts_const(text, "FIRST_APPROACH_MAX_SPEED") == repr(FIRST_APPROACH_MAX_SPEED)
-    # EASE_PEAK lives in arm/base.py: the executor stretches the first approach
-    # by it, so the preview must plan with it or the plan ruler lies.
-    assert _ts_const(text, "EASE_PEAK") == repr(EASE_PEAK)
-
-
 def test_wait_kind_matches_models():
     text = MARKERS_TS.read_text(encoding="utf-8")
     assert _ts_const(text, "WAIT_KIND") == WAIT_KIND
-
-
-def test_mock_joints_match_the_hardware_yaml():
-    """The mock models the full hardware set — the yaml's joint list, switch
-    or no switch — because it stands in for a wired, official machine."""
-    text = STATE_TS.read_text(encoding="utf-8")
-    match = re.search(r"export const JOINTS = \[([^\]]*)\];", text)
-    assert match, "JOINTS not found in frontend/mock/state.ts"
-    mock_joints = re.findall(r'"([^"]+)"', match.group(1))
-    yaml_joints = [j["name"] for j in assets.hardware_config().get("joints", [])]
-    assert mock_joints == yaml_joints

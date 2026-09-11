@@ -1,4 +1,4 @@
-"""Control state, execution control, teaching, the state websocket, shutter.
+"""Control state, execution control, teaching and state/event websockets.
 
 Everything here that moves the arm carries the motion gate. ``execute/stop``
 does not: stopping must work while stopped, and while the emergency stop is
@@ -10,18 +10,19 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from pydantic import BaseModel, Field
 
 from ..core import Broadcaster, Controller, events
 from ..core.controller import progress_payload
-from ..shutter import (
-    CAMERA_STATUS_DISCONNECTED,
-    CAMERA_STATUS_UNPAIRED,
-    PAIR_SMART_TIMEOUT_S,
-    PAIR_TIMEOUT_S,
-    ShutterError,
-)
 from .gate import require_arm_available
 
 log = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ async def state_socket(websocket: WebSocket) -> None:
 
 @router.websocket("/api/events")
 async def event_socket(websocket: WebSocket) -> None:
-    """Stream semantic events: arrivals, actions, stops.
+    """Stream semantic events: arrivals, sequence lifecycle and stops.
 
     Separate from ``/ws`` because the two answer different questions. A screen
     wants joint angles at 20 Hz; a process that files photographs or drives a
@@ -193,174 +194,3 @@ async def _stream(websocket: WebSocket, topics: set[str], unwrap: bool = False) 
         log.exception("websocket stream failed")
     finally:
         broadcaster.unsubscribe(sub)
-
-
-# ── shutter self-test ────────────────────────────────────────────────────────
-
-
-class ShutterTestResult(BaseModel):
-    ok: bool
-    #: The USB link to the board. Says nothing about the camera.
-    connected: bool
-    #: The BLE link from the board to the camera — the one that decides whether
-    #: a frame is actually taken. None when the board could not be asked.
-    camera: bool | None = None
-    fired: bool
-    firmware_version: str | None = None
-    error: str | None = None
-
-
-@router.post("/api/shutter/test", response_model=ShutterTestResult)
-def test_shutter(request: Request, focus: bool = False, shoot: bool = False) -> ShutterTestResult:
-    """Check the host-to-ESP32-to-camera chain.
-
-    Pings by default and only fires when asked, so it can be used to confirm
-    the link without burning a frame. Run this when setting up on site: a dead
-    BLE link is silent until the arm has walked a whole set with nothing
-    landing on the card.
-
-    **Both links are checked.** ``ping`` deliberately answers only for the USB
-    cable — the firmware does not touch the camera for it, so that a sleeping
-    camera stays distinguishable from a missing board. Checking only that would
-    make this endpoint answer green on a machine with nothing paired, which is
-    the failure it exists to catch.
-
-    **Three states, not two.** A camera that was never paired needs a human
-    with the camera's Bluetooth menu; one that is paired but disconnected
-    (sleeping, just booted) resolves itself when the next frame tries to fire.
-    The endpoint sends a ``FOCUS`` (half-press, no frame burned) to force a
-    lazy BLE connect when it sees ``disconnected``, so the only case that
-    reports red is genuinely unreachable.
-
-    Not behind the motion gate — it moves no joints, and confirming the shutter
-    while the arm is safely stopped is a reasonable thing to want.
-    """
-    shutter = _controller(request).shutter
-    camera: bool | None = None
-
-    try:
-        shutter.ping()
-        status = shutter.camera_status()
-
-        if status == CAMERA_STATUS_UNPAIRED:
-            camera = False
-        elif status == CAMERA_STATUS_DISCONNECTED:
-            # Force a lazy BLE connect. No frame is burned — the camera only
-            # fires on SHOOT, and FOCUS is a half-press the firmware handles
-            # without telling the camera to take a picture.
-            shutter.focus()
-            camera = shutter.camera_connected()
-        else:
-            camera = True
-
-        if focus:
-            shutter.focus()
-        if shoot:
-            shutter.shoot()
-    except ShutterError as exc:
-        return ShutterTestResult(
-            ok=False,
-            connected=shutter.is_connected,
-            camera=camera,
-            fired=False,
-            firmware_version=getattr(shutter, "firmware_version", None),
-            error=str(exc),
-        )
-
-    return ShutterTestResult(
-        ok=bool(camera),
-        connected=shutter.is_connected,
-        camera=camera,
-        fired=shoot,
-        firmware_version=getattr(shutter, "firmware_version", None),
-        error=None if camera else "no camera is paired — pair from the settings",
-    )
-
-
-@router.post("/api/shutter/pair", response_model=ShutterTestResult)
-def pair_shutter(request: Request, timeout_s: float = PAIR_TIMEOUT_S) -> ShutterTestResult:
-    """Put the board into BLE pairing mode and wait for the camera.
-
-    The one operation here that needs a person: the camera has to be put into
-    its own pairing mode by hand (**无线通信设置 > 蓝牙功能 > 遥控**), which is
-    why the wait is thirty seconds rather than a few. Without this endpoint the
-    only way to attach a camera was a serial terminal, so a machine whose board
-    had reset — which drops the pairing — could not be recovered from the
-    screen that was reporting the problem.
-
-    Refused while a sequence is executing: the driver takes one command at a
-    time, so a pairing scan would stall the frames behind it, and re-pairing
-    mid-shoot is not a thing anyone means to do.
-
-    Not behind the motion gate for the same reason the self-test is not: no
-    joint moves, and this is exactly what an operator does while the arm is
-    stopped.
-    """
-    controller = _controller(request)
-    if controller.is_playing:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "cannot pair the camera while a sequence is executing"
-        )
-
-    shutter = controller.shutter
-    try:
-        shutter.pair(timeout_s)
-    except ShutterError as exc:
-        return ShutterTestResult(
-            ok=False,
-            connected=shutter.is_connected,
-            camera=False,
-            fired=False,
-            firmware_version=getattr(shutter, "firmware_version", None),
-            error=str(exc),
-        )
-
-    camera = shutter.camera_connected()
-    return ShutterTestResult(
-        ok=camera,
-        connected=shutter.is_connected,
-        camera=camera,
-        fired=False,
-        firmware_version=getattr(shutter, "firmware_version", None),
-        error=None if camera else "pairing finished but the camera is not connected",
-    )
-
-
-@router.post("/api/shutter/pair_smart", response_model=ShutterTestResult)
-def pair_shutter_smart(request: Request, timeout_s: float = PAIR_SMART_TIMEOUT_S) -> ShutterTestResult:
-    """Put the board into smartphone-mode pairing.
-
-    The camera must be in "connect to smartphone" mode (not "remote" mode).
-    The user must confirm on the camera's screen within 60 s after the
-    identification handshake.
-
-    Refused while a sequence is executing, same as the BLE remote pair endpoint.
-    """
-    controller = _controller(request)
-    if controller.is_playing:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "cannot pair the camera while a sequence is executing"
-        )
-
-    shutter = controller.shutter
-    try:
-        shutter.pair_smart(timeout_s)
-    except ShutterError as exc:
-        return ShutterTestResult(
-            ok=False,
-            connected=shutter.is_connected,
-            camera=False,
-            fired=False,
-            firmware_version=getattr(shutter, "firmware_version", None),
-            error=str(exc),
-        )
-
-    camera = shutter.camera_connected()
-    return ShutterTestResult(
-        ok=camera,
-        connected=shutter.is_connected,
-        camera=camera,
-        fired=False,
-        firmware_version=getattr(shutter, "firmware_version", None),
-        error=None if camera else "smart pairing finished but the camera is not connected",
-    )

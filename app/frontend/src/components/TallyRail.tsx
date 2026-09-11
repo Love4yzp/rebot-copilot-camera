@@ -2,7 +2,6 @@ export type TallyState =
   | "idle"
   | "moving"
   | "settling"
-  | "acting"
   | "arrived"
   | "teach"
   | "latched";
@@ -19,7 +18,6 @@ export type TallyState =
  *   dark          nothing is happening
  *   amber sweep   the arm is travelling — do not reach in
  *   amber solid   teach mode: the arm is compliant and can be pushed by hand
- *   white         the shutter fired
  *   green         arrived and holding
  *   red pulse     latched
  *

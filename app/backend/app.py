@@ -27,11 +27,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, assets, config
-from .actions import ActionRegistry, ShutterProvider, ThreadedRunner
-from .agent import AgentLease
-from .api import agent, control, estop, logs, plugins, poses, sequences, templates
+
+
+from .api import control, estop, logs, poses, sequences, templates, simulation, viewer
 from .api import config as config_api
-from .arm import SimArm, create_arm
+from .arm import SimArm
 from .core import Broadcaster, Controller
 from .safety import ClientWatchdog, ContactObserver, SafetyLatch, Watchdog
 from .safety.kinematics import arm_model
@@ -40,16 +40,16 @@ from .sequences import (
     SequenceStore,
     TemplateStore,
 )
-from .sequences.seed_demo import seed_demo_if_empty
-from .shutter import SimShutter, create_shutter
-from .tuning import TuningStore
+
+
+from .tuning import TuningConfig, TuningStore
 
 log = logging.getLogger(__name__)
 
 STARTED_AT = time.time()
 
-#: Loop rate for the simulated arm. The real arm defers to upstream's
-#: start_control_loop at the yaml's 500 Hz, pending the R2x measurement (B3).
+#: Application control rate for both transports. MuJoCo integrates separately
+#: at 1 kHz; the hardware's possible 500 Hz operation remains unverified (B3).
 SIM_LOOP_HZ = 100.0
 
 #: Overall budget for the shutdown park. The worst-case approach is the full
@@ -122,6 +122,9 @@ async def lifespan(app: FastAPI):
     model = arm_model()
     log.info("kinematics ready: %d collision pairs", len(model.geom.collisionPairs))
 
+    runtime = getattr(app.state, "runtime", None)
+    if runtime is not None:
+        await runtime.start(app)
     app.state.controller.start(rate_hz=SIM_LOOP_HZ)
     log.info("control loop started at %.0f Hz", SIM_LOOP_HZ)
     try:
@@ -129,20 +132,20 @@ async def lifespan(app: FastAPI):
     finally:
         # Park first, while the loop still ticks: the move is driven by the
         # loop, so stopping the loop is the last thing shutdown does.
-        _park_arm(app.state.controller)
-        # Stopping the loop stops commanding, but never disables the motors.
-        app.state.controller.stop()
-        # Then the action workers. After the loop, because a worker that is
-        # mid-exchange with a camera should not be interrupted by a shutdown
-        # the loop has not finished acknowledging yet.
-        app.state.controller.actions.close()
+        try:
+            _park_arm(app.state.controller)
+            if runtime is not None:
+                await runtime.close(app)
+        finally:
+            # Stopping the loop stops commanding, never disables the motors.
+            app.state.controller.stop()
         log.info("control loop stopped")
 
 
 app = FastAPI(
     title="rebot-copilot-camera",
     version=__version__,
-    description="Automated multi-view photography with a reBot-RS arm.",
+    description="Teach and repeat with the reBot-RS SDK.",
     lifespan=lifespan,
 )
 
@@ -153,35 +156,22 @@ app.state.pose_store = PoseStore(config.POSES_DIR)
 app.state.sequence_store = SequenceStore(config.SEQUENCES_DIR)
 app.state.template_store = TemplateStore(config.TEMPLATES_DIR)
 app.state.broadcaster = Broadcaster()
-app.state.agent_lease = AgentLease()
 
 # The arm is chosen at import time so tests get a simulator without touching
 # CAN. main() re-chooses it, so the running service can use real hardware.
 app.state.watchdog = Watchdog(app.state.latch, clock=time.monotonic)
 app.state.simulated = True
-app.state.shutter_simulated = True
-
-# One runner for the process, and a registry over it. The registry is only the
-# discovery and health layer -- the runner stays the single register of which
-# providers exist, so the two cannot disagree about what is installed.
-_shutter = SimShutter()
-_runner = ThreadedRunner()
-app.state.plugins = ActionRegistry(_runner)
-app.state.plugins.register(ShutterProvider(_shutter))
-
 # Operator-calibrated tuning: the file is the saved copy, the controller's
 # live config is the applied one, and only an explicit save moves the former.
 app.state.tuning_store = TuningStore(config.TUNING_FILE)
 
 app.state.controller = Controller(
     arm=SimArm(assets.joint_names(), clock=time.monotonic, self_driven=True),
-    shutter=_shutter,
     latch=app.state.latch,
     broadcaster=app.state.broadcaster,
     watchdog=app.state.watchdog,
     expected_period_s=1.0 / SIM_LOOP_HZ,
-    actions=_runner,
-    tuning=app.state.tuning_store.load(),
+    tuning=TuningConfig(),
 )
 
 app.include_router(estop.router)
@@ -189,10 +179,10 @@ app.include_router(poses.router)
 app.include_router(sequences.router)
 app.include_router(templates.router)
 app.include_router(control.router)
-app.include_router(agent.router)
 app.include_router(logs.router)
-app.include_router(plugins.router)
 app.include_router(config_api.router)
+app.include_router(simulation.router)
+app.include_router(viewer.router)
 
 
 @app.get("/api/health")
@@ -209,10 +199,13 @@ def health() -> dict:
             "reason": latch.reason,
             "source": latch.source.value if latch.source else None,
         },
-        "shutter": {"simulated": app.state.shutter_simulated},
         "arm": {
             "simulated": app.state.simulated,
-            "urdf": str(assets.urdf_path()),
+            "backend": getattr(app.state, "arm_backend", "test"),
+            "urdf": str(
+                getattr(getattr(app.state, "runtime", None), "model_path", assets.urdf_path())
+            ),
+            "model_sha256": getattr(getattr(app.state, "runtime", None), "model_digest", None),
             "end_effector_frame": assets.end_effector_frame(),
             "joints": assets.joint_names(),
         },
@@ -348,8 +341,10 @@ def _print_serving_banner(host: str, port: int) -> None:
     # flush=True: under systemd / a pipe, stdout is block-buffered and the
     # banner would otherwise surface long after the log lines around it.
     print(f"\n  ➜  Local:   http://127.0.0.1:{port}", flush=True)
-    network = _interface_ipv4s() if host == "0.0.0.0" else (
-        [host] if host not in ("127.0.0.1", "localhost") else []
+    network = (
+        _interface_ipv4s()
+        if host == "0.0.0.0"
+        else ([host] if host not in ("127.0.0.1", "localhost") else [])
     )
     for i, ip in enumerate(network):
         label = "Network:" if i == 0 else "         "
@@ -360,10 +355,8 @@ def _print_serving_banner(host: str, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rebot-copilot-camera")
-    parser.add_argument("--sim", action="store_true", help="force SimArm/SimShutter")
-    parser.add_argument(
-        "--host", default=None, help="listen address (default: all interfaces)"
-    )
+    parser.add_argument("--sim", action="store_true", help="run the MuJoCo physical arm")
+    parser.add_argument("--host", default=None, help="listen address (default: all interfaces)")
     parser.add_argument("--port", type=int, default=config.PORT)
     parser.add_argument(
         "--local",
@@ -388,53 +381,32 @@ def main() -> None:
     assets.assert_rs_model()
     log.info("URDF: %s (frame=%s)", assets.urdf_path(), assets.end_effector_frame())
 
-    arm, simulated = create_arm(force_sim=args.sim)
-    app.state.simulated = simulated
-    app.state.controller.bind_arm(arm)
+    from .runtime import Runtime, runtime_tuning_store
+    from .safety.kinematics import configure_model
+
+    app.state.tuning_store = runtime_tuning_store(args.sim)
+    tuning = app.state.tuning_store.load()
+    runtime = Runtime(simulated=args.sim, tuning=tuning)
+    app.state.runtime = runtime
+    app.state.simulated = args.sim
+    app.state.arm_backend = "mujoco" if args.sim else "hardware"
+    if args.sim:
+        app.state.pose_store = PoseStore(config.DATA_DIR / "sim" / "poses")
+        app.state.sequence_store = SequenceStore(config.DATA_DIR / "sim" / "sequences")
+        app.state.template_store = TemplateStore(config.DATA_DIR / "sim" / "templates")
+    app.state.controller = Controller(
+        arm=runtime.arm,
+        latch=app.state.latch,
+        broadcaster=app.state.broadcaster,
+        watchdog=app.state.watchdog,
+        tuning=tuning,
+    )
+    app.state.controller.simulation = runtime.physics
+    configure_model(runtime.model_path)
+    arm_model()  # Finish mesh/collision parsing before enabling the arm.
+    runtime.connect()
     app.state.controller.client_watchdog = ClientWatchdog(clock=time.monotonic, timeout_s=2.0)
     app.state.controller.contact = ContactObserver(clock=time.monotonic, enabled=False)
-
-    # The shutter is chosen the same way, but never falls back: a simulated
-    # shutter reports every frame as fired, and an operator who walks a whole
-    # set on that finds out when they review it. See backend/shutter/factory.
-    shutter, shutter_simulated = create_shutter(force_sim=args.sim)
-
-    # When the service is in sim mode, make the turntable plugin use its
-    # in-process simulator too. The plugin decides between hardware and sim
-    # by reading TURNTABLE_PORT at import time, so we set it before discovery.
-    if args.sim:
-        os.environ.setdefault("TURNTABLE_PORT", "sim")
-    app.state.shutter_simulated = shutter_simulated
-    app.state.controller.set_shutter(shutter)
-    # replace=True because the built-in registered at import time is being swapped
-    # for one over the chosen driver. Discovery cannot ask for this: an installed
-    # plugin claiming an id that is taken is refused and listed with the reason,
-    # rather than quietly becoming the camera.
-    app.state.plugins.register(ShutterProvider(shutter), replace=True)
-
-    # Third-party providers load here rather than at import time: importing the
-    # app is something every test does, and that must not run other people's
-    # code. A plugin that fails to load is logged and listed as unavailable --
-    # a missing accessory is not a missing machine.
-    app.state.plugins.discover()
-    app.state.plugins.discover_dir(config.PLUGINS_DIR)
-
-    # Say at startup which accessories answer, rather than at the first anchor.
-    for status in app.state.plugins.probe_all():
-        log.info(
-            "action %r: %s", status.id, "ok" if status.available else f"DOWN — {status.reason}"
-        )
-
-    # First boot gets the reference demo: empty stores are planted with the
-    # four-station shoot once, so the full stack demos like the mock. Skipped
-    # when anything exists, when this deployment was seeded before, or when
-    # REBOT_SEED_DEMO=0.
-    seed_demo_if_empty(
-        app.state.pose_store,
-        app.state.sequence_store,
-        app.state.template_store,
-        enabled=os.environ.get("REBOT_SEED_DEMO", "1") != "0",
-    )
 
     ParkOnExitServer(uvicorn.Config(app, host=host, port=args.port)).run()
 

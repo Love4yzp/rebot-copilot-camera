@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>机械臂实况</title>
+<style>html,body{margin:0;background:#0a0a0b;color:#ededf0;font:13px system-ui}#scene{width:100vw;height:100vh}.dg,.vr-button{display:none!important}button{position:absolute;bottom:12px;right:12px;background:#16161a;color:#ededf0;border:1px solid #2a2a31;padding:8px}#status{position:absolute;top:12px;left:12px;background:#16161a;padding:6px}</style></head>
+<body><div id="scene"></div><div id="status">正在连接实况…</div><button id="reset">复位视角</button>
+<script src="/viewer/main.min.js"></script><script>
+const viewer = new MeshCat.Viewer(document.getElementById('scene'));
+function resetCamera() {
+  viewer.camera.position.set(1.1, 0.9, 1.1);
+  viewer.controls.target.set(0, 0.3, 0);
+  viewer.controls.update();
+  viewer.set_dirty();
+}
+resetCamera();
+const status = document.getElementById('status');
+let last = 0;
+function open() {
+  viewer.connect(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/viewer/ws`);
+  const original = viewer.connection.onmessage;
+  viewer.connection.onmessage = event => { original(event); last = performance.now(); status.hidden = true; };
+  viewer.connection.onclose = () => {status.hidden=false;status.textContent='查看器已断连 · 画面不是实况';setTimeout(open,1000);};
+}
+open();
+setInterval(()=>{if(last && performance.now()-last>1500){status.hidden=false;status.textContent='反馈已过期 · 画面不是实况';}},500);
+document.getElementById('reset').onclick=resetCamera;
+window.addEventListener('keydown',event=>{if(event.key==='Escape')parent.postMessage({type:'viewer-estop'},location.origin);});
+</script></body></html>

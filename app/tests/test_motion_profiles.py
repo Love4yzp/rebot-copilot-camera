@@ -53,7 +53,7 @@ def test_urdf_lower_bound_noise_is_tolerated_but_excess_is_rejected():
 
 
 def test_first_approach_speed_limit_is_reflected_in_analytic_profile():
-    from backend.actions import InlineRunner
+
     from backend.core import SequenceExecutor
     from backend.sequences import Pose, Sequence, TransitionBlock
 
@@ -63,8 +63,11 @@ def test_first_approach_speed_limit_is_reflected_in_analytic_profile():
     target = Pose(name="one", joints={"joint1": 1.0})
     executor = SequenceExecutor(
         Sequence(name="goto", blocks=[TransitionBlock(duration_s=1.0)]),
-        {target.id: target}, arm=arm, actions=InlineRunner([]), clock=clock,
-        goto=target, first_approach_max_speed=0.05,
+        {target.id: target},
+        arm=arm,
+        clock=clock,
+        goto=target,
+        first_approach_max_speed=0.05,
     )
     executor.start()
     assert arm._motion is not None

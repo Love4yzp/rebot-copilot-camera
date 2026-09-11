@@ -2,12 +2,11 @@
 
 import pytest
 
-from backend.actions import InlineRunner, ShutterProvider
+
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase, SequenceExecutor
 from backend.sequences import EventMarker, HoldBlock, Pose, Sequence, TransitionBlock
 from backend.safety import LatchSource, SafetyLatch
-from backend.shutter import SimShutter
 
 
 class Clock:
@@ -22,15 +21,12 @@ def rig():
     clock = Clock()
     arm = SimArm(("joint1", "joint2"), clock=clock, tau=0.05)
     arm.connect()
-    shutter = SimShutter()
     latch = SafetyLatch(clock=clock)
     controller = Controller(
         arm=arm,
-        shutter=shutter,
         latch=latch,
         broadcaster=Broadcaster(),
         clock=clock,
-        actions=InlineRunner([ShutterProvider(shutter)]),
     )
     return clock, arm, latch, controller
 
@@ -132,7 +128,6 @@ def test_resume_prepare_rejection_keeps_wait_and_can_retry():
         {pose.id: pose},
         goto=pose,
         arm=arm,
-        actions=InlineRunner([]),
         clock=clock,
     )
     executor.start()
@@ -185,7 +180,6 @@ def test_slow_prepare_starts_first_motion_clock_after_commit(kind):
         {target.id: target},
         goto=target if kind == "transition" else None,
         arm=arm,
-        actions=InlineRunner([]),
         clock=clock,
     )
 
@@ -219,7 +213,6 @@ def test_slow_prepare_on_later_transition_does_not_abort_on_next_tick():
         sequence,
         {first.id: first, second.id: second},
         arm=arm,
-        actions=InlineRunner([]),
         clock=clock,
         settle_s=0.0,
     )

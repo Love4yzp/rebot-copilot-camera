@@ -4,7 +4,7 @@
 
 项目在做什么、怎么用，看 [`README.md`](./README.md)。这里只讲**做什么、怎么做、去哪查**。做过什么写 `git log`，不要往本文件追加。
 
-**技术栈速查**（细节只去对应文档，别在这层扩写）：后端 Python + FastAPI + uv（`app/`，测试 pytest）；前端 Vite + React + TS（`app/frontend/`）；运动学/动力学走 vendor submodule `reBotArm_control_py`（锁 `d540405`，Pinocchio）；物理验证是 opt-in MuJoCo extra；固件 PlatformIO / XIAO ESP32-S3（`app/firmware/`）；部署 systemd + udev（`app/deploy/`）。
+**技术栈速查**（细节只去对应文档，别在这层扩写）：后端 Python + FastAPI + uv（`app/`，测试 pytest）；前端 Vite + React + TS（`app/frontend/`，Vite 仅作运行后端的 HMR 客户端）；模型 / 算法 / 传输 / 查看器全部走 vendor SDK `reBotArm_control_py`（submodule + `app/vendor-patches/`，补丁由 `app/prepare_sdk.py` 应用）；物理仿真与验证走 SDK MuJoCo；部署 systemd + udev（`app/deploy/`）。
 
 ---
 
@@ -12,10 +12,10 @@
 
 布局：应用整体住在 `app/` 二级目录（`pyproject.toml`/`uv.lock`/`.venv` 都在里面），顶层只放 AI/人读文档与 `dev.sh`/`device.sh`。**所有 `uv` 命令在 `app/` 下执行**——漏了这层会找不到包。
 
-`git submodule update --init`（臂层是 submodule，漏了 import 就失败）。`dev.sh`（本机）/`device.sh`（经 ssh 落设备）的命令清单见 `./dev.sh --help` 或脚本头。**本机后端只由人用 `./dev.sh` 启动**——agent 用 pytest 验证，不要执行 `uv run -m backend.app`、不要占用 18790。三条环境不写的约定：
+`git submodule update --init` 后执行 `python3 app/prepare_sdk.py`（dev.sh 自动执行）；只在锁定基线上应用已审阅 SDK 补丁，拒绝覆盖重叠修改。`dev.sh`（本机）/`device.sh`（经 ssh 落设备）的命令清单见 `./dev.sh --help` 或脚本头。**本机后端只由人用 `./dev.sh` 启动**——agent 用 pytest 验证，不要执行 `uv run -m backend.app`、不要占用 18790。三条环境不写的约定：
 
-- `dev.sh` 模式：`sim` = 全栈 + SimArm；`prod` = 真臂（连不上就拒绝，不退回模拟器）；`ui` = 只前端 mock，无 Python。端口预检是双实例安全阀，不能关。
-- **前端构建归 `dev.sh build`，它是唯一所有者**——`device.sh push` 调它。抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是要发的那个。`mock` 是 `sim` 的旧名（过渡期后移除）。
+- `dev.sh` 模式：`sim` = 全栈 + SDK MuJoCo；`prod` = 真臂（连不上就拒绝，不退回模拟器）；`ui` / `mock` 已移除。端口预检是双实例安全阀，不能关。
+- **前端构建归 `dev.sh build`，它是唯一所有者**——`device.sh push` 调它。抄第二份会漂移，而漂移掉的那份**照样产出一个能跑的 bundle**，只是不是要发的那个。Vite 只作为运行后端的 HMR 客户端。
 - 运动学/动力学/碰撞在开发机就能跑和测（`pin`/`motorbridge` 在 macOS arm64 可用），**只有 CAN 传输层需要真机**。
 
 ---
@@ -46,7 +46,7 @@
 
 FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](https://github.com/Seeed-Projects/reBotArm_control_py)，**只调不写**。它是这套硬件的官方实现，重力模型已标定。
 
-**唯一例外**：`move_to` 的 smoothstep MIT 斜坡是项目内实现（`app/backend/arm/session.py`）—— 固件锁控制模式，上游规划器跑不了，这是实测驱动的决定，见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #12。
+`app/backend/arm/session.py` 只维护 MIT 会话和参考交接；轨迹数学放在 SDK `motion_profiles.py`，应用只重导出类型。固件终身 MIT 的依据见 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) #12。禁止 backend 直接导入 Pinocchio、MotorBridge、MuJoCo、MeshCat，见 `test_application_only_reaches_robot_math_and_transport_through_sdk`。
 
 **这四条的源码级证据、以及其它硬件事实（自由度错位、限位边界、碰撞对、关节映射）全在 [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md)。** 碰硬件相关代码前读那份。
 
@@ -54,16 +54,16 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 
 ## 代码地图
 
-分层速览（细节在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)「内核边界与部件关系」）：内核 = arm/ + safety/ + core/controller.py；编排引擎 = core/（executor/floatlock/broadcaster/events）+ sequences/；插件层 = actions/ + shutter/；入口层 = api/。
+分层速览（细节在 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)「内核边界与部件关系」）：内核 = arm/ + safety/ + core/controller.py；编排引擎 = core/（executor/floatlock/broadcaster/events）+ sequences/；入口层 = api/；SDK 负责模型、算法、transport 与查看器 worker。
 
-**每个文件干什么的逐行地图在 [`docs/CODEMAP.md`](./docs/CODEMAP.md)——碰任何 backend 文件前读它定位。** 超前建成模块（shutter/、agent、api/agent）在那标了 `⏸ parked` 与唤醒条件。
+**每个文件干什么的逐行地图在 [`docs/CODEMAP.md`](./docs/CODEMAP.md)——碰任何 backend 文件前读它定位。** 插件、快门、Agent 已移除，未来接口只在 `docs/PLUGINS.md` 设计，不预建空运行时框架。
 
 ---
 
 ## 不能破的约定
 
-**层级边界**（`app/tests/test_layer_boundaries.py` AST 锁住：executor 不 import 闩锁 / api 不直连 `safety.kinematics`·`actions.validate` / arm 不实现运动学 / ActionContext 无 arm 句柄——改坏会大声失败）
-- **例外（前门，不是越界）**：`api/gate.py`/`api/estop.py` 直接碰 `app.state.latch`（闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环）；`api/plugins.py` 只读 `ActionRegistry`（插件登记处自述）。运动前校验全走 `Controller.preflight_*` 那道门。
+**层级边界**（`app/tests/test_layer_boundaries.py` AST 锁住：executor 不 import 闩锁 / api 不直连 `safety.kinematics` / 应用不直接导入底层库——改坏会大声失败）
+- **例外（前门，不是越界）**：`api/gate.py`/`api/estop.py` 直接碰 `app.state.latch`（闩锁是横切件，急停必须从 HTTP 线程立刻吸合，不能排队进控制循环）。运动前校验全走 `Controller.preflight_*` 那道门。
 - `SafetyLatch` 是横切闩锁，**不是模式机的一态**——做成模式的话每加一个模式都要重审所有切换是否会绕过它。
 
 **命令缝**
@@ -72,11 +72,8 @@ FK / IK / 重力补偿 / 轨迹规划 / URDF 全部用 [`reBotArm_control_py`](h
 **接触观测默认关**
 只在 playing 采样。打开它是真机标定，不是代码补齐。
 
-**动作绝不跑在控制循环上**
-provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 秒），而控制循环正是撑住臂的东西。executor **投递 + 每 tick 轮询**，实际执行在 `app/backend/actions/runner.py` 的 worker 线程上。一条慢快门曾把 tick 间隔拖过 watchdog 宽限触发急停 —— 一台仅仅是慢的相机，看起来和丢了臂一模一样。
-
-**插件够不到臂**（`app/tests/test_layer_boundaries.py` 锁住 ActionContext 字段集——加 arm/latch/store 句柄测试就红）
-`ActionContext` 只给只读姿态。这和「闩锁不进 executor」是同一手法——让错的事**够不到**，而不只是禁止。要加运动能力给插件之前，先读 `docs/PLUGINS.md`「为什么触发源不是插件」。
+**查看器不能进入控制路径**
+MeshCat 用独立 worker 和有界最新值邮箱；内部服务只绑定回环，同源代理只读、不续控制看门狗。仿真 getter 不推进物理；外力只在未急停的 sim 示教中接受，限幅且自动过期。见 `test_runtime.py`、`test_viewer.py`。未来配件的隔离与取消语义先读 `docs/PLUGINS.md`，不得在控制循环执行第三方代码。
 
 **运动闸门**（`app/tests/test_motion_gate.py` 遍历路由表 + OpenAPI 交叉校验锁住）
 任何会让臂动的端点必须挂 `Depends(require_arm_available)`，或在 `NON_MOTION_ROUTES` 写明理由。**这是设计**：新增运动端点必须做显式决定。
@@ -89,7 +86,7 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 任何测试里不出现 `time.sleep`。时钟统一走可注入接口。执行器、闩锁、看门狗、浮动/锁定、串口客户端全部接受 `clock` 参数。
 
 **`0.0` 是假值**
-时间戳、角度、下标做判空一律用 `is None`，不要用真值判断。Agent 租约就栽在 `or now` 上：时间戳恰好为 0 时所有间隔算成零、租约永不过期。
+时间戳、角度、下标做判空一律用 `is None`，不要用真值判断；注入时钟的 0.0 也是有效时间。
 
 **界面的颜色是状态通道，不是调色板**
 底盘全灰阶。整套界面只有四个彩色，各自独占一个机器状态，**任何一个都不许拿去做强调、选中、品牌或装饰**：
@@ -99,7 +96,7 @@ provider 阻塞是常态（`Esp32Shutter.shoot()` 等相机 BLE 唤醒最多 6 �
 | `--stop` 红 | 已急停 |
 | `--motion` 琥珀 | 臂在动，别伸手 |
 | `--ready` 绿 | 到位、保持 |
-| `--expose` 白 | 快门触发 |
+| `--expose` 白 | 保留给未来快门触发；当前不使用 |
 
 需要强调时用灰阶层级、字重、尺寸 —— 颜色一旦兼职装饰，操作者就没法靠余光判断臂在不在动。红/琥珀是色盲易混对，所以两者永不同尺寸同位置出现，运动形态也不同（急停脉冲、运动扫描），并且永远配文字。
 
@@ -132,11 +129,11 @@ Ctrl+C / SIGTERM 不直接退：`Controller.park_home()` 把臂慢速开回零�
 
 `cd app && uv run pytest`。**只测外部可观察行为，不测实现细节** —— 测「急停后所有运动端点返 409」而不是「闩锁内部布尔值变了」。测试要在行为回归时失败，而不在重构时失败。
 
-不测：前端组件、`reBotArm_control_py` 本身、MotorBridge SDK、ESP32 固件、真实硬件在环。
+不测真实硬件在环、前端组件或 MotorBridge 内部实现。验证 SDK 应用集成、补丁可复现、MuJoCo 和 MeshCat 回环边界；测试不启动 backend.app。
 
-`SimArm` 和 `SimShutter` 是一等公民而非测试边角料 —— 它们同时是无硬件开发循环的基础设施，两者都支持注入失败。SimArm 不推注入时钟就不会动；测试里前进 `clock` 或调 `step()`，否则回放停在「未到位」。`./dev.sh sim` 用 `self_driven=True`。
+`SimArm` 是可注入时钟/故障的快速行为测试替身；前进 clock 或调 step 才会动。运行时 sim 必须用 SDK MuJoCo + 同一个 ArmSession，不得退回 SimArm。sim 数据和 tuning 固定放独立子目录，不读写真实标定。
 
-**前后端契约是机器校验的，不是手工对齐的。** `app/tests/test_contract.py` 把 `app/contract/cases/` 里每个 golden 用例在 FastAPI TestClient 和 mock（`app/frontend/mock/api.ts`）上各跑一遍、逐字段比对；normalize 用例同时跑 TS（`app/frontend/src/timeline/model.ts`）与 Python（`app/backend/sequences/normalize.py`）。改任一侧的响应形状或 normalize 规则，先跑它。归一化规则在 `app/tests/test_contract.py` 与 `app/frontend/contract/mock-driver.ts` 的 docstring 里各有一份 —— 这是刻意抄的两份（两种语言各执一端），改规则必须两侧同步。新增用例 = 往 `app/contract/cases/` 丢一个 JSON。本地缺 node 或 `app/frontend/node_modules` 时该文件整体 skip；CI（`.github/workflows/ci.yml`）两者都装。
+**前后端契约是机器校验的。** `test_contract.py` 的 REST 用例对比 `app/contract/expected/`；normalize 用例在 TS/Python 双端执行，canonicalization 规则与 `frontend/contract/normalize-driver.ts` 同步。Node 缺失只跳过跨语言用例，不跳 REST。API 变化后重新生成 `frontend/src/generated/api.ts`；`python -m backend.export_contract --check` 必须通过。CI 安装 physics extra，验证物理与查看器集成。
 
 **碰撞测试里的姿态不是编的** —— 是在 URDF 自己的限位盒里随机采样、留下 Pinocchio 判定相撞的构型。要加新的自碰撞用例就照这个方法找，别手写一个「看起来会撞」的姿态。
 
@@ -160,19 +157,19 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | [`CONTEXT.md`](./docs/CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
 | [`PROGRESS.md`](./docs/PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
-| [`README.md`](./README.md) / [`README.zh-CN.md`](./README.zh-CN.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改）。改时两份同步 | 要用这个服务时 |
+| [`README.md`](./README.md) | 用法、配置、部署、故障排查。项目名 **Teach & Repeat · 示教回放**（目录名不改） | 要用这个服务时 |
 | [`docs/HARDWARE_NOTES.md`](./docs/HARDWARE_NOTES.md) | 已验证 vs 待实测 | 碰硬件相关代码时 |
-| [`app/firmware/esp32-shutter/README.md`](./app/firmware/esp32-shutter/README.md) | 烧录、配对、协议表 | 碰快门链路时 |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | 设计模式（定位 / 概念 / 分层 / 词汇） | 改交互、加插件、谈产品定位时 |
 | [`docs/CODEMAP.md`](./docs/CODEMAP.md) | 逐行代码地图：哪个文件干什么 + 超前模块 parked 标 | 碰任何 backend 文件前 |
 | [`docs/TIMELINE.md`](./docs/TIMELINE.md) | 时间轴交互约束 | 动前端或编排交互时 |
-| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 动作插件 / 触发源 / 事件订阅 | 加动作、接外部触发时 |
+| [`docs/PLUGINS.md`](./docs/PLUGINS.md) | 未来能力接口（设计，不是已安装插件） | 加动作、接外部触发时 |
 | [`docs/rebot-policy.md`](./docs/rebot-policy.md) | 从一份主从 demo 抄来的**数值和为什么**，代码一行都不能抄 | 写限速 / 回放 / 过热保护时 |
 | [`docs/motion-validation.md`](./docs/motion-validation.md) | 物理验证 harness（opt-in MuJoCo）的用法与基线/修复证据 | 跑或改 physics 验证时 |
+| [`docs/motion-validation-plan.md`](./docs/motion-validation-plan.md) | **归档**：回放修复的历史方案，文首已标注被现行架构取代；留的是证据与硬件限制，不是现行设计 | 溯源当时为什么这么修时 |
 | [`docs/adr/0001-activity-vs-latch.md`](./docs/adr/0001-activity-vs-latch.md) | Activity 互斥、Latch 横切 | 改命令缝时 |
 
 `CLAUDE.md` 只是指向本文件的指针，不要往里写内容。启动命令以 `./dev.sh --help` 为准。
 
-**一次性过程物不进 `docs/`。** 对账快照、任务规格书这类做完即废的东西，销完即删——历史在 git log。`docs/` 里只留长期参考。
+**一次性过程物不进 `docs/`。** 对账快照、任务规格书这类做完即废的东西，销完即删——历史在 git log。确要保留的归档件必须在文首标注历史方案、并登记进上表标明归档，不冒充活参考。
 
 **每件事只写一处。** 硬件数值在 `HARDWARE_NOTES.md`、现状在 `PROGRESS.md`、用法在 `README.md`，本文件只放改代码的约定并链过去。新约定写成祈使句，证据链到测试名或 HARDWARE_NOTES，不要写成「本轮 / 已修」。往这里抄一份副本，副本就会先过时 —— 而这个仓库里过时得最要命的正是「为什么不能调那个看起来正确的方法」。

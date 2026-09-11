@@ -1,1 +1,5 @@
-{"name": "n01-empty", "kind": "normalize", "blocks": []}
+{
+  "name": "n01-empty",
+  "kind": "normalize",
+  "blocks": []
+}

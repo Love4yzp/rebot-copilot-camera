@@ -1,25 +1,4 @@
-"""The v2 data model: a pose library, and sequences of blocks with markers.
-
-This replaces the Routine model (an ordered list of waypoints with actions
-hanging off them). The rename is load-bearing, as it was last time. A Sequence
-is built from *blocks* — holds at a library pose, transitions between them —
-and the actions live in *markers* pinned to a time position inside their parent
-block. Actions moved off the block list on purpose: in a block model, moving a
-station means multi-selecting its actions too, and missing one detaches the
-shutter from the pose — a whole round of empty frames. A marker inside its
-parent block cannot be detached from it. Same technique as the ActionContext
-that carries no arm handle: make the wrong thing unreachable, not forbidden.
-
-The shapes here mirror ``frontend/src/types.ts`` and the mock
-(``frontend/mock/``) field for field — the React UI was built against the mock,
-and this backend implements that contract. When the two disagree, the mock
-wins.
-
-The workflow stays linear: arrive, hold, trigger, move on. Markers fire in
-order, a failed marker aborts the run, and a wait marker suspends it. No
-conditions, no branches — adding an action *kind* is a new provider, and that
-is the extension point that matters.
-"""
+"""Version 3: named poses, hold/transition blocks, and built-in waits."""
 
 from __future__ import annotations
 
@@ -32,14 +11,14 @@ from pydantic import BaseModel, Field, field_validator
 
 #: Bumped when a stored document's shape changes incompatibly. v1 was the
 #: waypoint-list Routine; it has been retired without migration.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Defaults for an auto-generated transition: slow and smooth beats fast.
 #: Mirror DEFAULT_TRANSITION_S / DEFAULT_EASING in frontend/src/timeline/model.ts.
 DEFAULT_TRANSITION_S = 2.0
 DEFAULT_EASING = "ease_in_out"
 
-#: The built-in marker kind. Anything else names an action provider.
+#: The sole supported marker kind.
 WAIT_KIND = "wait"
 
 Easing = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
@@ -87,14 +66,22 @@ class EventMarker(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
-    #: "wait" is built in; anything else is a provider id (e.g. "shutter").
-    kind: str = Field(min_length=1, max_length=64)
-    #: Provider params (shutter: count/interval_s/focus_first); wait has none.
+    #: Only wait is accepted in schema v3.
+    kind: Literal["wait"] = "wait"
+    #: Wait has no parameters.
     params: dict = Field(default_factory=dict)
-    at: float = Field(ge=0)
-    #: Estimated execution time in seconds, for the translucent span display.
-    #: Instant triggers ≈ 0.3; a wait marker is open-ended and carries 0.
-    estimate_s: float = Field(default=0.3, ge=0)
+    at: float = Field(ge=0, allow_inf_nan=False)
+
+    @field_validator("params")
+    @classmethod
+    def empty_wait_params(cls, value: dict) -> dict:
+        if value:
+            raise ValueError("wait has no parameters")
+        return value
+
+    #: Wait is open-ended; no artificial execution estimate.
+    #: The zero is a compatibility field within schema v3.
+    estimate_s: Literal[0] = 0
 
 
 class HoldBlock(BaseModel):
@@ -125,15 +112,13 @@ class TransitionBlock(BaseModel):
 
 #: Discriminated on ``type``, so a stored sequence round-trips back to the
 #: right class. Adding a block kind means adding it here.
-Block = Annotated[
-    Union[HoldBlock, TransitionBlock], Field(discriminator="type")
-]
+Block = Annotated[Union[HoldBlock, TransitionBlock], Field(discriminator="type")]
 
 
 class Sequence(BaseModel):
-    """An ordered list of blocks — one shoot."""
+    """An ordered list of blocks — one execution."""
 
-    schema_version: int = SCHEMA_VERSION
+    schema_version: Literal[3] = SCHEMA_VERSION
     id: str = Field(default_factory=_new_id)
     name: str = Field(min_length=1, max_length=200)
     created_at: float = Field(default_factory=time.time)

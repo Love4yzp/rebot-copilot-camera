@@ -1,38 +1,9 @@
-"""Sequence execution: walk the block list, one tick at a time.
+"""Tick-driven hold/transition/wait execution with injected clock and arm.
 
-Pure logic. The clock, the arm and the action runner are all injected, nothing
-here sleeps, and nothing imports FastAPI or a store — poses arrive already
-resolved. The control loop calls :meth:`tick` once per iteration and the
-executor advances at most one step; that keeps the whole photography workflow
-testable at whatever speed a fake clock runs at.
-
-The walk mirrors the mock's ``advancePlayback`` (frontend/mock/plugin.ts),
-which is the authoritative execution semantics, with the differences a real
-arm forces:
-
-- a transition is commanded as ``move_to(pose, duration)`` and confirmed by
-  arrival detection. Real arm and SimArm share a timed smoothstep ramp.
-- a hold's clock starts when the arm has arrived at the pose *and held
-  still* for a settle dwell, so a marker can never fire mid-approach — or
-  mid-settle — and photograph a moving scene. The mock starts the countdown
-  at block entry because its arm is never late.
-- a block can be stretched by reality: a marker still executing when the
-  commanded duration runs out holds the block open until it finishes. That is
-  TIMELINE rule 4 — the plan ruler is commanded time, execution is honest.
-
-Markers are *submitted*, not called. Providers block — a shutter waits on a
-camera waking over BLE — and this runs inside the control loop, which is what
-holds the arm up. So :mod:`backend.actions.runner` takes the work off-thread
-and the executor polls a job once per tick. Markers in a block run in order,
-one at a time: two jobs on one provider is two things driving the same
-hardware. Bursts are still paced here, so an emergency stop lands *between*
-frames.
-
-The emergency stop is *not* wired in here. The executor exposes :meth:`abort`
-and the control loop calls it when it sees the latch engaged. Keeping the latch
-out of this module means the executor cannot accidentally decide to resume, and
-resuming after a stop is precisely what must never happen: by then someone has
-usually moved the arm or taken the subject away.
+The controller owns the latch and aborts this executor on stop. Holds begin
+timing only after measured arrival and settling. Waits pin a measured pose;
+resume replans the remaining motion. No provider work or browser interpolation
+runs here. Poses arrive resolved; this module does not import stores or HTTP.
 """
 
 from __future__ import annotations
@@ -42,11 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from collections.abc import Callable, Mapping
 
-from pydantic import BaseModel
 
-from ..actions.base import ActionContext, ActionError, ActionProvider
-from ..actions.runner import ActionRunner, Job
-from ..actions.shoot import SHUTTER_PROVIDER_ID, ShutterParams
 from ..arm.base import ArmDriver, EASE_PEAK
 from ..arm.profile import PreparedMotion
 from ..sequences.models import (
@@ -85,10 +52,6 @@ DEFAULT_APPROACH_S = 2.0
 #: Generous, because a stall is reported as a fault and stops the shoot.
 ARRIVAL_TIMEOUT_FACTOR = 3.0
 ARRIVAL_TIMEOUT_FLOOR_S = 2.0
-#: Fixed per-marker timeout. A provider that does not answer in time fails the
-#: marker, and a failed marker aborts the run — the fixed policy (see module
-#: docstring and TIMELINE: a silently missed frame is found at review time).
-MARKER_TIMEOUT_S = 5.0
 #: "Arrived" means arrived *and still*. Position alone is not enough: a
 #: first-order approach crosses the eps window at speed, and a marker fired
 #: on that tick photographs a moving arm. During the settle dwell no joint
@@ -104,22 +67,6 @@ SETTLE_DRIFT_RAD = 0.003
 #: claimed, in seconds. Bounds the latent speed at any shot to drift/dwell
 #: (0.02 rad/s ≈ 1.1°/s — invisible on a sub-second exposure).
 SETTLE_MIN_S = 0.15
-
-
-@dataclass(frozen=True)
-class _Dispatch:
-    """One marker, resolved to something the runner can be handed.
-
-    ``repeat``/``interval_s`` stay out here rather than inside a provider so an
-    emergency stop lands *between* frames of a burst. A provider that looped
-    internally would be uninterruptible, and the whole burst would be shot
-    before anyone noticed the stop.
-    """
-
-    provider_id: str
-    params: BaseModel
-    repeat: int = 1
-    interval_s: float = 0.0
 
 
 class Phase(str, Enum):
@@ -171,14 +118,13 @@ class SequenceExecutor:
         sequence: Sequence,
         poses: Mapping[str, Pose],
         arm: ArmDriver,
-        actions: ActionRunner,
         clock: Callable[[], float],
         arrival_eps: float = DEFAULT_ARRIVAL_EPS,
         settle_s: float = SETTLE_MIN_S,
         settle_drift: float = SETTLE_DRIFT_RAD,
         first_approach_max_speed: float = FIRST_APPROACH_MAX_SPEED,
         #: Set for a single-pose goto: the sequence is one transition block and
-        #: this is where it goes. The mock's goto is exactly this shape.
+        #: this is where it goes. Goto uses the same executor shape.
         goto: Pose | None = None,
         on_progress: Callable[[Progress], None] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
@@ -187,7 +133,6 @@ class SequenceExecutor:
         self._sequence = sequence
         self._poses = poses
         self._arm = arm
-        self._actions = actions
         self._clock = clock
         self._arrival_eps = arrival_eps
         self._settle_s = settle_s
@@ -236,19 +181,6 @@ class SequenceExecutor:
         self._nominal_offset = 0.0
         self._wait_hold_target: dict[str, float] | None = None
 
-        #: The marker currently executing, the job it is running on a worker
-        #: thread, and the burst bookkeeping. A burst is paced here, one frame
-        #: per submit, so an abort lands between frames.
-        self._active_marker: EventMarker | None = None
-        self._job: Job | None = None
-        self._shots_fired = 0
-        self._repeat = 1
-        self._interval_s = 0.0
-        self._next_frame_at = 0.0
-        #: Which provider the in-flight job went to, for the event that reports
-        #: how it turned out — by then the dispatch has been consumed.
-        self._last_provider: str | None = None
-
     # ── state ────────────────────────────────────────────────────────────────
 
     @property
@@ -283,10 +215,7 @@ class SequenceExecutor:
         return self._error
 
     def progress(self) -> Progress:
-        approaching = (
-            self._phase is Phase.HOLD
-            and self._timing_started_at is None
-        )
+        approaching = self._phase is Phase.HOLD and self._timing_started_at is None
         return Progress(
             phase=self._phase or Phase.DONE,
             block_index=self._block_index,
@@ -327,23 +256,6 @@ class SequenceExecutor:
             self._on_event(name, data)
         except Exception:  # pragma: no cover — a sink must not break a sequence
             log.exception("event sink raised on %s", name)
-
-    def _context(self) -> ActionContext:
-        """What a provider is told. Note the absence of the arm.
-
-        The field names are the v1 ActionContext vocabulary — providers are
-        third-party code compiled against them, so the sequence/block rename
-        stops at this boundary.
-        """
-        pose = self._block_pose
-        return ActionContext(
-            routine_id=self._sequence.id,
-            routine_name=self._sequence.name,
-            waypoint_index=self._block_index,
-            waypoint_note=pose.name if pose is not None else "",
-            joints=dict(self._arm.read_state().positions),
-            emit=self._emit_event,
-        )
 
     # ── control ──────────────────────────────────────────────────────────────
 
@@ -386,9 +298,6 @@ class SequenceExecutor:
         """
         if self._phase is None or self.is_finished:
             return
-        if self._job is not None:
-            self._job.abandon()
-            self._job = None
         self._phase = Phase.ABORTED
         self._error = reason
         log.warning("sequence %s aborted: %s", self._sequence.id, reason)
@@ -407,7 +316,7 @@ class SequenceExecutor:
         """Continue past the wait marker the run is suspended on.
 
         The clock picks up at the marker's own time: the suspension is not
-        charged against the block, matching the mock, which clamps ``t`` to the
+        charged against the block; execution clamps ``t`` to the
         marker and counts on from there.
         """
         if self._phase is not Phase.WAIT:
@@ -466,7 +375,9 @@ class SequenceExecutor:
             self._motion_started_at = now
             self._move_duration_s = accepted
             self._transition_nominal_scale = remaining_nominal / accepted
-            self._arrival_deadline = now + max(ARRIVAL_TIMEOUT_FLOOR_S, accepted * ARRIVAL_TIMEOUT_FACTOR)
+            self._arrival_deadline = now + max(
+                ARRIVAL_TIMEOUT_FLOOR_S, accepted * ARRIVAL_TIMEOUT_FACTOR
+            )
             self._arrived = False
             self._settle_since = None
             self._settle_ref = None
@@ -483,10 +394,6 @@ class SequenceExecutor:
             self._arm.hold(self._wait_hold_target)
             return
 
-        self._poll_job()
-        if self.is_finished:
-            return
-        self._pace_burst()
         self._update_motion()
         if self.is_finished:
             return
@@ -501,9 +408,6 @@ class SequenceExecutor:
         block = self._sequence.blocks[self._block_index]
         self._fired = set()
         self._marker_cursor = 0
-        self._active_marker = None
-        self._job = None
-        self._shots_fired = 0
         self._arrived = False
         self._settle_since = None
         self._settle_ref = None
@@ -518,7 +422,7 @@ class SequenceExecutor:
             if pose is None:
                 # The API refuses unknown pose references at execute time, so
                 # reaching here means the pose was deleted mid-run. Say so
-                # rather than hang — the mock's "sequence disappeared mid-run".
+                # rather than hang with an unresolved destination.
                 self.abort(f"pose {block.pose_id!r} is gone mid-run")
                 return
             self._block_pose = pose
@@ -530,7 +434,8 @@ class SequenceExecutor:
                 self._timing_started_at = None
                 duration = self._move_duration(DEFAULT_APPROACH_S, pose.joints)
                 in_window = all(
-                    abs(self._arm.read_state().positions.get(name, 0.0) - value) <= self._arrival_eps
+                    abs(self._arm.read_state().positions.get(name, 0.0) - value)
+                    <= self._arrival_eps
                     for name, value in pose.joints.items()
                 )
                 if in_window:
@@ -561,8 +466,10 @@ class SequenceExecutor:
         # A caller-supplied plan already includes its speed limits and frozen
         # start. Reading a self-driven arm here would advance that reference
         # and invalidate the candidate before it can be committed.
-        duration = prepared.duration if prepared is not None else self._move_duration(
-            block.duration_s, target.joints
+        duration = (
+            prepared.duration
+            if prepared is not None
+            else self._move_duration(block.duration_s, target.joints)
         )
         accepted = self._start_move(target.joints, duration, prepared=prepared)
         if accepted is None:
@@ -765,10 +672,7 @@ class SequenceExecutor:
         """
         positions = self._arm.read_state().positions
         now = self._clock()
-        within = all(
-            abs(positions.get(n, 0.0) - q) <= self._arrival_eps
-            for n, q in target.items()
-        )
+        within = all(abs(positions.get(n, 0.0) - q) <= self._arrival_eps for n, q in target.items())
         if not within:
             self._settle_since = None
             self._settle_ref = None
@@ -795,68 +699,6 @@ class SequenceExecutor:
         seconds inside a transition)."""
         return marker.at if isinstance(block, HoldBlock) else marker.at * block.duration_s
 
-    def _burst_pending(self) -> bool:
-        return (
-            self._active_marker is not None
-            and self._job is None
-            and 0 < self._shots_fired < self._repeat
-        )
-
-    def _poll_job(self) -> None:
-        """Collect a finished job. Between submitting and resolving the
-        executor does nothing at all, and that is the point: the control loop
-        goes on ticking while a provider sits on a serial exchange."""
-        if self._job is None or not self._job.done:
-            return
-
-        job, self._job = self._job, None
-        marker = self._active_marker
-        if job.error is not None:
-            self._emit_event(
-                events.ACTION_FAILED,
-                {
-                    "provider": self._last_provider,
-                    "block_index": self._block_index,
-                    "marker_id": marker.id if marker else None,
-                    "error": str(job.error),
-                    "kind": type(job.error).__name__,
-                },
-            )
-            # The failure policy is fixed: abort. A silently missed frame is
-            # not noticed until the whole set is reviewed. There is no retry to
-            # downgrade — abort is exactly where v1's retryable=False downgrade
-            # landed, so a provider that declares itself unrepeatable gets the
-            # same treatment as everything else: it is never re-run.
-            where = f"block {self._block_index}, marker {marker.kind if marker else '?'}"
-            self.abort(f"{where} failed: {job.error}")
-            return
-
-        self._shots_fired += 1
-        self._emit_event(
-            events.ACTION_DONE,
-            {
-                "provider": self._last_provider,
-                "block_index": self._block_index,
-                "marker_id": marker.id if marker else None,
-                "frame": self._shots_fired,
-                "frames": self._repeat,
-            },
-        )
-        if self._shots_fired < self._repeat:
-            self._next_frame_at = self._clock() + self._interval_s
-            self._emit()
-            return
-        self._active_marker = None
-        self._emit()
-
-    def _pace_burst(self) -> None:
-        """Fire the next frame of a burst once the interval has elapsed."""
-        if not self._burst_pending():
-            return
-        if self._clock() < self._next_frame_at:
-            return
-        self._submit_marker_job()
-
     def _fire_due_markers(self) -> None:
         block = self._current_block()
         if block is None:
@@ -867,12 +709,6 @@ class SequenceExecutor:
         t = self._t_in_block()
         markers = block.markers
         while self._marker_cursor < len(markers):
-            # One marker at a time, in block order: two jobs on one provider is
-            # two things driving the same hardware. A later marker whose time
-            # passes while an earlier one runs fires when the earlier finishes —
-            # the block stretches, it does not overlap.
-            if self._job is not None or self._burst_pending():
-                return
             marker = markers[self._marker_cursor]
             if t < self._marker_time(block, marker):
                 return
@@ -885,78 +721,14 @@ class SequenceExecutor:
                 self._arm.hold(self._wait_hold_target)
                 self._emit()
                 return
-            self._begin_marker(marker)
-            if self.is_finished:
-                return
-
-    def _begin_marker(self, marker: EventMarker) -> None:
-        try:
-            dispatch = self._dispatch(marker)
-        except Exception as exc:
-            # Bad params on a stored marker. The API validates them on the way
-            # in, so reaching here means the sequence predates the provider or
-            # the provider changed its model under it.
-            self.abort(
-                f"block {self._block_index}, marker {marker.kind} could not start: {exc}"
-            )
+            self.abort(f"unsupported marker {marker.kind!r}")
             return
-        self._active_marker = marker
-        self._repeat = dispatch.repeat
-        self._interval_s = dispatch.interval_s
-        self._shots_fired = 0
-        self._submit_marker_job()
-
-    def _submit_marker_job(self) -> None:
-        marker = self._active_marker
-        if marker is None:  # pragma: no cover — guarded by every caller
-            return
-        provider = self._actions.provider(marker.kind)
-        if provider is None:  # pragma: no cover — dispatch already checked
-            self.abort(f"no provider {marker.kind!r} is installed")
-            return
-        params = provider.params_model.model_validate(marker.params)
-        self._emit_event(
-            events.ACTION_STARTED,
-            {
-                "provider": marker.kind,
-                "block_index": self._block_index,
-                "marker_id": marker.id,
-                "frame": self._shots_fired + 1,
-                "frames": self._repeat,
-            },
-        )
-        self._last_provider = marker.kind
-        self._job = self._actions.submit(
-            marker.kind, params, self._context(), MARKER_TIMEOUT_S
-        )
-
-    def _dispatch(self, marker: EventMarker) -> _Dispatch:
-        """Turn a stored marker into a provider call. Raises on bad params.
-
-        Validated here as well as at the API boundary: a sequence can outlive
-        the plugin version it was written against.
-        """
-        provider: ActionProvider | None = self._actions.provider(marker.kind)
-        if provider is None:
-            raise ActionError(f"no provider {marker.kind!r} is installed")
-        params = provider.params_model.model_validate(marker.params)
-        repeat, interval_s = 1, 0.0
-        if marker.kind == SHUTTER_PROVIDER_ID and isinstance(params, ShutterParams):
-            # The shutter's burst pacing (count/interval_s) is host policy, not
-            # provider behaviour — one frame per submit, so an abort lands
-            # between frames.
-            repeat, interval_s = params.count, params.interval_s
-        return _Dispatch(marker.kind, params, repeat, interval_s)
 
     # ── block completion ─────────────────────────────────────────────────────
 
     def _maybe_complete_block(self) -> None:
         block = self._current_block()
         if block is None:
-            return
-        # A marker still executing holds the block open past its commanded
-        # duration — the block is stretched by reality, not silently truncated.
-        if self._job is not None or self._active_marker is not None:
             return
         if isinstance(block, HoldBlock):
             if self._timing_started_at is None:

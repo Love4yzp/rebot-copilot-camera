@@ -1,13 +1,7 @@
-"""Normalization and plan-ruler time: the pure logic of the block/marker world.
+"""Pure sequence normalization, mirrored by the TypeScript structural model.
 
-A rule-for-rule Python port of ``frontend/src/timeline/model.ts``, which is the
-authoritative implementation — the React UI and the dev mock share it, and this
-module exists so the backend applies the *same* physical rules when a sequence
-is stored. Everything here is a pure function.
-
-This is how "transitions are automatic and undeletable" is implemented: not as
-an editing restriction but as a normalization that runs after every change (in
-the UI before PATCH, and again here on write).
+Golden inputs verify parity. The API always normalizes before writing;
+there is no browser execution engine or mock backend.
 """
 
 from __future__ import annotations

@@ -19,7 +19,6 @@ interface Props {
   /** Rename answers with the updated sequence; the workspace swaps it in. */
   applySequence: (updated: Sequence) => void;
   selectSequence: (id: string | null) => void;
-  stopPreview: () => void;
   /** From-template creation hands off to the station wizard. */
   onWizard: (tpl: SeqTemplate) => void;
 }
@@ -30,7 +29,7 @@ interface Props {
  * mini-application; the workspace opens a dialog through the handle.
  */
 export const SequenceDialogs = forwardRef<SequenceDialogsHandle, Props>(function SequenceDialogs(
-  { sequence, templates, attempt, show, refreshLibrary, applySequence, selectSequence, stopPreview, onWizard },
+  { sequence, templates, attempt, show, refreshLibrary, applySequence, selectSequence, onWizard },
   ref,
 ) {
   const [dialog, setDialog] = useState<SequenceDialogKind | null>(null);
@@ -57,7 +56,6 @@ export const SequenceDialogs = forwardRef<SequenceDialogsHandle, Props>(function
         const tpl = templates.find((t) => t.id === createTemplateId);
         if (tpl) {
           // 手上在臂上时监视器不该播模拟画面。
-          stopPreview();
           onWizard(tpl);
           setDialog(null);
           return;

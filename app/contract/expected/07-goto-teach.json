@@ -1,0 +1,120 @@
+[
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:1>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0,
+        "joint2": 0.35,
+        "joint3": 0.3,
+        "joint4": 0,
+        "joint5": 0.1,
+        "joint6": 0
+      },
+      "name": "正面",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 404,
+    "body": {
+      "detail": "no pose 'doesnotexist'"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "playback",
+      "mode": "playback",
+      "playback": {
+        "approaching": false,
+        "block_index": 0,
+        "block_total": 1,
+        "finished": false,
+        "phase": "transition",
+        "sequence_id": "<id:1>",
+        "sequence_name": "位姿 · 正面",
+        "t_in_block": 0
+      },
+      "playing": true,
+      "rate_hz": "<volatile>",
+      "source": "ui",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "playback",
+      "mode": "playback",
+      "playback": {
+        "approaching": false,
+        "block_index": 0,
+        "block_total": 1,
+        "finished": false,
+        "phase": "transition",
+        "sequence_id": "<id:1>",
+        "sequence_name": "位姿 · 正面",
+        "t_in_block": 0
+      },
+      "playing": true,
+      "rate_hz": "<volatile>",
+      "source": "ui",
+      "teaching": false
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": "cannot teach while a sequence is executing"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "teach",
+      "mode": "teach",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": true
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "detail": "cannot move while teaching"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  }
+]
