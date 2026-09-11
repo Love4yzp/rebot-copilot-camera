@@ -1,5 +1,7 @@
 # Playback control and optional physics validation
 
+> Historical plan for offline motion validation. The current runtime architecture supersedes its lightweight-sim/default-dependency constraints; see [ARCHITECTURE](ARCHITECTURE.md). Preserve the evidence and hardware restrictions.
+
 ## Objective
 
 Reproduce playback discontinuities through the production command path without

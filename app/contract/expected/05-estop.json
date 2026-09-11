@@ -1,0 +1,78 @@
+[
+  {
+    "status": 200,
+    "body": {
+      "latched": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": false,
+      "latched": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": true,
+      "engaged_at": "<ts>",
+      "latched": true,
+      "reason": "operator engaged emergency stop",
+      "source": "api"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": false,
+      "engaged_at": "<ts>",
+      "freeze_pose": {
+        "gripper": 0,
+        "joint1": 0,
+        "joint2": 0,
+        "joint3": 0,
+        "joint4": 0,
+        "joint5": 0,
+        "joint6": 0
+      },
+      "latched": true,
+      "reason": "operator engaged emergency stop",
+      "source": "api"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "estop",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": true,
+      "latched": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "changed": false,
+      "latched": false
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "activity": "idle",
+      "mode": "idle",
+      "playing": false,
+      "rate_hz": "<volatile>",
+      "teaching": false
+    }
+  }
+]

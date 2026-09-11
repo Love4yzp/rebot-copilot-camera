@@ -7,27 +7,68 @@
       "path": "/api/poses",
       "body": {
         "name": "A",
-        "joints": {"joint1": 0.0, "joint2": 0.35, "joint3": 0.3, "joint4": 0.0, "joint5": 0.1, "joint6": 0.0, "gripper": 0.02}
+        "joints": {
+          "joint1": 0,
+          "joint2": 0.35,
+          "joint3": 0.3,
+          "joint4": 0,
+          "joint5": 0.1,
+          "joint6": 0,
+          "gripper": 0.02
+        }
       },
-      "save": {"a": "id"}
+      "save": {
+        "a": "id"
+      }
     },
     {
       "method": "POST",
       "path": "/api/poses",
       "body": {
         "name": "B",
-        "joints": {"joint1": 0.8, "joint2": 0.45, "joint3": 0.5, "joint4": 0.0, "joint5": 0.25, "joint6": 0.2, "gripper": 0.02}
+        "joints": {
+          "joint1": 0.8,
+          "joint2": 0.45,
+          "joint3": 0.5,
+          "joint4": 0,
+          "joint5": 0.25,
+          "joint6": 0.2,
+          "gripper": 0.02
+        }
       },
-      "save": {"b": "id"}
+      "save": {
+        "b": "id"
+      }
     },
-    {"method": "POST", "path": "/api/sequences", "body": {"name": "归一化"}, "save": {"seq": "id"}},
+    {
+      "method": "POST",
+      "path": "/api/sequences",
+      "body": {
+        "name": "归一化"
+      },
+      "save": {
+        "seq": "id"
+      }
+    },
     {
       "method": "PATCH",
       "path": "/api/sequences/${seq}",
       "body": {
         "blocks": [
-          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []},
-          {"type": "hold", "id": "aaaa00000002", "pose_id": "${a}", "duration_s": 1.0, "markers": []}
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3,
+            "markers": []
+          },
+          {
+            "type": "hold",
+            "id": "aaaa00000002",
+            "pose_id": "${a}",
+            "duration_s": 1,
+            "markers": []
+          }
         ]
       }
     },
@@ -36,9 +77,27 @@
       "path": "/api/sequences/${seq}",
       "body": {
         "blocks": [
-          {"type": "transition", "id": "bbbb00000001", "duration_s": 2.0, "easing": "ease_in_out", "markers": []},
-          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []},
-          {"type": "transition", "id": "bbbb00000002", "duration_s": 4.0, "easing": "linear", "markers": []}
+          {
+            "type": "transition",
+            "id": "bbbb00000001",
+            "duration_s": 2,
+            "easing": "ease_in_out",
+            "markers": []
+          },
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3,
+            "markers": []
+          },
+          {
+            "type": "transition",
+            "id": "bbbb00000002",
+            "duration_s": 4,
+            "easing": "linear",
+            "markers": []
+          }
         ]
       }
     },
@@ -47,10 +106,34 @@
       "path": "/api/sequences/${seq}",
       "body": {
         "blocks": [
-          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []},
-          {"type": "transition", "id": "bbbb00000003", "duration_s": 7.0, "easing": "ease_in", "markers": []},
-          {"type": "hold", "id": "aaaa00000002", "pose_id": "${b}", "duration_s": 5.0, "markers": []},
-          {"type": "hold", "id": "aaaa00000004", "pose_id": "${a}", "duration_s": 2.0, "markers": []}
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3,
+            "markers": []
+          },
+          {
+            "type": "transition",
+            "id": "bbbb00000003",
+            "duration_s": 7,
+            "easing": "ease_in",
+            "markers": []
+          },
+          {
+            "type": "hold",
+            "id": "aaaa00000002",
+            "pose_id": "${b}",
+            "duration_s": 5,
+            "markers": []
+          },
+          {
+            "type": "hold",
+            "id": "aaaa00000004",
+            "pose_id": "${a}",
+            "duration_s": 2,
+            "markers": []
+          }
         ]
       }
     },
@@ -59,8 +142,20 @@
       "path": "/api/sequences/${seq}",
       "body": {
         "blocks": [
-          {"type": "hold", "id": "aaaa00000001", "pose_id": "${a}", "duration_s": 3.0, "markers": []},
-          {"type": "hold", "id": "aaaa00000002", "pose_id": "${b}", "duration_s": 5.0, "markers": []}
+          {
+            "type": "hold",
+            "id": "aaaa00000001",
+            "pose_id": "${a}",
+            "duration_s": 3,
+            "markers": []
+          },
+          {
+            "type": "hold",
+            "id": "aaaa00000002",
+            "pose_id": "${b}",
+            "duration_s": 5,
+            "markers": []
+          }
         ]
       }
     }

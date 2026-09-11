@@ -1,42 +1,8 @@
-"""Golden contract tests: one set of case files, two implementations.
+"""Backend REST goldens and TypeScript/Python normalization parity.
 
-The case files in ``contract/cases/`` are the handoff surface between the two
-people who can drift apart: the one editing the FastAPI backend and the one
-editing the dev mock (``frontend/mock/``). Every case runs twice — once here
-against the TestClient, once in Node against the mock's ``handleApi`` (and
-against the TS ``normalize`` for the pure-logic cases) — and the two canonical
-transcripts are diffed entry by entry. A shape or semantic drift on either
-side fails this suite, in CI, before it reaches a user.
-
-The canonicalization rules below are the contract's portability rules; keep
-them in sync with their TS mirror in ``frontend/contract/mock-driver.ts``:
-
-- a null-valued key is the same as an absent key (FastAPI serializes optional
-  fields as null; the mock omits them)
-- any 12-hex run inside a string is an id: replaced by ``<id:N>`` in
-  first-appearance order, so "the same id in two places" is still checked —
-  including ids embedded in messages (``no pose 'abc123…'``)
-- a number ≥ 1e9 is a unix timestamp: replaced by ``<ts>``
-- ``VOLATILE_KEYS`` name values neither side can control (measured rate,
-  firmware banner): replaced by ``<volatile>``
-
-Dict keys are traversed in sorted order so the id numbering does not depend on
-either side's insertion order.
-
-Deliberately out of scope (the case files never ask for them):
-
-- websocket frames, ``/api/health``, ``/api/logs`` — mock stand-ins whose
-  content differs by design
-- FastAPI's 422 validation envelope — the mock has no validator to mirror it
-  against, so invalid-shape requests are not contract cases
-- mid-run playback progress: the mock applies control-loop effects inside the
-  request handler while the real loop applies them on the next tick, so a run
-  is only ever observed at rest points (started, aborted, stopped)
-
-A case may set ``"seed": true`` to run against the first-boot demo library:
-both sides plant the same demo (``seed_demo_if_empty`` on the backend,
-``createState({seed: true})`` on the mock) so the seeded poses, sequence and
-template are compared field by field like everything else.
+Canonicalization: sorted keys; null omitted; 12-hex IDs numbered by first
+appearance; epoch timestamps scrubbed; rate/firmware/uptime volatile.
+The same rules live in frontend/contract/normalize-driver.ts.
 """
 
 from __future__ import annotations
@@ -51,19 +17,18 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
-from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
+
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.safety import SafetyLatch
 from backend.sequences import Block, PoseStore, SequenceStore, TemplateStore, normalize
-from backend.sequences.seed_demo import seed_demo_if_empty
-from backend.shutter import SimShutter
+
 from backend.tuning import TuningStore
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_DIR = ROOT / "contract" / "cases"
-RUNNER = ROOT / "frontend" / "contract" / "run-mock.mjs"
+RUNNER = ROOT / "frontend" / "contract" / "run-normalize.mjs"
 
 #: The full hardware joint set, so URDF limit/collision validation sees the
 #: same names an operator's poses carry.
@@ -114,6 +79,7 @@ def canon(value, ids: dict[str, int]):
 
 def substitute(value, variables: dict[str, object]):
     if isinstance(value, str):
+
         def repl(match: re.Match) -> str:
             name = match.group(1)
             if name not in variables:
@@ -141,17 +107,11 @@ def rig(tmp_path: Path):
     app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
     app.state.tuning_store = TuningStore(tmp_path / "tuning.yaml")
-    shutter = SimShutter()
-    runner = InlineRunner()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
     app.state.controller = Controller(
         arm=arm,
-        shutter=shutter,
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=clock,
-        actions=runner,
         tuning=app.state.tuning_store.load(),
     )
     return TestClient(app), app.state.controller
@@ -165,15 +125,6 @@ def run_case_on_backend(rig, case: dict) -> list[dict]:
         blocks = TypeAdapter(list[Block]).validate_python(case["blocks"])
         out = normalize(blocks)
         return [{"blocks": canon([b.model_dump(mode="json") for b in out], ids)}]
-
-    if case.get("seed"):
-        # The mock side passes seed:true to createState; this is the backend's
-        # same half — the first-boot demo into the empty stores.
-        seed_demo_if_empty(
-            app.state.pose_store,
-            app.state.sequence_store,
-            app.state.template_store,
-        )
 
     variables: dict[str, object] = {}
     entries = []
@@ -205,7 +156,7 @@ def run_case_on_backend(rig, case: dict) -> list[dict]:
 
 
 @pytest.fixture(scope="session")
-def mock_transcript() -> dict[str, list[dict]]:
+def normalize_transcript() -> dict[str, list[dict]]:
     """The mock's half of every case, computed once in Node."""
     node = shutil.which("node")
     if node is None:
@@ -228,15 +179,11 @@ def case_files() -> list[Path]:
 
 
 @pytest.mark.parametrize("case_file", case_files(), ids=lambda p: p.stem)
-def test_golden_contract(rig, mock_transcript, case_file: Path):
+def test_golden_contract(rig, request, case_file: Path):
     case = json.loads(case_file.read_text())
-    backend_entries = run_case_on_backend(rig, case)
-    mock_entries = mock_transcript[case["name"]]
-    if backend_entries != mock_entries:
-        backend_json = json.dumps(backend_entries, ensure_ascii=False, indent=2, sort_keys=True)
-        mock_json = json.dumps(mock_entries, ensure_ascii=False, indent=2, sort_keys=True)
-        pytest.fail(
-            f"contract drift in case {case['name']!r} "
-            f"(backend run on TestClient, mock run on frontend/mock):\n"
-            f"--- backend ---\n{backend_json}\n--- mock ---\n{mock_json}"
-        )
+    actual = run_case_on_backend(rig, case)
+    if case["kind"] == "normalize":
+        expected = request.getfixturevalue("normalize_transcript")[case["name"]]
+    else:
+        expected = json.loads((ROOT / "contract" / "expected" / case_file.name).read_text())
+    assert actual == expected

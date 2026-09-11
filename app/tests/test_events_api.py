@@ -11,13 +11,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
+
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, events
 from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import LatchSource, SafetyLatch
-from backend.shutter import SimShutter, ShutterTimeout
+
 
 JOINTS = ("joint1", "joint2")
 
@@ -35,23 +35,18 @@ def rig(tmp_path: Path):
     clock = FakeClock()
     arm = SimArm(JOINTS, clock=clock, tau=0.05)
     arm.connect()
-    shutter = SimShutter()
-    runner = InlineRunner()
+    shutter = None
 
     app.state.latch = SafetyLatch(clock=clock)
     app.state.pose_store = PoseStore(tmp_path / "poses")
     app.state.sequence_store = SequenceStore(tmp_path / "sequences")
     app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
     app.state.controller = Controller(
         arm=arm,
-        shutter=shutter,
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=clock,
-        actions=runner,
     )
 
     seen: list[dict] = []
@@ -76,17 +71,28 @@ def names(seen) -> list[str]:
 
 def station(client: TestClient, name: str, markers=()) -> tuple[str, str]:
     """A pose plus a one-station sequence with the given markers on its hold."""
-    pose_id = client.post("/api/poses", json={
-        "name": name, "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    pose_id = client.post(
+        "/api/poses", json={"name": name, "joints": {"joint1": 0.2, "joint2": 0.0}}
+    ).json()["id"]
     sid = client.post("/api/sequences", json={"name": "events"}).json()["id"]
-    client.patch(f"/api/sequences/{sid}", json={"blocks": [
-        {"type": "hold", "pose_id": pose_id, "duration_s": 1.0, "markers": list(markers)}]})
+    client.patch(
+        f"/api/sequences/{sid}",
+        json={
+            "blocks": [
+                {"type": "hold", "pose_id": pose_id, "duration_s": 1.0, "markers": list(markers)}
+            ]
+        },
+    )
     return sid, pose_id
 
 
 def shutter_marker(at: float, **params) -> dict:
-    return {"kind": "shutter", "params": {"count": 1, "interval_s": 0.0,
-            "focus_first": True, **params}, "at": at, "estimate_s": 0.3}
+    return {
+        "kind": "shutter",
+        "params": {"count": 1, "interval_s": 0.0, "focus_first": True, **params},
+        "at": at,
+        "estimate_s": 0.3,
+    }
 
 
 def run(controller, arm, clock, steps: int = 5000) -> None:
@@ -101,9 +107,9 @@ def run(controller, arm, clock, steps: int = 5000) -> None:
 # ── what gets reported ───────────────────────────────────────────────────────
 
 
-def test_a_run_reports_arrival_and_each_action(rig):
+def test_a_run_reports_arrival_and_completion(rig):
     client, controller, arm, clock, seen, _ = rig
-    sid, _ = station(client, "正面", [shutter_marker(0.2, count=2, interval_s=0.0)])
+    sid, _ = station(client, "正面", [])
     client.post(f"/api/sequences/{sid}/execute")
     run(controller, arm, clock)
 
@@ -113,31 +119,12 @@ def test_a_run_reports_arrival_and_each_action(rig):
     assert host == [
         events.SEQUENCE_STARTED,
         events.POSE_ARRIVED,
-        events.ACTION_STARTED,
-        events.ACTION_DONE,
-        events.ACTION_STARTED,
-        events.ACTION_DONE,
         events.SEQUENCE_DONE,
     ]
 
     arrived = seen[1]
     assert arrived["data"]["pose_name"] == "正面", "the operator's name for it, not an index"
     assert arrived["data"]["sequence_id"] == sid
-    assert [e["data"]["frame"] for e in seen if e["event"] == events.ACTION_DONE] == [1, 2]
-
-
-def test_a_failed_action_is_reported_with_what_went_wrong(rig):
-    client, controller, arm, clock, seen, shutter = rig
-    sid, _ = station(client, "正面", [shutter_marker(0.2)])
-    shutter.script([ShutterTimeout("camera asleep")])
-    client.post(f"/api/sequences/{sid}/execute")
-    run(controller, arm, clock)
-
-    failed = next(e for e in seen if e["event"] == events.ACTION_FAILED)
-    assert failed["data"]["provider"] == "shutter"
-    assert "camera asleep" in failed["data"]["error"]
-    assert failed["data"]["kind"] == "ShutterTimeout"
-    assert events.SEQUENCE_ABORTED in names(seen)
 
 
 def test_the_stop_is_reported_on_the_transition_not_every_tick(rig):
@@ -165,17 +152,6 @@ def test_capturing_a_pose_by_hand_is_reported(rig):
     captured = next(e for e in seen if e["event"] == events.TEACH_CAPTURED)
     assert captured["data"]["pose_name"] == "侧面"
     assert captured["data"]["pose_id"]
-
-
-def test_a_provider_can_report_its_own_facts(rig):
-    """ctx.emit is how a plugin answers "tell me when you did the thing"
-    without the host having to know what the thing was."""
-    client, controller, arm, clock, seen, _ = rig
-    sid, _ = station(client, "正面", [shutter_marker(0.2)])
-    client.post(f"/api/sequences/{sid}/execute")
-    run(controller, arm, clock)
-
-    assert "shutter.fired" in names(seen)
 
 
 # ── the socket ───────────────────────────────────────────────────────────────
@@ -238,8 +214,9 @@ def test_a_trigger_says_who_it_was(rig):
     """On a machine several things can trigger — a card, an agent, a foot
     switch, a script — "why did the arm move" is the first question asked."""
     client, controller, *_ = rig
-    pid = client.post("/api/poses", json={
-        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    pid = client.post(
+        "/api/poses", json={"name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}
+    ).json()["id"]
 
     r = client.post(f"/api/poses/{pid}/goto", json={"source": "footswitch"})
 
@@ -250,8 +227,9 @@ def test_a_trigger_says_who_it_was(rig):
 
 def test_the_source_defaults_to_the_ui_and_grants_nothing(rig):
     client, controller, *_ = rig
-    pid = client.post("/api/poses", json={
-        "name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}).json()["id"]
+    pid = client.post(
+        "/api/poses", json={"name": "p", "joints": {"joint1": 0.2, "joint2": 0.0}}
+    ).json()["id"]
     sid, _ = station(client, "正面")
     client.post("/api/estop", json={"reason": "stop"})
 

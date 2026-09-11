@@ -1,0 +1,282 @@
+[
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:1>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0,
+        "joint2": 0.35,
+        "joint3": 0.3,
+        "joint4": 0,
+        "joint5": 0.1,
+        "joint6": 0
+      },
+      "name": "A",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:2>",
+      "joints": {
+        "gripper": 0.02,
+        "joint1": 0.8,
+        "joint2": 0.45,
+        "joint3": 0.5,
+        "joint4": 0,
+        "joint5": 0.25,
+        "joint6": 0.2
+      },
+      "name": "B",
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "blocks": [],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "模板源",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:4>",
+          "markers": [
+            {
+              "at": 2,
+              "estimate_s": 0,
+              "id": "<id:5>",
+              "kind": "wait",
+              "params": {}
+            }
+          ],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 2,
+          "easing": "ease_in_out",
+          "id": "<id:6>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:7>",
+          "markers": [],
+          "pose_id": "<id:2>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:3>",
+      "name": "模板源",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "blocks": [],
+      "created_at": "<ts>",
+      "id": "<id:8>",
+      "name": "空壳",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "detail": "a sequence with no stations cannot be a template"
+    }
+  },
+  {
+    "status": 404,
+    "body": {
+      "detail": "no sequence 'doesnotexist'"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "created_at": "<ts>",
+      "id": "<id:9>",
+      "name": "双方位",
+      "recipe": [
+        {
+          "duration_s": 3,
+          "id": "<id:10>",
+          "markers": [
+            {
+              "at": 2,
+              "estimate_s": 0,
+              "id": "<id:11>",
+              "kind": "wait",
+              "params": {}
+            }
+          ],
+          "pose_id": "slot:1",
+          "type": "hold"
+        },
+        {
+          "duration_s": 2,
+          "easing": "ease_in_out",
+          "id": "<id:12>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:13>",
+          "markers": [],
+          "pose_id": "slot:2",
+          "type": "hold"
+        }
+      ],
+      "station_count": 2
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "detail": "name must be at least 1 character"
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "detail": "pose_ids must list 2 poses, one per slot"
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "detail": "unknown pose 'doesnotexist'"
+    }
+  },
+  {
+    "status": 201,
+    "body": {
+      "blocks": [
+        {
+          "duration_s": 3,
+          "id": "<id:14>",
+          "markers": [
+            {
+              "at": 2,
+              "estimate_s": 0,
+              "id": "<id:15>",
+              "kind": "wait",
+              "params": {}
+            }
+          ],
+          "pose_id": "<id:1>",
+          "type": "hold"
+        },
+        {
+          "duration_s": 2,
+          "easing": "ease_in_out",
+          "id": "<id:16>",
+          "markers": [],
+          "type": "transition"
+        },
+        {
+          "duration_s": 5,
+          "id": "<id:17>",
+          "markers": [],
+          "pose_id": "<id:2>",
+          "type": "hold"
+        }
+      ],
+      "created_at": "<ts>",
+      "id": "<id:18>",
+      "name": "实例",
+      "schema_version": 3,
+      "updated_at": "<ts>"
+    }
+  },
+  {
+    "status": 200,
+    "body": [
+      {
+        "created_at": "<ts>",
+        "id": "<id:9>",
+        "name": "双方位",
+        "recipe": [
+          {
+            "duration_s": 3,
+            "id": "<id:10>",
+            "markers": [
+              {
+                "at": 2,
+                "estimate_s": 0,
+                "id": "<id:11>",
+                "kind": "wait",
+                "params": {}
+              }
+            ],
+            "pose_id": "slot:1",
+            "type": "hold"
+          },
+          {
+            "duration_s": 2,
+            "easing": "ease_in_out",
+            "id": "<id:12>",
+            "markers": [],
+            "type": "transition"
+          },
+          {
+            "duration_s": 5,
+            "id": "<id:13>",
+            "markers": [],
+            "pose_id": "slot:2",
+            "type": "hold"
+          }
+        ],
+        "station_count": 2
+      }
+    ]
+  },
+  {
+    "status": 200,
+    "body": {
+      "count": 2,
+      "links": [
+        {
+          "block_count": 1,
+          "sequence_id": "<id:3>",
+          "sequence_name": "模板源"
+        },
+        {
+          "block_count": 1,
+          "sequence_id": "<id:18>",
+          "sequence_name": "实例"
+        }
+      ],
+      "pose_id": "<id:1>"
+    }
+  },
+  {
+    "status": 204
+  },
+  {
+    "status": 404,
+    "body": {
+      "detail": "no template '<id:9>'"
+    }
+  }
+]

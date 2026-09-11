@@ -22,7 +22,7 @@ A teach-and-repeat platform: named poses, sequences of holds and transitions, an
   - **禁忌 (Avoid)**: 步骤、环节、工序、节点。
 
 - **Hold Block（保持块）**
-  - **定义**：时间轴数据模型中的静止区间：保持目标位姿力矩、等待站内动作执行完毕。
+  - **定义**：时间轴数据模型中的静止区间：保持目标位姿力矩、从到位停稳开始计时，支持内建等待。
   - **English**: A block on the timeline where the arm holds torque at a target pose.
   - **禁忌 (Avoid)**: 停顿块、停留帧、固定段。
 
@@ -32,22 +32,20 @@ A teach-and-repeat platform: named poses, sequences of holds and transitions, an
   - **禁忌 (Avoid)**: 转场、路径块、移动段。
 
 - **Sequence（序列）**
-  - **定义**：由保持块与过渡块交替排列、并在块内钉有动作标记的一整条时间轴运动流程。
+  - **定义**：由保持块与过渡块交替排列、并在块内钉有等待标记的一整条时间轴运动流程。
   - **English**: An ordered timeline of holds and transitions, with markers pinned inside blocks.
   - **禁忌 (Avoid)**: 播放列表 (playlist)、程序 (program)、任务 (routine)、脚本 (script)。
 
 - **Template（模板）**
-  - **定义**：序列的结构配方（站位顺序、时长、动作标记与过渡节奏），**不保存具体关节角度**。使用时逐站录制或选定位姿，实例化后脱钩独立。
+  - **定义**：序列的结构配方（站位顺序、时长、等待标记与过渡节奏），**不保存具体关节角度**。使用时逐站录制或选定位姿，实例化后脱钩独立。
   - **English**: A sequence recipe with placeholder slots (no joint angles). Instantiated via a guided walk to bind real poses.
   - **禁忌 (Avoid)**: 场景、模式、预设。
 
-- **Action（动作）**
-  - **定义**：机械臂停稳后在末端触发的操作（如按快门、旋转转台、延时等待）。
-  - **English**: What the end-effector or external accessory does when triggered (shutter, turntable, wait).
-  - **禁忌 (Avoid)**: 特效、事件步骤、脚本步骤。
+- **Capability（能力，未来设计）**
+  - 末端配件可提供的操作；当前没有动作运行时，契约见 PLUGINS。
 
-- **Marker / Event Marker（动作标记 / 等待标记）**
-  - **定义**：钉在保持块或过渡块内部具体时间位置的标记，随父块一起移动与修剪。
+- **Marker / Event Marker（等待标记）**
+  - **定义**：当前只支持 wait；钉在保持块秒偏移或过渡块比例处，挂起并保持到显式继续。
   - **English**: An event pinned to an offset inside a block, moving and trimming with its parent.
   - **禁忌 (Avoid)**: 钉子、事件点、节点。
 
@@ -81,14 +79,13 @@ A teach-and-repeat platform: named poses, sequences of holds and transitions, an
   - **禁忌 (Avoid)**: 导航、单点运行、把 Goto 当作独立于 Play 的第二套运动系统。
 
 - **Play / Execute（执行）**
-  - **定义**：驱动真实机械臂按照已编排的序列物理走完全程。独占执行，运行中拒绝第二次执行指令。
+  - **定义**：驱动当前实例的机械臂（真实或 MuJoCo）按照已编排的序列物理走完全程。独占执行，运行中拒绝第二次执行指令。
   - **English**: Walk a stored sequence on the physical arm.
   - **禁忌 (Avoid)**: **控臂严禁用「播放」**（容易误导用户以为只是屏幕播动画，引发安全事故；界面一律用「执行（臂会动）」）。
 
-- **Preview（预演）**
-  - **定义**：仅在 3D 监视器中模拟走完全程，**机械臂物理静止不动**，界面全灰阶。
-  - **English**: Walk the plan ruler in the 3D monitor without moving the physical arm.
-  - **禁忌 (Avoid)**: 试跑、虚拟播放、与「执行」混淆。
+- **Simulation（物理仿真）**
+  - **定义**：独立 sim 运行实例的 MuJoCo 被控对象，接收同一 MIT 会话命令，输出模型反馈。不是真实重力测量或浏览器预演。
+  - **边界**：不连接真实 CAN；不能在 prod 页面内切换为另一条会话。
 
 - **SafeLock（安全锁定）**
   - **定义**：遇到外部接触阻力（碰撞残差）或客户端通信心跳断开时的保护性就地保持。就地保持力矩，不自动恢复、不自动进入示教。

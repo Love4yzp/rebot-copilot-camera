@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api";
-import type { Block, Pose, ProviderInfo, SeqTemplate, Sequence } from "../types";
+import type { Block, Pose, SeqTemplate, Sequence } from "../types";
 import { markerIcon, markerLabel } from "../timeline/markers";
 import { useToast } from "../components/Toasts";
 
 interface Props {
   template: SeqTemplate;
   poses: Pose[];
-  providers: ProviderInfo[];
   /** Live joint angles from the control loop, shown while recording. */
   positions: Record<string, number>;
   latched: boolean;
@@ -45,7 +44,6 @@ type Hold = Extract<Block, { type: "hold" }>;
 export function TemplateWizard({
   template,
   poses,
-  providers,
   positions,
   latched,
   executing,
@@ -90,7 +88,7 @@ export function TemplateWizard({
 
   const stationSummary = (station: Hold): string => {
     const acts = station.markers
-      .map((m) => `${markerIcon(m.kind)}${markerLabel(m.kind, providers)}`)
+      .map((m) => `${markerIcon(m.kind)}${markerLabel(m.kind)}`)
       .join(" ");
     return `停 ${station.duration_s.toFixed(1)}s${acts ? ` · ${acts}` : ""}`;
   };

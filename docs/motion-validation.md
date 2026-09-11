@@ -1,5 +1,7 @@
 # Headless motion validation
 
+> Historical motion-validation evidence below predates the SDK/MeshCat refactor. Recorded test counts describe that revision, not the current suite. Current runtime and commands: [README](../README.md).
+
 Final verification: the default environment, with MuJoCo absent, completed
 `pytest -q -rs` with **537 passed, 2 skipped**. The two skips are the optional
 physics modules. All 21 frontend contract cases ran with the installed Node
@@ -15,7 +17,7 @@ received command. The plant does not interpolate the application trajectory.
 
 ## Implementation notes for playback changes
 
-The motion reference is a rest-to-rest quintic position profile. The profile
+The motion reference is a rest-to-rest quintic position profile (now implemented in the SDK motion_profiles module). The profile
 evaluates position, velocity, acceleration and jerk analytically and checks
 their extrema before accepting a move. The default software limits are
 `v=0.25 rad/s`, `a=0.5 rad/s²`, and `jerk=2 rad/s³`. The duration sent by the
@@ -42,8 +44,7 @@ measured plant movement are reported separately. The current boundary policy
 uses the existing `0.02 rad` limit tolerance, shared by the analytical profile
 and the safety path checks through `backend.arm.limits`.
 
-The normal application has no MuJoCo dependency. To install the opt-in
-environment:
+Prod and base imports remain independent of MuJoCo; runtime sim requires the physics extra. To install the validation environment:
 
 ```bash
 cd app
