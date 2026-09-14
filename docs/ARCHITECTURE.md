@@ -124,6 +124,7 @@
 | 接口 | 动作集 | 实现 | 使用者 |
 |---|---|---|---|
 | **ArmDriver**(内核接口) | hold / move_to / relax / set_float / follow / set_gravity_correction / set_float_gains / reload_dynamics / read_state / connect / disconnect | `ArmSession`(真臂)、`SimArm` | **唯一:控制循环**(executor 拿的是 controller 注入的同一个实例;API 层仅只读状态——capture / 预检,不下运动指令)。前置件:SafetyLatch + 运动闸门。失败语义:无 `--sim` 连不上真臂则拒绝启动(`ArmUnavailable`),不静默退回模拟器 |
+| **RobotModel**(内核端口) | limits / check_self_collision / check_path / forward_kinematics | `integrations/rebot/RebotRobotModel` | `safety/kinematics` 门面。端口只返回项目 value object / ndarray，不泄漏 Pinocchio 类型；RS URDF 始终由 `assets` 显式注入 |
 | **ShutterDriver** | is_connected / ping / focus / shoot / pair / pair_smart / camera_connected / camera_status;失败**抛异常**不回布尔(「继续拍」还是「停整条」必须当场可辨) | `Esp32Shutter`(真板)、`SimShutter` | runner worker(经 ShutterProvider)+ 快门自检。**永不回落** —— 回落等于 SimShutter 把每一帧都谎报拍到 |
 | **ActionProvider** | fields(触发表单)/ probe(健康)/ run(执行,阻塞常态) | entry_points + `app/plugins/` 目录两条发现路径 | runner worker,每 provider 一条;`ActionContext` 里**没有 arm** |
 | **ActionContext** | 只读:sequence id/name、waypoint 位置与备注、触发时刻关节角、`emit()` 单向事件 | — | 动作插件 |
@@ -162,6 +163,7 @@
 | **轨迹录制** | 未来方向,**禁止照搬 LeRobot**,交互必须在使用上优于它。当前核心是位姿式(位姿 + 序列) |
 | **使能** | 文档 + 课程(M6)是使能材料,形态随真实下游定;现在只承诺文档 |
 | **信任模型** | 保持现有:急停闩锁横切、运动闸门、插件够不到臂、触发源在闸门之下、agent 租约 —— 它就是「下游代码在一台 48V 臂旁边」的边界 |
+| **机器人库依赖** | 业务 / 控制 / 安全只依赖项目端口。`reBotArm_control_py` 直接 import 只在 `integrations/rebot/`；上游没有碰撞 API，因此 Pinocchio 只允许在其中的 `model.py`。MotorBridge 不被项目直接 import |
 
 ## 模式的先后边界
 

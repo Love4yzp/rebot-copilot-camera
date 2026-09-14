@@ -83,6 +83,18 @@ def _layer_files(subdir: str) -> list[Path]:
     return sorted((BACKEND / subdir).rglob("*.py"))
 
 
+def _direct_dependency_roots(file: Path) -> set[str]:
+    """Top-level names in syntactic imports, including lazy imports."""
+    tree = ast.parse(file.read_text(encoding="utf-8"))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".", 1)[0])
+    return roots
+
+
 # ── boundary 1: executor never imports the latch or safety ─────────────────
 
 
@@ -167,6 +179,35 @@ def test_arm_layer_does_not_import_kinematics():
         "arm/ must not import pinocchio — kinematics/dynamics are called via "
         "the upstream submodule through assets, never implemented here: "
         f"{offenders}"
+    )
+
+
+# ── boundary 5: robot libraries exist only in bottom adapters ────────────────
+
+
+def test_robot_library_imports_match_the_exact_adapter_allowlist():
+    """Vendor types cannot leak into business, control, safety, or arm code.
+
+    Equality is intentional: it catches both a new offender and a stale broad
+    exception after an adapter stops needing a dependency.
+    """
+    allowlist = {
+        "pinocchio": {"integrations/rebot/model.py"},
+        "motorbridge": set(),
+        "reBotArm_control_py": {
+            "integrations/rebot/model.py",
+            "integrations/rebot/runtime.py",
+        },
+    }
+    found = {dependency: set() for dependency in allowlist}
+    for path in sorted(BACKEND.rglob("*.py")):
+        relative = path.relative_to(BACKEND).as_posix()
+        for dependency in _direct_dependency_roots(path) & allowlist.keys():
+            found[dependency].add(relative)
+
+    assert found == allowlist, (
+        "robot-library imports must match the exact bottom-adapter allowlist; "
+        f"expected={allowlist}, found={found}"
     )
 
 

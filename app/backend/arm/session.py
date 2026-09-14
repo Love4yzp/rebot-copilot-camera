@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .. import assets
+from ..integrations.rebot.runtime import compute_gravity, create_actuator, load_dynamics
 from .base import ArmState
 from .limits import expanded_joint_bounds
 from .profile import DEFAULT_LIMITS, MotionLimits, PreparedMotion, prepare_profiles
@@ -62,9 +63,9 @@ class ArmSession:
         assets.assert_rs_model()
         self._clock = clock or time.monotonic
         if transport is None:
-            from reBotArm_control_py.actuator.rebotarm import RebotArm
-
-            transport = RebotArm(hardware_yaml or str(assets.effective_hardware_yaml()))
+            transport = create_actuator(
+                hardware_yaml or str(assets.effective_hardware_yaml())
+            )
         self._arm = transport
         self._lock = threading.RLock()
         self._connected = False
@@ -381,11 +382,9 @@ class ArmSession:
         goes in when the tuning profile says one is mounted.
         """
         if self._dyn_model is None:
-            from reBotArm_control_py.dynamics.inverse_dynamics import create_data
-            from reBotArm_control_py.dynamics.robot_model import load_dynamics_model
-
-            self._dyn_model = load_dynamics_model(str(assets.effective_urdf_path(self._payload)))
-            self._dyn_data = create_data(self._dyn_model)
+            self._dyn_model, self._dyn_data = load_dynamics(
+                str(assets.effective_urdf_path(self._payload))
+            )
         return self._dyn_model
 
     def _gravity_torque(self, q: np.ndarray) -> np.ndarray:
@@ -398,14 +397,12 @@ class ArmSession:
         finger travel to motor torque, and inventing one would put a made-up
         number into a torque command.
         """
-        from reBotArm_control_py.dynamics.inverse_dynamics import compute_generalized_gravity
-
         model = self._dynamics_model()
         # Pass only the arm joints; upstream pads the gripper fingers out to the
         # model's eight DOFs. Handing it all seven hardware values would put the
         # gripper motor angle where a finger's metre-valued travel belongs.
         arm_q = np.array([q[self._index[name]] for name in assets.arm_joint_names()], dtype=float)
-        g = compute_generalized_gravity(model, arm_q, self._dyn_data)
+        g = compute_gravity(model, arm_q, self._dyn_data)
 
         tau = np.zeros(len(self._names), dtype=float)
         for position, name in enumerate(assets.arm_joint_names()):

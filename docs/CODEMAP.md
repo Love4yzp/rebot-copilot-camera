@@ -14,6 +14,7 @@ app/backend/
 
   arm/
     base.py         ArmDriver Protocol + ArmState。hold(q) 与 move_to(q, t) 是两个动词
+    robot_model.py  RobotModel port + vendor-neutral pose / limit / collision value objects
     sim.py          SimArm。一阶滞后 + 可注入拖动。运动只在注入时钟上走（`step()`/`_t`）；活服务 `self_driven=True`
     session.py      ArmSession —— 薄封装上游 RebotArm。dict↔ndarray 只在这一处转
     factory.py      真臂 / 模拟器选择。无 `--sim` 连不上真臂则拒绝启动，不静默回落
@@ -23,7 +24,11 @@ app/backend/
     watchdog.py     三个条件自动触发急停，都要求「持续」而非单次
     contact.py      接触残差观测器。默认关；只在 playing 采样
     client_watchdog.py  回放/示教中客户端沉默 → SafeLock
-    kinematics.py   限位（从 URDF 读）+ 自碰撞 + 路径采样 + FK
+    kinematics.py   RobotModel port 的安全门面：限位 + 自碰撞 + 路径采样 + FK；不接触 vendor 类型
+
+  integrations/rebot/
+    model.py        RS RobotModel 适配器；先用上游显式 URDF 建模，补上游缺失的 Pinocchio 碰撞能力（唯一 Pinocchio allowlist）
+    runtime.py      上游 RebotArm / dynamics 的最底层适配器；MotorBridge 仍只由上游间接持有
 
   actions/
     base.py         ActionProvider Protocol + ActionContext。ctx 里**没有 arm** —— 插件够不到运动闸门
