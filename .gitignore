@@ -32,3 +32,5 @@ app/backend/static/
 .agent_context/
 .zcode/
 .scratch/
+
+docs/screenshots/

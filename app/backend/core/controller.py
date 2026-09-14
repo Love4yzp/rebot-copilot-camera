@@ -25,13 +25,11 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 
-
 from ..arm.base import ArmDriver, ArmState
 from ..arm.profile import DEFAULT_LIMITS, MotionLimits
 from ..safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
-
 from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
 from .activity import Activity, Effect, Intent, decide

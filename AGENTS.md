@@ -154,6 +154,7 @@ commit message 说清**为什么**，尤其是偏离原计划的地方——好�
 | 文件 | 是什么 | 什么时候读 |
 |---|---|---|
 | `AGENTS.md`（本文件） | 做什么、怎么做、索引。不记做过什么 | 开工前 |
+| [`docs/START_HERE.md`](./docs/START_HERE.md) | 30 分钟心智模型 + 三条主链路 + 阅读路由 | 第一次接手仓库时 |
 | [`CONTEXT.md`](./docs/CONTEXT.md) | 领域词 | 改内核 / 活动表时 |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | 贡献流程 + 架构体检（判断「够不够好」）；指针型，不抄规则 | 第一次贡献 / 想知道架构是否够好时 |
 | [`PROGRESS.md`](./docs/PROGRESS.md) | 现在做到哪、什么卡住 | 接手时 |
