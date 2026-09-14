@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 if TYPE_CHECKING:
-    from .arm.robot_model import RobotModel
     from .tuning import PayloadTuning
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -254,18 +253,3 @@ def assert_rs_model() -> None:
             f"End-effector frame is {frame!r}, expected {expected_frame!r}. "
             "'end_link' means the DM arm's config leaked in."
         )
-
-
-@lru_cache(maxsize=1)
-def robot_model() -> RobotModel:
-    """Build the process-wide RS geometry model behind the project port."""
-    from .integrations.rebot.model import RebotRobotModel
-
-    assert_rs_model()
-    urdf = urdf_path()
-    return RebotRobotModel(
-        urdf_path=str(urdf),
-        package_dir=str(urdf.parent.parent),
-        end_effector_frame=end_effector_frame(),
-        arm_joints=tuple(arm_joint_names()),
-    )

@@ -8,7 +8,7 @@
 #
 # 常用子命令：
 #   ./device.sh push     一键部署：在电脑上打包前端 -> 增量同步代码到设备 -> 重启服务
-#   ./device.sh setup    一次性初始化设备环境（安装 uv、systemd 服务、udev 硬件规则）
+#   ./device.sh setup    一次性初始化设备环境（安装 uv、systemd 服务）
 #   ./device.sh status   检查设备服务状态，并确认是否成功连上物理机械臂（非模拟器）
 #   ./device.sh open     创建 SSH 端口转发隧道并自动打开本地浏览器访问设备界面
 #   ./device.sh logs     实时查看设备上的后台服务日志 (journalctl)
@@ -49,10 +49,6 @@ cmd_setup() {
 	scp "$APP/deploy/$SERVICE.service" "$APP/deploy/rebot-can.service" "$HOST:/tmp/"
 	ssh "$HOST" "sudo mv /tmp/$SERVICE.service /tmp/rebot-can.service /etc/systemd/system/ && sudo systemctl daemon-reload"
 
-	step "[r2x] 安装 udev 规则"
-	scp "$APP/deploy/99-rebot-usb.rules" "$HOST:/tmp/"
-	ssh "$HOST" 'sudo mv /tmp/99-rebot-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload'
-
 	# 如果不把用户加入 systemd-journal 组，/api/logs 端点会静默返回空列表且无任何错误提示
 	step "[r2x] 授予 journal 与串口权限"
 	ssh "$HOST" 'sudo usermod -aG systemd-journal,dialout $(whoami)'
@@ -76,8 +72,10 @@ cmd_push() {
 		--exclude 'node_modules/' \
 		--exclude '__pycache__/' \
 		--exclude '/data/' \
+		--exclude '/config/tuning.yaml' \
 		--exclude '.pio/' \
 		--filter 'protect /data/' \
+		--filter 'protect /config/tuning.yaml' \
 		"$APP/" "$HOST:$REMOTE_DIR/"
 
 	step "[r2x] 同步 vendored 臂层"

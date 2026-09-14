@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.actions import ActionRegistry, InlineRunner, ShutterProvider
+
 from backend.app import app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.sequences import PoseStore, SequenceStore, TemplateStore
 from backend.safety import SafetyLatch
-from backend.shutter import SimShutter
+
 
 JOINTS = ("joint1", "joint2")
 
@@ -35,20 +35,14 @@ def wire(tmp_path: Path, joints=JOINTS):
     app.state.sequence_store = SequenceStore(tmp_path / "sequences")
     app.state.template_store = TemplateStore(tmp_path / "templates")
     app.state.broadcaster = Broadcaster()
-    shutter = SimShutter()
-    runner = InlineRunner()
-    app.state.plugins = ActionRegistry(runner)
-    app.state.plugins.register(ShutterProvider(shutter))
     app.state.controller = Controller(
         arm=arm,
-        shutter=shutter,
         latch=app.state.latch,
         broadcaster=app.state.broadcaster,
         clock=clock,
         # Inline, so the fake clock above drives everything and no assertion
         # depends on thread scheduling. That the threaded runner keeps the loop
         # free while a provider blocks is tested in test_action_runner.py.
-        actions=runner,
     )
     return TestClient(app), app.state.controller, arm, clock
 
@@ -108,7 +102,9 @@ def test_unknown_pose_is_404(client: TestClient):
 
 
 def test_empty_name_and_missing_joints_are_400(client: TestClient):
-    assert client.post("/api/poses", json={"name": "", "joints": {"joint1": 0.1}}).status_code == 400
+    assert (
+        client.post("/api/poses", json={"name": "", "joints": {"joint1": 0.1}}).status_code == 400
+    )
     assert client.post("/api/poses", json={"name": "x"}).status_code == 400
     pid = make_pose(client, 0.1)
     assert client.patch(f"/api/poses/{pid}", json={"name": " "}).status_code == 400
@@ -125,8 +121,12 @@ def test_an_out_of_range_pose_is_rejected_with_the_joint_name(client: TestClient
 def test_a_self_colliding_pose_is_rejected(client: TestClient):
     """link3 folded back into the base — legal per joint, illegal as a pose."""
     folded = {
-        "joint1": 2.394, "joint2": 3.039, "joint3": 0.046,
-        "joint4": 1.142, "joint5": 1.511, "joint6": 2.871,
+        "joint1": 2.394,
+        "joint2": 3.039,
+        "joint3": 0.046,
+        "joint4": 1.142,
+        "joint5": 1.511,
+        "joint6": 2.871,
     }
     r = client.post("/api/poses", json={"name": "folded", "joints": folded})
     assert r.status_code == 400
@@ -176,17 +176,20 @@ def test_links_report_which_sequences_reference_a_pose(client: TestClient):
     unused = make_pose(client, 0.3, "没人用")
 
     sid = client.post("/api/sequences", json={"name": "两轮"}).json()["id"]
-    client.patch(f"/api/sequences/{sid}", json={"blocks": [
-        {"type": "hold", "pose_id": a, "duration_s": 1.0, "markers": []},
-        {"type": "hold", "pose_id": a, "duration_s": 2.0, "markers": []},
-    ]})
+    client.patch(
+        f"/api/sequences/{sid}",
+        json={
+            "blocks": [
+                {"type": "hold", "pose_id": a, "duration_s": 1.0, "markers": []},
+                {"type": "hold", "pose_id": a, "duration_s": 2.0, "markers": []},
+            ]
+        },
+    )
 
     links = client.get(f"/api/poses/{a}/links").json()
     assert links["pose_id"] == a
     assert links["count"] == 1
-    assert links["links"] == [
-        {"sequence_id": sid, "sequence_name": "两轮", "block_count": 2}
-    ]
+    assert links["links"] == [{"sequence_id": sid, "sequence_name": "两轮", "block_count": 2}]
 
     assert client.get(f"/api/poses/{unused}/links").json()["count"] == 0
 
@@ -237,8 +240,10 @@ def test_goto_retargets_while_a_sequence_is_playing(rig):
     b = make_pose(client, 0.9)
 
     sid = client.post("/api/sequences", json={"name": "long"}).json()["id"]
-    client.patch(f"/api/sequences/{sid}", json={"blocks": [
-        {"type": "hold", "pose_id": b, "duration_s": 30.0, "markers": []}]})
+    client.patch(
+        f"/api/sequences/{sid}",
+        json={"blocks": [{"type": "hold", "pose_id": b, "duration_s": 30.0, "markers": []}]},
+    )
     assert client.post(f"/api/sequences/{sid}/execute").status_code == 200
     r = client.post(f"/api/poses/{a}/goto")
     assert r.status_code == 200
@@ -253,15 +258,24 @@ def test_goto_preflights_the_path_from_the_current_pose(tmp_path: Path):
     this test builds its own rig rather than using the two-joint fixture.
     """
     client, controller, arm, _ = wire(
-        tmp_path, ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6"))
+        tmp_path, ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
+    )
 
     here = {
-        "joint1": -0.882, "joint2": 3.107, "joint3": 0.686,
-        "joint4": -0.132, "joint5": 1.482, "joint6": -3.098,
+        "joint1": -0.882,
+        "joint2": 3.107,
+        "joint3": 0.686,
+        "joint4": -0.132,
+        "joint5": 1.482,
+        "joint6": -3.098,
     }
     there = {
-        "joint1": -1.148, "joint2": 2.579, "joint3": 0.301,
-        "joint4": 1.345, "joint5": 1.051, "joint6": -2.242,
+        "joint1": -1.148,
+        "joint2": 2.579,
+        "joint3": 0.301,
+        "joint4": 1.345,
+        "joint5": 1.051,
+        "joint6": -2.242,
     }
     pid = client.post("/api/poses", json={"name": "那头", "joints": there}).json()["id"]
     arm.drag(here)  # from rest, a delta is an absolute pose

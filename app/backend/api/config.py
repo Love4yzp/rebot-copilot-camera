@@ -42,6 +42,7 @@ class TuningState(BaseModel):
     #: without wiring is dead weight, and the profile answers about the mass.
     gripper_motor: bool
     payload_options: list[str]
+    model_locked: bool = False
 
 
 def _store(request: Request) -> TuningStore | None:
@@ -53,13 +54,14 @@ def _state(request: Request) -> TuningState:
     store = _store(request)
     saved = store.load() if store is not None else TuningConfig()
     current = controller.tuning
-    gripper_motor = assets.has_gripper()
+    gripper_motor = controller.simulation is None and assets.has_gripper()
     return TuningState(
         current=current,
         saved=saved,
         dirty=current.dirty_sections(saved),
         gripper_motor=gripper_motor,
         payload_options=[p.value for p in _payload_options(gripper_motor)],
+        model_locked=getattr(controller.arm, "model_locked", False),
     )
 
 

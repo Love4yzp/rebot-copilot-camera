@@ -28,18 +28,23 @@ the wire shape, not just the renderer.
 from __future__ import annotations
 
 import ast
-import dataclasses
 from pathlib import Path
 
 import pytest
 
-from backend.actions import ActionContext, InlineRunner, ShutterProvider
+
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller
 from backend.safety import LatchSource, SafetyLatch
-from backend.shutter import SimShutter
+
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
+
+
+def test_application_only_reaches_robot_math_and_transport_through_sdk():
+    forbidden = {"pinocchio", "motorbridge", "mujoco", "meshcat"}
+    for path in BACKEND.rglob("*.py"):
+        assert not {name.split(".")[0] for name in _resolved_imports(path)} & forbidden, path
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -83,18 +88,6 @@ def _layer_files(subdir: str) -> list[Path]:
     return sorted((BACKEND / subdir).rglob("*.py"))
 
 
-def _direct_dependency_roots(file: Path) -> set[str]:
-    """Top-level names in syntactic imports, including lazy imports."""
-    tree = ast.parse(file.read_text(encoding="utf-8"))
-    roots: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            roots.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            roots.add(node.module.split(".", 1)[0])
-    return roots
-
-
 # ── boundary 1: executor never imports the latch or safety ─────────────────
 
 
@@ -115,29 +108,6 @@ def test_executor_does_not_import_the_latch_or_safety():
 
 
 # ── boundary 2: ActionContext has no arm/latch/store handle ──────────────────
-
-
-def test_action_context_carries_no_arm_or_latch_handle():
-    """A provider that cannot reach the arm, the latch or the stores cannot be
-    the reason any of them did something surprising. Locking the field *set*
-    (not just a banned-name check) means adding any field forces a deliberate
-    decision here — which is the point of ``"small on purpose"``."""
-    allowed = {
-        "routine_id",
-        "routine_name",
-        "waypoint_index",
-        "waypoint_note",
-        "joints",
-        "emit",
-    }
-    actual = {f.name for f in dataclasses.fields(ActionContext)}
-    assert actual == allowed, (
-        "ActionContext grew a field. The context is small on purpose — a "
-        "provider can read the pose it started at and emit an event, and "
-        "nothing else. Adding a handle to the arm, the latch or a store here "
-        "lets a plugin reach around the motion gate. If this is deliberate, "
-        f"update the allowed set: new={actual - allowed}"
-    )
 
 
 # ── boundary 3: api never imports the validators directly ───────────────────
@@ -182,35 +152,6 @@ def test_arm_layer_does_not_import_kinematics():
     )
 
 
-# ── boundary 5: robot libraries exist only in bottom adapters ────────────────
-
-
-def test_robot_library_imports_match_the_exact_adapter_allowlist():
-    """Vendor types cannot leak into business, control, safety, or arm code.
-
-    Equality is intentional: it catches both a new offender and a stale broad
-    exception after an adapter stops needing a dependency.
-    """
-    allowlist = {
-        "pinocchio": {"integrations/rebot/model.py"},
-        "motorbridge": set(),
-        "reBotArm_control_py": {
-            "integrations/rebot/model.py",
-            "integrations/rebot/runtime.py",
-        },
-    }
-    found = {dependency: set() for dependency in allowlist}
-    for path in sorted(BACKEND.rglob("*.py")):
-        relative = path.relative_to(BACKEND).as_posix()
-        for dependency in _direct_dependency_roots(path) & allowlist.keys():
-            found[dependency].add(relative)
-
-    assert found == allowlist, (
-        "robot-library imports must match the exact bottom-adapter allowlist; "
-        f"expected={allowlist}, found={found}"
-    )
-
-
 # ── invariant: the published mode and resting never contradict ───────────────
 
 
@@ -227,7 +168,6 @@ def rig() -> "tuple[Controller, _Clock, list]":
     clock = _Clock()
     arm = SimArm(("joint1", "joint2"), clock=clock)
     arm.connect()
-    shutter = SimShutter()
     latch = SafetyLatch(clock=clock)
     bc = Broadcaster()
     published: list = []
@@ -235,9 +175,11 @@ def rig() -> "tuple[Controller, _Clock, list]":
     # Inline runner: a fake clock and real worker threads must never race. The
     # loop-stays-free property is the subject of test_action_runner.py.
     controller = Controller(
-        arm=arm, shutter=shutter, latch=latch, broadcaster=bc,
-        clock=clock, expected_period_s=0.01,
-        actions=InlineRunner([ShutterProvider(shutter)]),
+        arm=arm,
+        latch=latch,
+        broadcaster=bc,
+        clock=clock,
+        expected_period_s=0.01,
     )
     return controller, clock, published
 

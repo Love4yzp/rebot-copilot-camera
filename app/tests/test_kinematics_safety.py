@@ -111,7 +111,7 @@ def test_unknown_joint_names_are_ignored_rather_than_rejected(model: ArmModel):
 def test_structural_pairs_are_excluded(model: ArmModel):
     """Adjacent links are bolted together and always touching. Without dropping
     them every pose would be a collision."""
-    assert model.collision_pair_count() == 36
+    assert len(model.geom.collisionPairs) == 36
     assert model.check_self_collision(REST) == []
 
 

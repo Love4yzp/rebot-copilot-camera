@@ -2,17 +2,18 @@
 
 import pytest
 
-from backend.actions import InlineRunner, ShutterProvider
+
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase, SequenceExecutor
 from backend.sequences import EventMarker, HoldBlock, Pose, Sequence, TransitionBlock
 from backend.safety import SafetyLatch, Watchdog, WatchdogConfig
-from backend.shutter import SimShutter
 
 
 class Clock:
     now = 0.0
-    def __call__(self): return self.now
+
+    def __call__(self):
+        return self.now
 
 
 def sim():
@@ -91,9 +92,16 @@ def controller():
     arm.connect()
     latch = SafetyLatch(clock=c)
     watchdog = Watchdog(latch, clock=c, config=WatchdogConfig(excessive_gap_s=0.1))
-    return c, arm, Controller(
-        arm=arm, shutter=SimShutter(), latch=latch, broadcaster=Broadcaster(),
-        clock=c, watchdog=watchdog, actions=InlineRunner([ShutterProvider(SimShutter())]),
+    return (
+        c,
+        arm,
+        Controller(
+            arm=arm,
+            latch=latch,
+            broadcaster=Broadcaster(),
+            clock=c,
+            watchdog=watchdog,
+        ),
     )
 
 
@@ -110,9 +118,11 @@ def test_controller_preflight_rejection_preserves_old_executor_and_rest():
 def test_controller_slow_preflight_preserves_old_executor():
     c, arm, ctl = controller()
     old = ctl.goto(Pose(name="old", joints={"joint1": 0.2}))
+
     def slow(samples):
         c.now += 0.2
         return []
+
     ctl.preflight_path = slow  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="control gap"):
         ctl.goto(Pose(name="new", joints={"joint1": 0.3}))
@@ -124,8 +134,10 @@ def test_controller_commit_failure_preserves_old_executor():
     c, arm, ctl = controller()
     old = ctl.goto(Pose(name="old", joints={"joint1": 0.2}))
     real_commit = arm.commit_move
+
     def fail(prepared):
         raise RuntimeError("commit failed")
+
     arm.commit_move = fail  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="commit failed"):
         ctl.goto(Pose(name="new", joints={"joint1": 0.3}))
@@ -154,14 +166,15 @@ def test_controller_goto_applies_first_approach_speed_limit_to_profile():
 
 
 def test_transition_wait_markers_pause_five_seconds_and_resume_in_order():
-    from backend.actions import InlineRunner
 
     c, arm = sim()
     arm.hold_calls = 0
     real_hold = arm.hold
+
     def recording_hold(q):
         arm.hold_calls += 1
         return real_hold(q)
+
     arm.hold = recording_hold  # type: ignore[method-assign]
     first = Pose(name="first", joints={"joint1": 0.0})
     second = Pose(name="second", joints={"joint1": 0.3})
@@ -170,12 +183,17 @@ def test_transition_wait_markers_pause_five_seconds_and_resume_in_order():
         EventMarker(kind="wait", params={}, at=0.5, estimate_s=0.0),
         EventMarker(kind="wait", params={}, at=1.0, estimate_s=0.0),
     ]
-    sequence = Sequence(name="waits", blocks=[
-        HoldBlock(pose_id=first.id, duration_s=0.1),
-        TransitionBlock(duration_s=1.0, markers=markers),
-        HoldBlock(pose_id=second.id, duration_s=0.1),
-    ])
-    executor = SequenceExecutor(sequence, {first.id: first, second.id: second}, arm=arm, actions=InlineRunner([]), clock=c, settle_s=0.0)
+    sequence = Sequence(
+        name="waits",
+        blocks=[
+            HoldBlock(pose_id=first.id, duration_s=0.1),
+            TransitionBlock(duration_s=1.0, markers=markers),
+            HoldBlock(pose_id=second.id, duration_s=0.1),
+        ],
+    )
+    executor = SequenceExecutor(
+        sequence, {first.id: first, second.id: second}, arm=arm, clock=c, settle_s=0.0
+    )
     executor.start()
     seen = []
     for expected in (0.0, 0.5, 1.0):

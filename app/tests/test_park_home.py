@@ -14,13 +14,13 @@ import socket
 import pytest
 import uvicorn
 
-from backend.actions import InlineRunner, ShutterProvider
+
 from backend.app import ParkOnExitServer, _ensure_port_free, _park_arm, app
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
 from backend.sequences import HoldBlock, Pose, Sequence
 from backend.safety import LatchSource, SafetyLatch
-from backend.shutter import SimShutter
+
 
 JOINTS = ("joint1", "joint2")
 # SimArm's canonical URDF has a non-negative lower bound for joint2.  Keep
@@ -46,12 +46,10 @@ class Rig:
         self.latch = SafetyLatch(clock=self.clock)
         self.controller = Controller(
             arm=self.arm,
-            shutter=SimShutter(),
             latch=self.latch,
             broadcaster=Broadcaster(),
             clock=self.clock,
             expected_period_s=DT,
-            actions=InlineRunner([ShutterProvider(SimShutter())]),
         )
 
     def step(self, n: int = 1) -> None:

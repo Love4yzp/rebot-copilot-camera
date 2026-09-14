@@ -49,7 +49,9 @@ def _checked_joints(controller: Controller, joints: dict[str, float]) -> dict[st
     """Shape first (422), then this arm's limits and collision model (400)."""
     unsafe = controller.preflight_pose(joints)
     if unsafe:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe})
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, {"error": "unsafe_pose", "reasons": unsafe}
+        )
     return joints
 
 
@@ -67,6 +69,18 @@ class PatchPose(BaseModel):
 
     name: str | None = None
     joints: dict[str, float] | None = None
+
+
+class PoseLink(BaseModel):
+    sequence_id: str
+    sequence_name: str
+    block_count: int
+
+
+class PoseLinks(BaseModel):
+    pose_id: str
+    count: int
+    links: list[PoseLink]
 
 
 @router.get("", response_model=list[Pose])
@@ -133,9 +147,7 @@ def patch_pose(pose_id: str, body: PatchPose, request: Request) -> Pose:
         # Re-validate through the model, then the arm's limits — a PATCH must
         # not write a NaN angle or an unreachable pose straight to disk.
         try:
-            pose.joints = Pose.model_validate(
-                {**pose.model_dump(), "joints": body.joints}
-            ).joints
+            pose.joints = Pose.model_validate({**pose.model_dump(), "joints": body.joints}).joints
         except ValidationError as exc:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, exc.errors(include_url=False)
@@ -155,7 +167,7 @@ def delete_pose(pose_id: str, request: Request) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no pose {pose_id!r}") from None
 
 
-@router.get("/{pose_id}/links")
+@router.get("/{pose_id}/links", response_model=PoseLinks)
 def pose_links(pose_id: str, request: Request) -> dict:
     """Which sequences link this pose, reported before delete/overwrite —
     silently rewriting the physical path of N sequences is the "a whole round
@@ -180,9 +192,7 @@ def pose_links(pose_id: str, request: Request) -> dict:
     response_model=PlaybackState,
     dependencies=[Depends(require_arm_available)],
 )
-def goto_pose(
-    pose_id: str, request: Request, body: TriggerRequest | None = None
-) -> PlaybackState:
+def goto_pose(pose_id: str, request: Request, body: TriggerRequest | None = None) -> PlaybackState:
     """Move to one pose and stay there — the library card's "去这里"."""
     pose = _load(request, pose_id)
     controller = _controller(request)

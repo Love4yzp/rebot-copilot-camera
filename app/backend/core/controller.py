@@ -25,17 +25,11 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 
-from ..actions.runner import ActionRunner, ThreadedRunner
-from ..actions.shoot import ShutterProvider
-from ..actions.validate import validate_marker_params, validate_providers
 from ..arm.base import ArmDriver, ArmState
-from ..arm.limits import urdf_joint_bounds
 from ..arm.profile import DEFAULT_LIMITS, MotionLimits
-from ..arm.sim import SimArm
 from ..safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
 from ..safety.kinematics import ARM_JOINTS, validate_pose, validate_sequence
 from ..sequences.models import Pose, Sequence, TransitionBlock
-from ..shutter.base import ShutterDriver
 from ..tuning import PayloadProfile, TuningConfig, TuningRejected
 from . import events
 from .activity import Activity, Effect, Intent, decide
@@ -71,7 +65,6 @@ class Controller:
     def __init__(
         self,
         arm: ArmDriver,
-        shutter: ShutterDriver,
         latch: SafetyLatch,
         broadcaster: Broadcaster,
         clock: Callable[[], float] | None = None,
@@ -80,21 +73,10 @@ class Controller:
         contact: ContactObserver | None = None,
         expected_period_s: float = 0.01,
         floatlock: FloatLockConfig | None = None,
-        actions: ActionRunner | None = None,
         tuning: TuningConfig | None = None,
     ) -> None:
         self.arm = arm
-        # The driver stays reachable: /api/shutter/test checks the link from a
-        # request thread, which is a different question from running an action.
-        self.shutter = shutter
-        # Actions run off this loop. Defaulting to a threaded runner here means
-        # nothing that constructs a Controller can accidentally get a runner
-        # that blocks the loop -- the one shape this whole layer exists to stop.
-        #
-        # The loop's clock is deliberately *not* passed down. An action's
-        # deadline measures how long a provider has really been working, and a
-        # provider works in wall time whatever the loop thinks the time is.
-        self.actions = actions or ThreadedRunner([ShutterProvider(shutter)])
+        self.simulation = None
         self.latch = latch
         self.broadcaster = broadcaster
         self._clock = clock or time.monotonic
@@ -135,19 +117,6 @@ class Controller:
         self._tick_times: list[float] = []
         self.rate_hz = 0.0
 
-    def set_shutter(self, driver: ShutterDriver) -> None:
-        """Swap the shutter driver, provider included.
-
-        Both move together on purpose. ``main()`` re-chooses the hardware after
-        import time, and a swap that updated ``self.shutter`` alone would leave
-        the runner holding a provider wrapped around the old driver: the
-        self-test would talk to the real board while every routine kept firing
-        into the simulator. Nothing would raise.
-        """
-        with self._lock:
-            self.shutter = driver
-            self.actions.register(ShutterProvider(driver))
-
     # ── tuning ─────────────────────────────────────────────────────────────────
 
     @property
@@ -160,7 +129,7 @@ class Controller:
 
         ``main()`` re-chooses the hardware after import time; without this the
         real arm would run the code defaults while the panel shows the saved
-        tuning — the same trap ``set_shutter`` exists to close."""
+        tuning"""
         with self._lock:
             self.arm = arm
             self._push_tuning_to_arm()
@@ -184,15 +153,21 @@ class Controller:
                 raise TuningRejected("a sequence is executing — stop it before retuning")
             from .. import assets  # local: keep the gate readable in one place
 
-            if assets.has_gripper() and config.payload.profile is not PayloadProfile.GRIPPER:
+            if (
+                self.simulation is None
+                and assets.has_gripper()
+                and config.payload.profile is not PayloadProfile.GRIPPER
+            ):
                 # The motor is wired: the gripper's mass is physically on the
                 # arm whatever the profile claims, and this is the only legal
                 # answer. The options list steers the UI; this is the server
                 # refusing the illegal one outright.
-                raise TuningRejected(
-                    "the gripper motor is on the bus — profile must be 'gripper'"
-                )
+                raise TuningRejected("the gripper motor is on the bus — profile must be 'gripper'")
             payload_changed = config.payload != self._tuning.payload
+            if payload_changed and getattr(self.arm, "model_locked", False):
+                raise TuningRejected(
+                    "end-effector structure is fixed for this runtime; restart with its new specification"
+                )
             if payload_changed and self.arm.is_floating:
                 raise TuningRejected(
                     "the arm is floating — let it lock before changing the payload; "
@@ -233,7 +208,20 @@ class Controller:
 
     def preflight_pose(self, joints: Mapping[str, float]) -> list[str]:
         """Joint limits + self-collision for one pose. Empty list = safe."""
-        return validate_pose(joints)
+        return self._simulation_target_problems(joints) + validate_pose(joints)
+
+    def _simulation_target_problems(self, joints: Mapping[str, float]) -> list[str]:
+        if self.simulation is not None and abs(joints.get("gripper", 0.0)) > 1e-9:
+            return ["gripper motion has no calibrated physical mapping in this simulator"]
+        return []
+
+    def perturb(self, joint: str, torque: float, duration_s: float) -> None:
+        with self._lock:
+            if self.simulation is None:
+                raise RuntimeError("this instance has no virtual plant")
+            if self.latch.is_latched or not self.is_teaching:
+                raise RuntimeError("external force input requires active, unlatched teaching")
+            self.simulation.perturb(joint, torque, duration_s)
 
     def preflight_path(self, joints_in_order: list[Mapping[str, float]]) -> list[str]:
         """Limits + collision along the straight-line path between poses.
@@ -241,15 +229,11 @@ class Controller:
         Two legal poses can have an illegal line between them; this is the
         check that finds out before the arm does.
         """
-        return validate_sequence(joints_in_order)
-
-    def preflight_marker_params(self, blocks, plugins) -> list[str]:
-        """Every marker's params against its provider's own field model."""
-        return validate_marker_params(blocks, plugins)
-
-    def preflight_providers(self, blocks, plugins) -> list[str]:
-        """Every marker's provider is installed and healthy."""
-        return validate_providers(blocks, plugins)
+        return [
+            problem
+            for joints in joints_in_order
+            for problem in self._simulation_target_problems(joints)
+        ] + validate_sequence(joints_in_order)
 
     # ── playback ─────────────────────────────────────────────────────────────
 
@@ -354,7 +338,6 @@ class Controller:
                 sequence,
                 poses,
                 arm=self.arm,
-                actions=self.actions,
                 clock=self._clock,
                 settle_s=self._tuning.settle.min_s,
                 settle_drift=self._tuning.settle.drift_rad,
@@ -366,8 +349,12 @@ class Controller:
                 on_event=self.emit_event,
             )
             self._playback_source = source
-            log.info("playing %r (%d blocks) at the request of %r",
-                     sequence.name, len(sequence.blocks), source)
+            log.info(
+                "playing %r (%d blocks) at the request of %r",
+                sequence.name,
+                len(sequence.blocks),
+                source,
+            )
             executor.start()
             self._executor = executor
             self._set_activity(Activity.PLAYING)
@@ -407,7 +394,7 @@ class Controller:
         executor's protections.
         """
         target = Pose(
-            id=pose_id or "agent-joints",
+            id=pose_id or "joint-target",
             name=display_name or "关节指令",
             joints=dict(joints),
         )
@@ -423,7 +410,8 @@ class Controller:
             # Prepare and preflight the replacement while the old executor is
             # still intact. A rejected plan must leave the active move valid.
             prepared = self.arm.prepare_move(
-                target.joints, duration_s,
+                target.joints,
+                duration_s,
                 limits=MotionLimits(
                     velocity=min(DEFAULT_LIMITS.velocity, self._tuning.approach.first_max_speed),
                     acceleration=DEFAULT_LIMITS.acceleration,
@@ -450,7 +438,6 @@ class Controller:
                 {target.id: target},
                 goto=target,
                 arm=self.arm,
-                actions=self.actions,
                 clock=self._clock,
                 settle_s=self._tuning.settle.min_s,
                 settle_drift=self._tuning.settle.drift_rad,
@@ -472,7 +459,11 @@ class Controller:
                     self._set_activity(Activity.PLAYING)
                 reason = executor.error or "motion rejected before start"
                 raise RuntimeError(reason)
-            if decision.effect is Effect.RETARGET and previous is not None and not previous.is_finished:
+            if (
+                decision.effect is Effect.RETARGET
+                and previous is not None
+                and not previous.is_finished
+            ):
                 previous.abort("retargeted to a new pose")
             self._executor = executor
             self._playback_source = source
@@ -488,14 +479,10 @@ class Controller:
                 return False
             if self.latch.is_latched:
                 return False
-            resumed = self._executor.resume(
-                before_motion=lambda: not self.latch.is_latched
-            )
+            resumed = self._executor.resume(before_motion=lambda: not self.latch.is_latched)
             if resumed:
                 self._hold_target = (
-                    dict(self._last_state.positions)
-                    if self._executor.phase is Phase.HOLD
-                    else None
+                    dict(self._last_state.positions) if self._executor.phase is Phase.HOLD else None
                 )
             return resumed
 
@@ -603,36 +590,8 @@ class Controller:
             self._hold_target = dict(self.arm.read_state().positions) if enabled else None
             if not enabled:
                 self.arm.set_float(False)
-
-    def sim_drag(self, deltas: Mapping[str, float]) -> dict[str, float]:
-        """Simulator-only drag push: ``deltas`` in radians per joint, clamped
-        to the URDF joint bounds, answered with the post-drag positions.
-
-        A hand, not a command: this deliberately bypasses the activity table,
-        so every activity accepts it -- a held arm pushed returns to its
-        target on the next tick, a teaching arm pushed engages the floatlock;
-        both paths already exist. The real arm has a real hand on it, so
-        there is no non-simulator route to build.
-        """
-        if not isinstance(self.arm, SimArm):
-            raise RuntimeError("drag is only available against the simulator")
-        unknown = set(deltas) - set(self.arm.joint_names)
-        if unknown:
-            raise ValueError(f"unknown joints: {', '.join(sorted(unknown))}")
-        bounds = urdf_joint_bounds()
-        positions = dict(self.arm.read_state().positions)
-        effective: dict[str, float] = {}
-        for name, delta in deltas.items():
-            # Joints without a URDF limit entry (the gripper is a pair of
-            # finger joints in the URDF, not a named joint) pass through --
-            # there is no limit to clamp against.
-            lower, upper = bounds.get(name, (float("-inf"), float("inf")))
-            q = min(max(positions[name] + delta, lower), upper)
-            step = q - positions[name]
-            if step != 0.0:
-                effective[name] = step
-        self.arm.drag(effective)
-        return dict(self.arm.read_state().positions)
+                if self.simulation is not None:
+                    self.simulation.clear_perturbations()
 
     def set_resting(self, enabled: bool) -> None:
         """Enter or leave rest: zero torque, the arm lying on its stops.
@@ -652,8 +611,7 @@ class Controller:
             self._require(Intent.REST_ON)
             positions = self._last_state.positions
             if not positions or any(
-                abs(positions.get(name, 0.0)) > REST_AT_EPS
-                for name in self.arm.joint_names
+                abs(positions.get(name, 0.0)) > REST_AT_EPS for name in self.arm.joint_names
             ):
                 raise RuntimeError("arm is not at the zero pose — park home first")
             self.arm.relax()
@@ -681,6 +639,8 @@ class Controller:
 
     def tick(self) -> None:
         """One iteration. Called by the loop thread, or directly by tests."""
+        if self.simulation is not None and (self.latch.is_latched or not self.is_teaching):
+            self.simulation.clear_perturbations()
         if self.watchdog is not None:
             self.watchdog.observe_tick(self._expected_period_s)
 
@@ -756,11 +716,7 @@ class Controller:
     def _observe_faults(self, state: ArmState) -> None:
         if self._activity is Activity.SAFELOCK:
             return
-        if (
-            self.contact is not None
-            and self.contact.enabled
-            and self._activity is Activity.PLAYING
-        ):
+        if self.contact is not None and self.contact.enabled and self._activity is Activity.PLAYING:
             names = list(self.arm.joint_names)
             measured = [state.torques.get(n, 0.0) for n in names]
             q = [state.positions.get(n, 0.0) for n in names]
@@ -913,9 +869,9 @@ class Controller:
 
     # ── thread driver ────────────────────────────────────────────────────────
     #
-    # On real hardware the loop is upstream's start_control_loop(control_fn,
-    # rate), which already owns CAN timing. This thread exists so the simulated
-    # arm can run the identical tick() without one.
+    # The same application thread drives tick() for hardware and simulation.
+    # The transport handles CAN I/O or independent physical integration; neither
+    # owns the application's activity, watchdog or shutdown decisions.
 
     def start(self, rate_hz: float = 100.0) -> None:
         if self._thread is not None:

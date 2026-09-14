@@ -1,307 +1,140 @@
 # Teach & Repeat · 示教回放
 
-**English** | [中文](./README.zh-CN.md)
+录下命名位姿、编排站位、执行回放。应用负责工作流与安全策略，[reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py) 负责机器人算法和传输。
 
-> **Teach it once, it walks it a thousand times.**
-> 教它走一遍，它替你走一万遍。
+界面只有位姿库、一个只读 MeshCat 反馈窗口和站位编辑器。默认仿真后端是 MuJoCo，不是浏览器动画。插件、快门、Agent 运行时已移除，未来接入契约保留为[设计说明](docs/PLUGINS.md)。
 
-A teach-and-repeat platform for spatial waypoints on a robot arm. Drag the arm to a pose, let go, hit record — that's a waypoint. Hang actions on waypoints (a camera shutter is the first), then press play: the arm walks the whole tour, and at every stop it settles and acts.
+修改代码先读 [AGENTS](AGENTS.md)。真实硬件禁区和标定证据仍在 [HARDWARE_NOTES](docs/HARDWARE_NOTES.md)。
 
-```
-teach                     store                          act
-drag → release → record → ordered waypoints + actions → arrive → settle → fire → next
-```
+## 安装与启动
 
-The first deployment is automated multi-view photography: a reBot-RS six-axis arm holds a Canon camera, the subject stays put. Photos land on the camera's SD card — this project only drives the arm to the pose and presses the shutter.
-
-> Read **[AGENTS.md](./AGENTS.md)** before touching the code (four rules that fail silently — wrong results, no errors). What's done and blocked is in **[PROGRESS.md](./PROGRESS.md)**.
-
-New to the codebase? **[Understand it in 30 minutes](./docs/START_HERE.md)** before following the task-specific references.
-
----
-
-## Where everything lives
-
-| Area | Directories |
-|---|---|
-| Program | `app/backend/` (kernel, engine, plugin layer, API — see `docs/ARCHITECTURE.md`), `app/frontend/` (UI + dev mock + contract runner), `app/firmware/esp32-shutter/`, `app/vendor/reBotArm_control_py/` (pinned submodule) |
-| Config & data | `app/config/` (hardware yaml + operator tuning), `app/data/` (runtime poses / sequences / templates, gitignored) |
-| Deploy | `app/deploy/` (systemd units + udev rule) |
-| Knowledge | `AGENTS.md` (agent handbook), `docs/` (architecture, hardware, interaction), `PROGRESS.md` (current), this README |
-| Verification | `app/tests/`, `app/contract/cases/` (golden contract cases) |
-| Entries | `./dev.sh` (everything on this machine), `./device.sh` (everything over ssh to the device) |
-
----
-
-## Requirements
-
-| | | If you don't have it |
-|---|---|---|
-| reBot-RS robot arm | 6 joints + gripper, RobStride, 48V, CAN | `./dev.sh sim` runs a simulated arm — everything but real motion works |
-| USB-CAN adapter | host ↔ arm | same |
-| Canon camera | body must support Bluetooth remote | `SimShutter` — shutter calls are logged only |
-| XIAO ESP32-S3 | shutter bridge: USB to host, BLE to camera | same |
-| reComputer R2x | deployment target | any dev machine works |
-
-Software: **uv**, **Node 18+**, Python 3.11 (installed by uv).
-Kinematics, dynamics and collision checking run on macOS and Linux dev machines — **only the CAN transport needs real hardware**.
-
----
-
-## Install
+依赖 uv、Python 3.11、Node 22+、Git。只有 prod 需要 CAN 硬件。
 
 ```bash
 git clone --recursive https://github.com/Love4yzp/rebot-copilot-camera.git
 cd rebot-copilot-camera
-cd app && uv sync                       # the application lives in app/; everything below runs from there
-cd app/frontend && npm install && npm run build
-```
-
-Already cloned without `--recursive`: `git submodule update --init`.
-
-**Don't skip this.** The arm control library is a submodule, not a pip dependency (upstream has no `[build-system]`, so it can't install as a git dependency). Miss it and `uv sync` still succeeds — then imports fail.
-
----
-
-## Try it (no hardware)
-
-```bash
 ./dev.sh sim
 ```
 
-Open **http://127.0.0.1:18790**. The simulated arm responds to teaching drags — after "＋ 录位姿" opens teaching, click an arm link in the 3D monitor to select a joint, then drag the ring that appears to push it. It walks waypoints and pretends to fire the shutter — the whole workflow runs. `./dev.sh status` reports who is on the port. `./dev.sh --help` is the command list.
+打开 http://127.0.0.1:18790。脚本启动完整后端、安装 physics extra、构建前端。后端只由人用 dev.sh 启动，agent 用 pytest 验证。
 
-Frontend work against a running backend: `cd app/frontend && npm run dev` (hot reload, proxies to 18790).
-Tests: `cd app && uv run pytest`.
-
-`./dev.sh` is the local start path. `./dev.sh sim` starts the backend with no hardware (the old `--sim` spelling still works); `./dev.sh prod` for the real arm. `./dev.sh --no-build` skips the frontend rebuild once `app/backend/static/` exists (`/docs` is then the console). `./dev.sh ui` is frontend-only (in-memory mock, no Python). **Whatever the mode, the backend's arm safety measures (estop latch / motion gate / watchdog) are always on.** A second instance is refused before it touches CAN. Deployment to the device is a different script, `./device.sh` — see "Deploy to the R2x"; daily use never touches it.
-
-**Preview the frontend without the backend**: `./dev.sh ui`, or `cd app/frontend && npm run dev:mock`. API, WebSocket state stream and the 3D arm are all replaced by an in-memory mock — list / teach / record / play / estop all work, data is just ephemeral. The 3D arm reads the URDF from app/vendor/, so run `git submodule update --init` first; then open http://localhost:5173.
-
----
-
-## Shoot a set
-
-### 1 · Start, and confirm it's on the real arm
-
-Arm on CAN, ESP32 on USB, camera mounted on the gripper. **Not sim mode**:
-
-```bash
-./dev.sh prod
-./dev.sh status    # arm.simulated must be false
-```
-
-**Don't skip this check.** Outside sim mode, a missing arm refuses to start. `simulated: true` means you started `./dev.sh sim`.
-
-### 2 · Pair the camera (once)
-
-1. Camera menu `Wireless communication settings > Bluetooth` → set to **Remote control** (not "Smartphone"). Pairing fails without this.
-2. Select "Pairing" on the camera; it waits.
-3. `curl -X POST http://127.0.0.1:18790/api/shutter/pair` (see the [firmware README](./app/firmware/esp32-shutter/README.md)).
-4. The pairing is stored on the board and reconnects automatically on power-up.
-
-Verify the whole chain — **this takes a real photo**:
-
-```bash
-curl -X POST 'http://127.0.0.1:18790/api/shutter/test?shoot=true'
-```
-
-Without `?shoot=true` no frame is burned, but both links are still checked: `connected` in the reply is the USB half, `camera` is the BLE half. **Only the second one answers "will a frame actually be taken"** — a board answering perfectly while nothing is paired is this machine's most expensive kind of silent failure.
-
-### 3 · Record poses
-
-"＋ 录位姿" at the bottom of the library opens a teach bar:
-
-1. The arm **holds still first** — an arm that goes limp with nobody holding it will sag.
-2. **Give it a push** — it detects the motion and releases into zero-force float; drag it freely. In the simulator there is no hand: click an arm link in the 3D monitor to select a joint, then drag the ring that appears.
-3. Drag to the pose, **let go**. About 0.25 s after your hand stops, it locks in place.
-4. Name it, press "保存位姿" (Save pose). Repeat 2–4 for the next one.
-
-Poses live in the library and are **linked** by any number of sequences — edit a pose and every reference changes with it. Daily tap-to-go: tap a pose card, the arm goes there. The teach bar has its own estop button — in this mode your hands are on the arm, not the keyboard.
-
-### 4 · Cut the timeline
-
-**Drag a pose card onto the timeline** — that is one station (a hold block). A transition block is generated between two different poses automatically: the arm must physically get there, which is physics, not a setting — transitions cannot be deleted, only retimed and re-eased.
-
-- Drag a hold's right edge to trim it; drag the whole block to reorder.
-- **Double-click a block** to pin an event marker: shutter, wait, or any installed plugin (e.g. a turntable). Markers are pinned to a time inside their parent block and move/trim with it.
-- Select a block or marker to edit its parameters in the inspector; `Delete` removes the selection.
-
-"存为模板" (Save as template) snapshots the current sequence as a structural recipe — stations, durations, markers, transition parameters, **no joint angles**. "用它" (Use it) on a template card opens the **station-by-station wizard**: at each station, drag the arm and record a fresh pose, or bind an existing one (optionally "去这里" first to check the framing). The wizard generates a detached ordinary sequence — editing or deleting the template afterwards never touches it.
-
-### 5 · Preview and execute
-
-Two verbs, never one button:
-
-- **▶ 预演 (Preview)**: the playhead walks the plan ruler and the monitor plays a greyscale simulation (transition easing is visible) — **the arm does not move**. Preview is not a machine state; none of the four status colours light up.
-- **执行（臂会动）(Execute — the arm will move)**: the arm runs for real. The playhead walks true progress, the monitor flips to the live view, amber lights up, and the timeline is locked until the run ends.
-
-A wait marker stops both: playback suspends there until "继续" (Continue). Before executing, the **entire sequence** is pre-checked for joint limits and self-collision, including the paths between adjacent poses — two individually legal poses can have a straight-line path through the arm's own base. Illegal means refused, **the arm doesn't move at all**.
-
-### Reading the UI
-
-The screen itself is grey. **Any colour means the machine is doing something** — so a glance from beside the arm is enough; no need to read text up close. The light band across the very top is the main signal:
-
-| Colour | Meaning |
-|---|---|
-| dark | idle |
-| amber sweep | arm is moving — hands off |
-| amber solid | teaching — arm is limp, push it |
-| white flash | shutter fired |
-| green | in place, arm holding |
-| red pulse | estopped |
-
-Colour and words always appear together. **No green means the UI doesn't know where the arm is** — that's what an estop freeze or a manual push looks like, and it's not a bug.
-
----
-
-## Emergency stop
-
-**The big red button in the top bar, or `Esc`.** Works during playback and teaching.
-
-- The arm **holds torque and freezes in place** — no power cut, no going limp.
-- Every request that would move the arm returns 409 with a reason.
-- **After clearing, it stays put — nothing auto-resumes** — the scene has most likely changed by the time you clear (arm dragged away, sample removed).
-
-Besides the human button, a watchdog triggers automatically: the control loop persistently late, sustained CAN read failures, joints persistently drifting while holding. The reason is shown on the estop bar.
-
-## Shutting down
-
-**Ctrl+C (or `systemctl stop`) does not exit immediately**: the arm first moves slowly back to the zero pose (all joints q=0, ~14°/s, up to ~45 s), and only then does the control loop stop and the process exit. Pressing Ctrl+C again during the park neither speeds it up nor interrupts it — repeated signals are ignored. After the process exits the motors stay energized, pinning the arm at zero.
-
-One exception: **if the emergency stop is latched, shutdown does not park** — the arm exits holding its frozen pose. A latched stop means something went wrong, and planning a new motion is exactly what it exists to prevent.
-
----
-
-## Configuration
-
-| Env var | Default | Notes |
-|---|---|---|
-| `REBOT_HOST` | `0.0.0.0` | Listen address. The startup banner lists the addresses the UI is reachable on. **Any interface beyond localhost opens arm control to that network — this project has no auth layer** |
-| `REBOT_PORT` | `18790` | Port |
-| `REBOT_DATA_DIR` | `./app/data` | Operator data root: `poses/`, `sequences/`, `templates/` live under it, one JSON per document |
-| `REBOT_SHUTTER_PORT` | `/dev/rebot-shutter` | Shutter board serial port. The stable udev name — never `/dev/ttyACM*`, whose numbering swaps with plug order |
-| `REBOT_SHUTTER_BAUD` | `115200` | Shutter board baud. Change it together with the firmware's `-D REBOT_SERIAL_BAUD` |
-| `REBOT_TUNING_FILE` | `./app/config/tuning.yaml` | Where the tuning panel persists. Missing file = defaults |
-
-CLI: `./dev.sh sim` (= `--sim`) / `--host` / `--port` / `--local` (`--local` binds 127.0.0.1 only).
-`device.sh` additionally requires `REBOT_HOST_SSH` (no default — point it at your device, e.g. `recomputer@192.168.1.10`) and reads `REBOT_REMOTE_DIR`.
-
-**Tuning panel** (the「调参」button on the right of the monitor area; entering it in prod asks for confirmation): float kp/kd, float/lock thresholds, arrival settle, approach speed limit, and the payload profile (bare/camera/gripper). Changes apply hot — float gains can even be tuned mid-drag; but a payload switch is refused while the arm floats, and every write is refused while a sequence executes. Hot changes live in memory only;「保存到配置」writes `app/config/tuning.yaml`, and「恢复已保存」reverts to the last save.
-
-**After mounting the camera**: weigh the body + mount, enter the mass under「负载 → 相机质量」and the centre-of-mass offset as com, switch to the camera profile, then verify by float-drift feel — release the estop, the backend drops into zero-force teach, and the arm should stay put; drift means the gravity feedforward is off (per-joint correction workflow in `docs/HARDWARE_NOTES.md` #B2). No code constants to edit anymore.
-
----
-
-## Deploy to the R2x
-
-Point `device.sh` at your device first — no target is baked in:
-
-```bash
-export REBOT_HOST_SSH=recomputer@<device-ip>   # `recomputer` is the reComputer factory-default user
-
-./device.sh setup     # once: uv + systemd + CAN + udev + groups
-./device.sh push      # after changes: build frontend + rsync + restart
-./device.sh enable    # start on boot
-./device.sh status    # running? real arm or simulator?
-./device.sh logs      # tail journalctl
-./device.sh open      # SSH tunnel + open browser
-./device.sh run       # foreground, for print/breakpoint debugging
-```
-
-**No auth layer**, and this service moves a 48V arm. Two deployment shapes:
-
-**Localhost only (default, the unit in this repo — the app itself now binds all interfaces unless pinned via `REBOT_HOST=127.0.0.1` in the unit or `--local` on the CLI)**
-
-The service listens on `127.0.0.1`; remote access goes through an SSH tunnel: `./device.sh open` builds the tunnel and opens the browser. Right for networks you don't trust.
-
-**LAN access (common on a reComputer)**
-
-Device on a reComputer, other hosts on the same LAN opening the UI directly: change `Environment=REBOT_HOST=127.0.0.1` in `app/deploy/rebot-copilot-camera.service` to `0.0.0.0` (or the device's static LAN IP), `push`, then visit `http://<device-ip>:18790` from the LAN. Note **anyone who can reach that port can move the arm** — only do this on a LAN you control; a static IP avoids the "device joined a new network and got exposed" surprise.
-
-Untrusted network plus remote access: don't expose the service directly — put an authenticating reverse proxy in front of the localhost service (Caddy / nginx basic auth is enough), or go through a private network with ACLs (WireGuard / Tailscale). Auth is the deployment layer's job, not this application's — such configs belong to the deployment site and stay out of the repo.
-
-`push` never deletes `app/data/` on the device — the operator's taught poses and sequences live there and exist only there.
-
----
-
-## Troubleshooting
-
-| Symptom | Probably | Do |
-|---|---|---|
-| Service running, arm dead still | started with `./dev.sh sim`, or the UI is talking to a leftover sim process | `./dev.sh status` — `arm.simulated` must be false on hardware. Prod refuses to start if the arm is missing |
-| Won't start on macOS, log says `load PCBUSB failed` | missing MacCAN CAN runtime — macOS has no SocketCAN; CAN goes through `libPCBUSB.dylib` (supports PEAK and PEAK-compatible adapters such as XCAN-USB) | install `libPCBUSB.dylib` into `~/.local/lib/` with a symlink named `PCBUSB` pointing at it (motorbridge ships a tarball under `third_party/pcan/macos/`). `./dev.sh` injects the dyld search path; don't start the backend any other way |
-| `import reBotArm_control_py` fails | submodule not pulled | `git submodule update --init` |
-| Play returns **400** | a waypoint exceeds limits / self-collides, or a path between adjacent points intersects | read `detail.reasons` in the response — it names the joint or segment. Note **recording only warns, doesn't refuse** (the arm is physically there); the check happens before play |
-| Play returns **409** | estop latched, or already playing / teaching | `detail` says which |
-| Arm won't drag | teach not on, or estop latched | with teach on the arm **starts holding** — push it once to release. Design, not stuck |
-| Shutter self-test passes, nothing shot during play | the camera declined or went to sleep — `camera: true` says it was paired when asked, not that it will answer | test the whole chain with `?shoot=true`. Usual causes: camera asleep, Bluetooth not set to "remote control", or the board rebooted and lost its pairing (re-pair with `POST /api/shutter/pair`) |
-| Host receives nothing from the ESP32 at all | `platformio.ini` missing `-D ARDUINO_USB_CDC_ON_BOOT=1` | add it and reflash. Without it `Serial` goes to the UART0 pins: the board enumerates, the port opens, writes succeed — **no error anywhere in the chain** |
-| `/api/logs` is empty | service account not in the `systemd-journal` group | `./device.sh setup` adds it; log in again after |
-| Chinese becomes `?` in journalctl | systemd defaults to `LANG=C` | the unit and `device.sh run` both set `LANG=zh_CN.UTF-8` |
-| Arm suddenly stopped on its own | watchdog-triggered estop | reason is on the estop bar. All three conditions require **sustained** failure — a jitter or a dropped frame won't trigger |
-| 3D blank in the frontend | URDF / meshes not loaded | the drawer says "load failed" / "mesh missing" / "3D failed to initialise" — follow that line. Most common: submodule not pulled, `git submodule update --init`. Self-check: `curl -I :18790/assets/urdf/00-arm-rs_asm-v3/meshes/base_link.STL` should return 200 — note meshes live at the **package root**, not under `urdf/` |
-| Never lights green (in place) | arm was estopped or moved by teaching | correct behaviour. After the arm is frozen elsewhere or pushed by hand, the UI stops claiming to know where it is — tap any pose card or run the sequence again |
-
----
-
-## API
-
-Interactive docs at `http://127.0.0.1:18790/docs`, OpenAPI at `/openapi.json`.
-
-| | |
-|---|---|
-| `GET/POST /api/estop` · `POST /api/estop/clear` | Emergency stop. Engage always 200s; repeat engages keep the first reason |
-| `GET/POST /api/poses` · `PATCH/DELETE /api/poses/{id}` | Pose library. `POST /api/poses/capture` records the arm's current pose |
-| `GET /api/poses/{id}/links` | Which sequences reference this pose — asked before delete/overwrite |
-| `POST /api/poses/{id}/goto` | Single pose: go, hold. Accepts `{"source": "..."}` to record who triggered it |
-| `GET/POST /api/sequences` · `GET/PATCH/DELETE /api/sequences/{id}` | Sequence CRUD. Block writes are normalized on the way in (transitions are automatic); a running sequence is locked against edits |
-| `POST /api/sequences/{id}/execute` · `POST /api/execute/stop` · `POST /api/execute/resume` | Execution. Full pre-flight before execute (path + pose references + plugin availability); resume continues past a wait marker |
-| `GET/POST /api/templates` · `DELETE /api/templates/{id}` · `POST /api/templates/{id}/instantiate` | Structural recipes with pose slots; instantiate copies with each slot bound to a library pose |
-| `POST /api/teach` | Zero-force teaching toggle |
-| `POST /api/shutter/test` | Shutter self-test. Checks both links, USB and BLE; `?shoot=true` takes a real shot |
-| `POST /api/shutter/pair` | Put the board into BLE pairing mode and wait for the camera (30s). 409 while playing |
-| `GET /api/plugins` · `POST /api/app/plugins/probe` | Which action plugins are installed and usable. The frontend renders trigger forms from this |
-| `GET /api/control` · `/api/health` · `/api/logs` · `WS /ws` | State and logs |
-| `WS /api/events` | Semantic event stream: arrived / action / estop. For integrators; no 20 Hz joint angles |
-
-**Every endpoint that moves the arm returns 409 with a reason during estop.**
-
-**Extending the machine**: action plugins (in-process — drop a folder with a `plugin.json` into `app/plugins/`, or `uv pip install` a package declaring a `rebot.actions` entry point), trigger sources (HTTP clients calling `goto`), event subscriptions (WS clients on `/api/events`). Full contracts for all three extension points and the no-hardware dev loop `uv run -m backend.actions.check` are in [`docs/PLUGINS.md`](./docs/PLUGINS.md); the worked example is an installable package at [`app/examples/rebot-plugin-turntable/`](./app/examples/rebot-plugin-turntable/) rather than a listing in a document, so the packaging metadata is covered by tests.
-
-**Agent API** (`/api/agent/*`) for external LLMs / scripts: `acquire` takes an exclusive token, `control/joints` and `control/play/{id}` issue commands, `release` hands it back (`?force=true` lets the Web UI forcibly reclaim). Leases expire after 5 idle minutes or 30 minutes held. **It grants control, not safety exemption** — during estop the agent is refused exactly like a human. Full parameters in `/docs`.
-
----
-
-## Optional headless physics validation
-
-The application does not require MuJoCo. Install the opt-in extra and run the
-deterministic baseline when validating playback changes:
+漏拉子模块时执行 `git submodule update --init`。dev.sh 自动准备锁定基线上的 SDK 扩展补丁。仅安装依赖：
 
 ```bash
 cd app
+python prepare_sdk.py
 uv sync --frozen --extra physics
-uv run --frozen --extra physics python -m backend.validation \
-  --output data/validation/current.json --check
 ```
 
-This drives the production `ArmSession` through an injected MIT transport and
-keeps the last command in a headless MuJoCo plant. Optional tests run with
-`uv run --frozen --extra physics pytest -q tests/test_physics_model.py tests/test_physics_playback.py`; the
-default sync path does not install MuJoCo. See
-[`docs/motion-validation.md`](./docs/motion-validation.md) for model checks,
-metrics and limitations.
-
-## More
-
-| | |
+| 命令 | 含义 |
 |---|---|
-| [docs/START_HERE.md](./docs/START_HERE.md) | Thirty-minute codebase orientation |
-| [AGENTS.md](./AGENTS.md) | Read before coding: four iron rules, code map, conventions |
-| [docs/HARDWARE_NOTES.md](./docs/HARDWARE_NOTES.md) | Hardware facts — **verified** vs **to-be-measured** |
-| [PROGRESS.md](./PROGRESS.md) | Current status and blockers |
-| [app/firmware/esp32-shutter/](./app/firmware/esp32-shutter/README.md) | Flashing, pairing, serial protocol |
+| `./dev.sh sim` | 全栈 + 力矩驱动 MuJoCo，不连接 CAN |
+| `./dev.sh prod` | 真臂，连不上拒绝启动，不退回模拟 |
+| `./dev.sh build` | 前端构建唯一入口，不启动后端 |
+| `./dev.sh status` | 核对 mode 与 arm.backend |
+| `./dev.sh sim --local` | 应用仅监听本机 |
+| `./dev.sh sim --no-build` | 复用已有前端构建 |
 
-The arm layer is not written here — kinematics, dynamics, gravity compensation, trajectory planning and URDF all come from [reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py).
+`ui` / `mock` 和 `dev:mock` 已移除。前端热更新仍可用 `cd app/frontend && npm run dev`，但先由人启动后端；Vite 代理 API、控制 WS 和 /viewer，不提供第二套后端。端口预检不能关闭。
 
-MIT
+## 使用工作台
+
+1. 点「+ 录位姿」。prod 先保持，推动后进入浮动，松手自动锁定。**真实标定限制解决前，只在近零位示教。**
+2. sim 在监视器的「详细数据」中短按「− 推动 / ＋ 推动」，每次 0.15 秒；服务端限制为最多 0.2 秒、关节 effort 的 20%。这是仿真力矩输入，不是 CAN 命令。
+3. 起名并点「保存」。点击卡片只选中，运动要点「移动到此位姿」；数字键、点击 3D 臂都不会命令运动。
+4. 新建序列，点「＋追加」添加站位。编辑保持/过渡时长与等待标记。相邻不同位姿自动生成过渡。
+5. sim 点「执行仿真」，prod 点「执行（臂会动）」。离首站较远时先「去起点」。等待时保持，点「继续」后续跑。执行中禁止编辑。
+6. 模板只保存结构和位姿槽位，不保存关节角，实例化后是独立序列。
+
+查看器只显示后端反馈。旋转、缩放、复位视角、收起窗口不改变物理状态；画面过期或断连会标注，不能据此认定臂在哪。新运动、示教、急停或断连都清空「已到位」，只有新的 done 反馈能重新点亮。
+
+灰阶是底盘。琥珀表示运动/可推动，绿表示已确认到位保持，红表示急停；白色快门状态当前不使用。选中与装饰不占这些状态色。
+
+## 物理仿真与换末端
+
+仿真用于检查模型响应、跟踪误差、力矩饱和与粗略碰撞，**不替代**真臂、摩擦、减速器间隙、电机固件或新夹爪的标定。当前不做抓取仿真，不虚构夹爪电机到双指行程的映射。
+
+SDK plant 接收与 prod 相同的 ArmSession MIT 位置/速度/kp/kd/重力前馈，按 URDF effort 限幅，1 ms 积分；应用控制循环 100 Hz。读取状态不推进物理。物理不依赖查看器，但控制客户端断连仍触发原有 SafeLock 策略。
+
+用 `REBOT_END_EFFECTOR_FILE` 指向 JSON 文件替换原装固定末端：
+
+```json
+{
+  "name": "example-tool",
+  "mass": 0.2,
+  "com": [0, 0, 0.05],
+  "box": [0.04, 0.04, 0.10],
+  "frame": "gripper_end"
+}
+```
+
+以上仅是格式示例，**不是真实硬件标定值**。单位 kg、m、kg·m²。可选 `inertia` 为 [xx, yy, zz, xy, xz, yz]，在质心处且坐标轴平行安装框架；盒体中心位于质心。省略惯量时使用均匀盒体估算并标记 `box-estimate`，提供值时校验物理有效性。prod 替换夹爪前必须核实拆装，并在硬件 YAML 设 gripper: false；不能在电机仍配置在线时悄悄移除夹爪质量。更换末端要重启，重力、物理、碰撞和查看器不能各用一份不同模型。
+
+不提供自定义文件时，sim 使用自己的 bare/gripper profile。旧 camera 的质量/质心调参不足以进行动态模拟，需要完整末端描述。真实标定和真实位姿不被改写。运行期间拒绝 payload 切换，应停止后准备新配置再重启。
+
+## 急停与退出
+
+顶部「急停」或 Esc 冻结当前位置，**持续 MIT 力矩与重力补偿**，绝不调用上游失能式停止。闩锁吸合时运动端点拒绝请求，解除后保持、不自动续跑。查看器获得焦点时 Esc 也有效。
+
+Ctrl+C / SIGTERM 先在控制循环运行期间慢速回零，再退出；重复信号不能跳过回零。闩锁吸合时不新发回零运动，原地保持退出。systemd 停止超时保留 60 秒。退出保持与近零位示教的硬件限制见硬件记录。
+
+## 配置与部署
+
+| 配置 | 默认 / 范围 |
+|---|---|
+| `REBOT_HOST` | 0.0.0.0；不可信网络用 --local 或 127.0.0.1 |
+| `REBOT_PORT` | 18790 |
+| `REBOT_DATA_DIR` | app/data；真实库为 poses/sequences/templates，sim 在 sim/ 下 |
+| `REBOT_TUNING_FILE` | app/config/tuning.yaml，**仅 prod** |
+| `REBOT_END_EFFECTOR_FILE` | 可选固定末端 JSON，启动时读取 |
+| 仿真调参 | app/data/sim/tuning.yaml，与真实标定隔离 |
+
+「调参」保留浮动增益和阈值热改。执行中拒绝所有调参写入，浮动中还拒绝重力修正；显式保存才写入当前实例的调参文件。
+
+本服务**没有认证**。能访问应用端口的人就能命令臂。内部 MeshCat HTTP/ZMQ 仅绑定回环，同源代理只读，但这不等于应用运动 API 有认证。
+
+明确需要部署设备时：
+
+```bash
+export REBOT_HOST_SSH=recomputer@<device-ip>
+./device.sh setup
+./device.sh push
+./device.sh enable
+./device.sh status
+./device.sh open
+```
+
+setup 安装 CAN/应用服务及权限，不再安装快门 udev 规则。push 调 dev.sh build，保护远端数据和真实调参，再重启服务。首次安装需在设备上显式准备和验证真实标定，push 不复制开发机 tuning.yaml。随仓库提供的 unit 仅监听本机，远程通过 SSH 隧道或部署层认证代理访问。不要把未认证的运动 API 暴露公网。
+
+## API 与验证
+
+`/docs`、`/openapi.json` 是当前路由说明：位姿、序列、模板、teach/rest、stop/resume、急停、调参、健康/日志、`/ws` 和 `/api/events`。`GET /api/health` 的 arm.backend 为 hardware 或 mujoco。`GET /api/sim/state` 返回模型计算反馈；`POST /api/sim/perturb` 只在 sim、未急停且示教中可用。
+
+`/api/plugins/*`、`/api/shutter/*`、`/api/agent/*` 不再注册。Sequence schema 为 v3，标记只接受 wait。v2 插件序列不迁移也不删除；用户位姿与标定文件保留。删除的旧源码/示例可从 Git 恢复。
+
+```bash
+cd app
+uv run --frozen --extra physics pytest
+uv run --extra physics ruff check backend tests
+uv run --extra physics python -m backend.export_contract --check
+uv run --frozen --extra physics python -m backend.validation --output data/validation/current.json --csv data/validation/current.csv --check
+cd ..
+./dev.sh build
+```
+
+REST 对比已提交 golden，normalize 在 Python/TypeScript 双端执行。前端类型来自 OpenAPI，CI 检查漂移。`python -m backend.export_contract` 不启动服务，把 TypeScript 输出到 stdout；审阅后再更新生成文件。
+
+## 排障
+
+| 现象 | 检查 |
+|---|---|
+| 模式不对 / 运动拒绝 | dev.sh status；prod 不回退，读取 400/409 原因 |
+| SDK 导入/补丁失败 | 拉子模块，运行 prepare_sdk.py；保留重叠修改，不要强制 reset |
+| 缺 MuJoCo | 使用 dev.sh sim，或安装 physics extra |
+| 查看器空白/过期 | 后端是否运行、模型是否有效、/viewer/ws 是否连接；查看器不是控制心跳 |
+| macOS PCBUSB 加载失败 | MacCAN libPCBUSB.dylib 放 ~/.local/lib，建立 PCBUSB 链接；dev.sh 注入 dyld 路径 |
+| 意外停止 | 看急停/SafeLock 原因，不要关闭看门狗 |
+| 日志为空 | 服务用户需要 systemd-journal 组权限 |
+| 没有绿色到位 | 旧 done、示教、停止、断连已使认领失效，需要明确的新运动 |
+
+[架构与复用边界](docs/ARCHITECTURE.md) · [代码地图](docs/CODEMAP.md) · [交互](docs/TIMELINE.md) · [未来接口](docs/PLUGINS.md) · [当前状态](docs/PROGRESS.md)

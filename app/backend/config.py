@@ -21,12 +21,6 @@ POSES_DIR = DATA_DIR / "poses"
 SEQUENCES_DIR = DATA_DIR / "sequences"
 TEMPLATES_DIR = DATA_DIR / "templates"
 
-#: Drop-in plugins, one folder each with a plugin.json. Gitignored like the
-#: operator data — it is content the user added, not this repo's source — but
-#: unlike the stores it syncs with device.sh push, because it is code whose
-#: source of truth is the development machine.
-PLUGINS_DIR = Path(os.environ.get("REBOT_PLUGINS_DIR", REPO_ROOT / "plugins"))
-
 #: Operator-calibrated tuning (payload profile, float gains, thresholds),
 #: written only by the tuning panel's explicit save. Kept out of
 #: config/rebotarm_rs.yaml: that file is a commented upstream fork, and a
@@ -40,10 +34,3 @@ TUNING_FILE = Path(os.environ.get("REBOT_TUNING_FILE", REPO_ROOT / "config" / "t
 #: pass --local.
 HOST = os.environ.get("REBOT_HOST", "0.0.0.0")
 PORT = int(os.environ.get("REBOT_PORT", "18790"))
-
-#: The shutter board. udev gives the XIAO this stable name
-#: (deploy/99-rebot-usb.rules): it and the USB2CAN bridge are both generic CDC
-#: devices, so raw /dev/ttyACM* numbering swaps with plug order, and a shutter
-#: driver pointed at the CAN bridge looks exactly like a dead camera.
-SHUTTER_PORT = os.environ.get("REBOT_SHUTTER_PORT", "/dev/rebot-shutter")
-SHUTTER_BAUD = int(os.environ.get("REBOT_SHUTTER_BAUD", "115200"))

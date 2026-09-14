@@ -7,12 +7,12 @@ separate units that each behave correctly on their own.
 
 import pytest
 
-from backend.actions import InlineRunner, ShutterProvider
+
 from backend.arm import SimArm
 from backend.core import Broadcaster, Controller, Phase
-from backend.sequences import EventMarker, HoldBlock, Pose, Sequence, TransitionBlock
+from backend.sequences import HoldBlock, Pose, Sequence, TransitionBlock
 from backend.safety import ClientWatchdog, ContactObserver, LatchSource, SafetyLatch, Watchdog
-from backend.shutter import SimShutter
+
 
 JOINTS = ("joint1", "joint2")
 DT = 0.01
@@ -36,7 +36,6 @@ class Rig:
         self.clock = FakeClock()
         self.arm = SimArm(JOINTS, clock=self.clock, tau=0.05)
         self.arm.connect()
-        self.shutter = SimShutter()
         self.latch = SafetyLatch(clock=self.clock)
         self.broadcaster = Broadcaster()
         self.published: list = []
@@ -44,7 +43,6 @@ class Rig:
         self.watchdog = Watchdog(self.latch, clock=self.clock) if watchdog else None
         self.controller = Controller(
             arm=self.arm,
-            shutter=self.shutter,
             latch=self.latch,
             broadcaster=self.broadcaster,
             clock=self.clock,
@@ -53,16 +51,13 @@ class Rig:
                 ClientWatchdog(clock=self.clock, timeout_s=2.0) if client_watchdog else None
             ),
             contact=(
-                ContactObserver(
-                    threshold_nm=8.0, window_s=0.05, enabled=True, clock=self.clock
-                )
+                ContactObserver(threshold_nm=8.0, window_s=0.05, enabled=True, clock=self.clock)
                 if contact
                 else None
             ),
             expected_period_s=DT,
             # Inline, so a fake clock and real worker threads never race. The
             # loop-stays-free property is the subject of test_action_runner.py.
-            actions=InlineRunner([ShutterProvider(self.shutter)]),
         )
 
     def step(self, n: int = 1) -> None:
@@ -79,8 +74,8 @@ class Rig:
         raise AssertionError("playback never finished")
 
 
-def seq(*angles: float, name: str = "x", shutter: bool = False) -> tuple[Sequence, dict]:
-    """A hold per angle, transitions between, optionally a shutter marker each."""
+def seq(*angles: float, name: str = "x") -> tuple[Sequence, dict]:
+    """A hold per angle, transitions between, with no accessory runtime."""
     poses: dict[str, Pose] = {}
     blocks = []
     for i, q in enumerate(angles):
@@ -88,13 +83,7 @@ def seq(*angles: float, name: str = "x", shutter: bool = False) -> tuple[Sequenc
         poses[p.id] = p
         if i:
             blocks.append(TransitionBlock(duration_s=1.0))
-        markers = [
-            EventMarker(
-                kind="shutter",
-                params={"count": 1, "interval_s": 0.0, "focus_first": True},
-                at=0.1,
-            )
-        ] if shutter else []
+        markers = []
         blocks.append(HoldBlock(pose_id=p.id, duration_s=0.3, markers=markers))
     return Sequence(name=name, blocks=blocks), poses
 
@@ -126,14 +115,14 @@ def test_rest_is_reported_as_rest_not_idle(rig: Rig):
 
 
 def test_playback_runs_a_sequence_to_completion(rig: Rig):
-    sequence, poses = seq(0.2, 0.5, shutter=True)
+    sequence, poses = seq(0.2, 0.5)
     rig.controller.play(sequence, poses)
     assert rig.controller.mode == "playback"
 
     rig.run_until_done()
 
     assert rig.controller.executor.phase is Phase.DONE
-    assert rig.shutter.shots == 2
+    assert rig.arm.read_state().positions["joint1"] == pytest.approx(0.5, abs=0.02)
     assert rig.controller.mode == "idle"
 
 
@@ -268,7 +257,7 @@ def test_stop_mid_playback_aborts_and_never_resumes(rig: Rig):
     leaves the system idle rather than picking up where it left off. By the
     time an operator clears a stop the scene has usually changed.
     """
-    sequence, poses = seq(0.3, 0.9, name="multi-angle", shutter=True)
+    sequence, poses = seq(0.3, 0.9, name="multi-angle")
     rig.controller.play(sequence, poses)
     rig.step(10)
 
@@ -277,11 +266,11 @@ def test_stop_mid_playback_aborts_and_never_resumes(rig: Rig):
 
     assert rig.controller.executor.phase is Phase.ABORTED
     assert rig.controller.executor.error == "emergency stop engaged"
-    shots_at_stop = rig.shutter.shots
+
     frozen = rig.arm.read_state().positions["joint1"]
 
     rig.step(1000)
-    assert rig.shutter.shots == shots_at_stop
+
     assert rig.arm.read_state().positions["joint1"] == pytest.approx(frozen, abs=1e-6)
 
     rig.latch.clear()
@@ -289,7 +278,7 @@ def test_stop_mid_playback_aborts_and_never_resumes(rig: Rig):
 
     assert rig.controller.mode == "idle", "must not resume on clear"
     assert rig.controller.is_playing is False
-    assert rig.shutter.shots == shots_at_stop
+
     assert rig.arm.read_state().positions["joint1"] == pytest.approx(frozen, abs=1e-6)
 
 
@@ -461,8 +450,15 @@ def test_the_progress_payload_is_the_seq_playback_shape(rig: Rig):
 
     last = [m for m in rig.published if m["type"] == "playback"][-1]["data"]
     assert set(last) == {
-        "sequence_id", "sequence_name", "block_index", "block_total",
-        "phase", "t_in_block", "error", "finished", "approaching",
+        "sequence_id",
+        "sequence_name",
+        "block_index",
+        "block_total",
+        "phase",
+        "t_in_block",
+        "error",
+        "finished",
+        "approaching",
     }
     assert last["sequence_id"] == sequence.id
     assert last["sequence_name"] == "wire check"

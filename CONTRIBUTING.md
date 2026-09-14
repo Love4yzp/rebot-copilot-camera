@@ -1,56 +1,21 @@
 # 贡献指引
 
-这份文档只负责**一次改动如何完成**。第一次接手先读 [`docs/START_HERE.md`](./docs/START_HERE.md)；修改约束以 [`AGENTS.md`](./AGENTS.md) 为准；当前状态以 [`PROGRESS.md`](./PROGRESS.md) 为准。
+先读 [AGENTS](AGENTS.md)，再按 [CODEMAP](docs/CODEMAP.md) 找实现；硬件相关改动先读 [HARDWARE_NOTES](docs/HARDWARE_NOTES.md)。结构和复用边界在 [ARCHITECTURE](docs/ARCHITECTURE.md)，当前状态在 [PROGRESS](docs/PROGRESS.md)。
 
-## 开工
+## 工作流程
 
-1. 读 `AGENTS.md`，再按其中的触发条件读取专项文档。
-2. 读 `PROGRESS.md` 的当前状态。
-3. 用 `git log -- <path>` 和相关测试确认现有决定的理由。
-4. 检查 `git status --short`，保留不属于本次工作的改动。
-5. 子模块缺失时运行 `git submodule update --init`。
+1. 明确外部可观察行为，再修改应用策略或 SDK 对应责任。
+2. 保留真实数据与标定；不要启动后端或操作真实机械臂来“顺便验证”。后端只由人通过 dev.sh 启动。
+3. 在 app/ 执行 pytest 和 Ruff；用仓库根 dev.sh build 构建前端。
+4. API 变化同步 OpenAPI 生成类型；REST golden 与 TS/Python normalize 必须通过。
+5. SDK 改动同步补丁并跑可复现检查；未经硬件回归，不升级锁定的 URDF/标定基线。
 
-所有 Python 和 `uv` 命令都在 `app/` 下执行。开发机后端由人通过 `./dev.sh` 启动；agent 用测试验证，不启动服务、不占用 18790。
+## 架构体检
 
-## 修改
+- 算法是否只通过 SDK？应用不得直接导入 Pinocchio、MotorBridge、MuJoCo 或 MeshCat。
+- 运动是否仍经过 Controller 预检、Activity/Intent 和横切闩锁？新运动路由必须显式挂 gate，递归路由扫描与 OpenAPI 交叉检查不能删。
+- 查看器或第三方服务能否阻塞控制循环？反馈队列必须有界，查看器不续控制心跳。
+- UI 是否仅根据后端反馈显示实际状态？位姿选择不能直接移动臂。
+- 是否为尚不存在的配件留下空运行时框架？当前扩展只做设计，见 [PLUGINS](docs/PLUGINS.md)。
 
-- 一次提交只做一种变化：结构搬移与行为变化分开。
-- 外部行为或契约变化先补会失败的行为测试；测试观察结果，不绑定内部实现。
-- 修改 API 响应或 normalize 规则时，同步更新 Python、TypeScript mock 和 `app/contract/cases/`。
-- 状态确实变化时，同一提交更新 `PROGRESS.md`；历史留给 git，不写 changelog 文档。
-- README 的用户操作发生变化时，同步更新中英文版本。
-
-## 验证
-
-后端改动：
-
-```bash
-cd app
-uv run pytest
-uvx ruff check backend tests
-```
-
-前端改动再运行：
-
-```bash
-cd app/frontend
-npm run build
-```
-
-前后端契约改动优先运行：
-
-```bash
-cd app
-uv run pytest tests/test_contract.py tests/test_cross_lang_constants.py
-```
-
-每个提交结束时，适用的验证必须通过。无法运行的检查在交接中写清原因和未验证范围。
-
-## 提交
-
-commit message 说明**为什么改**，特别是偏离原设计或接受风险的理由。提交前复查：
-
-- 没有带入无关工作树改动；
-- 没有把运行数据、密钥或设备地址提交进仓库；
-- 文档事实仍各自在唯一来源中；
-- `PROGRESS.md` 只记录现在，不记录本轮过程。
+硬件准确性与软件测试分别报告。MuJoCo 的通过不等于真实末端已校准，不应以仿真结论覆盖原有禁区。

@@ -5,12 +5,11 @@ import time
 
 from backend.arm.limits import LIMIT_TOLERANCE_RAD as ARM_LIMIT_TOLERANCE_RAD
 from backend.arm.sim import SimArm
-from backend.actions import InlineRunner
+
 from backend.core import Broadcaster, Controller
 from backend.sequences import Pose
 from backend.safety.kinematics import LIMIT_TOLERANCE_RAD
 from backend.safety import SafetyLatch
-from backend.shutter import SimShutter
 
 
 class Clock:
@@ -38,9 +37,7 @@ def test_self_driven_commit_starts_at_current_clock_after_prepare_delay():
     clock.now = 1.5
     arm.read_state()
     assert arm._motion_started_at == pytest.approx(0.5)
-    assert arm._q_target["joint1"] == pytest.approx(
-        arm._motion.profiles["joint1"].eval(1.0)[0]
-    )
+    assert arm._q_target["joint1"] == pytest.approx(arm._motion.profiles["joint1"].eval(1.0)[0])
 
 
 def test_self_driven_delayed_handoff_rejects_stale_candidate_and_keeps_old_motion():
@@ -96,11 +93,9 @@ def test_real_clock_controller_goto_retargets_continuously():
     latch = SafetyLatch(clock=clock)
     controller = Controller(
         arm=arm,
-        shutter=SimShutter(),
         latch=latch,
         broadcaster=Broadcaster(),
         clock=clock,
-        actions=InlineRunner([]),
     )
     controller.preflight_path = lambda samples: []  # type: ignore[method-assign]
 

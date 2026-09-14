@@ -32,11 +32,7 @@
  *    comparatively, and digits that shift position while streaming are
  *    unreadable.
  *
- * 5. PREVIEW IS NOT A MACHINE STATE. While the `previewing` class is on the
- *    root, the three non-stop channels are pressed back onto the grey ramp
- *    (see the .previewing block at the bottom). The stop stays red in every
- *    state, simulated or not.
- */
+*/
 
 /* Latin-subset only (U+0000-00FF, ~12 KB each). Self-hosted rather than
  * fetched from a CDN: the device is reached over an SSH tunnel and is
@@ -78,8 +74,11 @@
   --radius: 5px;
   --rail-h: 4px;
 
-  --engrave: "Saira Condensed", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
-  --sans: system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+  --engrave:
+    "Saira Condensed", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --sans:
+    system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Segoe UI",
+    sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
@@ -146,7 +145,9 @@ button {
   padding: 8px 14px;
   min-height: 40px;
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
 }
 button:hover:not(:disabled) {
   background: var(--body-lift);
@@ -480,8 +481,13 @@ select:focus {
   animation: mode-badge-pulse 1.5s ease-in-out infinite;
 }
 @keyframes mode-badge-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* sim = blue info badge (the only colour allocated to mode) */
@@ -591,61 +597,6 @@ select:focus {
   padding: 4px 12px;
   font-size: 13px;
 }
-/* Two faces, one toggle: tap-to-go (daily) vs the clip editor (arranging).
- * Grey selection only — a status colour here would pollute the channel. */
-.mode-tabs {
-  flex: none;
-  display: flex;
-  gap: 2px;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  padding: 3px;
-  background: var(--body);
-}
-.mode-tabs button {
-  padding: 7px 16px;
-  font-size: 13.5px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--mark-dim);
-  cursor: pointer;
-}
-/* The selected face is a filled pill — the mode switch is the first thing a
- * new operator must find, so it earns the strongest grey contrast on screen. */
-.mode-tabs button[aria-selected="true"] {
-  background: var(--mark);
-  color: var(--ink);
-  font-weight: 650;
-}
-.lib__sub-tabs {
-  display: flex;
-  gap: 2px;
-  border: 1px solid var(--edge);
-  border-radius: 7px;
-  padding: 2px;
-}
-.lib__sub-tabs button {
-  padding: 4px 12px;
-  font-size: 12.5px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--mark-dim);
-  cursor: pointer;
-}
-.lib__sub-tabs button[aria-selected="true"] {
-  background: var(--mark);
-  color: var(--ink);
-  font-weight: 600;
-}
-.lib__tpl-use {
-  width: 100%;
-  min-height: 34px;
-  margin-top: 6px;
-  font-size: 12.5px;
-}
-
 /* ── library ─────────────────────────────────────────────────────────────── */
 /* Always on screen: dragging a pose onto the ruler is the most frequent
  * edit gesture there is, so the shelf cannot live in a drawer. */
@@ -1077,74 +1028,8 @@ select:focus {
   min-height: 48px;
 }
 
-/* The URDF viewer's own canvas host (see ArmView3D). */
-.viewer {
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  background: var(--ink);
-  position: relative;
-}
-.viewer canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.viewer .overlay {
-  position: absolute;
-  inset: auto 10px 10px 10px;
-  font-family: var(--engrave);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  color: var(--mark-dim);
-  pointer-events: none;
-}
-
-/* ── viewer: camera contract controls + ghost pose labels ────────────────── */
-/* The camera is a constrained turntable (no pan, no roll, clamped elevation
- * and zoom) — the controls below are its only presets. Amber appears on the
- * follow toggle only as "on" affordance, matching the motion token; ghost
- * labels stay greyscale, and a label may turn amber only while the arm is
- * actually moving toward that pose. */
-.viewer__ctl {
-  position: absolute;
-  bottom: 10px;
-  right: 10px;
-  z-index: 3;
-  display: flex;
-  gap: 6px;
-}
-.viewer__ctl button {
-  font-size: 11.5px;
-  padding: 3px 10px;
-  border-radius: 7px;
-  border: 1px solid var(--edge);
-  background: rgba(22, 22, 26, 0.8);
-  color: var(--mark-dim);
-  cursor: pointer;
-}
-.viewer__ctl button:hover {
-  color: var(--mark);
-}
-.viewer__ctl button.on {
-  color: var(--motion);
-  border-color: var(--motion);
-}
-.viewer__glabel {
-  position: absolute;
-  z-index: 2;
-  font-size: 12px;
-  color: var(--mark);
-  white-space: nowrap;
-  transform: translate(-50%, -140%);
-  pointer-events: none;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
-}
-.viewer__glabel.amber {
-  color: var(--motion);
-}
-
 /* ── transport ───────────────────────────────────────────────────────────── */
-/* Two verbs, never one button: 预演 plays the plan, 执行 moves the arm. */
+/* Explicit controls for the selected physical instance. */
 
 .transport {
   display: flex;
@@ -1176,623 +1061,6 @@ select:focus {
   .transport__timecode {
     font-size: 12px;
   }
-}
-
-/* ── timeline ────────────────────────────────────────────────────────────── */
-
-.tl {
-  flex: 1;
-  min-width: 0;
-  padding-top: 4px;
-}
-.tl-meta {
-  display: flex;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--mark-dim);
-  margin-bottom: 6px;
-}
-.tl-meta .r {
-  margin-left: auto;
-  text-align: right;
-}
-.tl-inner {
-  position: relative;
-}
-/* Zoom: the scale wrapper widens past the viewport and the scroll container
- * scrolls. Gestures read element rects, so they never see any of this. */
-.tl-scroll {
-  overflow-x: auto;
-}
-.tl-scale {
-  min-width: 100%;
-}
-/* The drop preview: a dashed gap that pushes committed blocks apart. */
-.tl-ghost {
-  flex: none;
-  height: 100%;
-  border: 1.5px dashed var(--mark-dim);
-  border-radius: 7px;
-  background: rgba(237, 237, 240, 0.04);
-}
-.tl-zoom {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: 10px;
-}
-.tl-zoom button {
-  min-width: 26px;
-  min-height: 22px;
-  padding: 0 6px;
-  font-size: 11px;
-  color: var(--mark-dim);
-  background: transparent;
-  border: 1px solid var(--edge);
-  border-radius: 6px;
-}
-.tl-zoom button:hover:not(:disabled) {
-  color: var(--mark);
-  border-color: var(--mark-dim);
-}
-.tl-ruler {
-  position: relative;
-  height: 18px;
-  border-bottom: 1px solid var(--edge);
-  touch-action: none;
-  cursor: col-resize;
-}
-.tl-tick {
-  position: absolute;
-  top: 8px;
-  bottom: 0;
-  width: 1px;
-  background: var(--edge);
-}
-.tl-tick span {
-  position: absolute;
-  bottom: 1px;
-  left: 3px;
-  font-size: 9.5px;
-  color: var(--mark-dim);
-}
-.tl-tick.end span {
-  left: auto;
-  right: 0;
-  color: var(--mark);
-}
-.tl-track {
-  position: relative;
-  height: 64px;
-  margin-top: 6px;
-  display: flex;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.tl-empty {
-  flex: 1;
-  min-height: 72px;
-  margin: 8px 0;
-  border: 1px dashed var(--edge);
-  border-radius: var(--radius);
-  background: transparent;
-}
-.tl-empty--guide {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 12px 20px;
-  line-height: 1.7;
-}
-.tl-empty__title {
-  font-weight: 600;
-  color: var(--mark);
-}
-.tl-empty--guide ol {
-  margin: 0;
-  padding-left: 1.4em;
-  display: grid;
-  gap: 4px;
-}
-
-/* ── track density tabs ──────────────────────────────────────────────────── */
-
-.trk-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 6px 16px 0;
-}
-.trk-tab {
-  min-width: 0;
-  min-height: 30px;
-  padding: 0 14px;
-  font-size: 12.5px;
-  color: var(--mark-dim);
-  background: transparent;
-  border: 1px solid var(--edge);
-  border-radius: 8px 8px 0 0;
-}
-.trk-tab.active {
-  color: var(--mark);
-  background: var(--body-lift);
-  font-weight: 600;
-}
-
-/* ── station density ─────────────────────────────────────────────────────── */
-/* Equal-width cards, no ruler: the strip either shows true time (timeline
- * density) or no proportions at all — never a fake one. */
-
-.stn-wrap {
-  position: relative; /* the lock overlay covers the strip regardless of scroll */
-}
-.stn-strip {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-  min-height: 132px;
-  overflow-x: auto;
-  padding: 4px 2px 8px;
-}
-.stn-strip > .tl-empty {
-  min-width: 100%;
-  margin: 0;
-}
-.stn {
-  flex: none;
-  width: 190px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--body-lift);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-}
-/* The current station: grey while previewing (a plan), amber only while the
- * arm is really walking it — same rule as .blk.cur. */
-.stn.cur {
-  box-shadow: inset 0 0 0 1.5px var(--mark-dim);
-}
-.exec .stn.cur {
-  box-shadow: inset 0 0 0 1.5px var(--motion);
-}
-.stn.sel {
-  box-shadow: inset 0 0 0 1.5px var(--mark);
-}
-.stn__head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.stn__idx {
-  color: var(--mark-dim);
-  font-size: 11px;
-}
-.stn__name {
-  font-weight: 600;
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.stn.missing .stn__name {
-  color: var(--mark-dim);
-  text-decoration: line-through;
-}
-.stn__dur {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-}
-.stn__dur-label {
-  color: var(--mark-dim);
-  margin-right: auto;
-}
-.stn__dur button {
-  min-width: 30px;
-  min-height: 30px;
-  padding: 0;
-  font-size: 15px;
-  line-height: 1;
-  color: var(--mark);
-  background: var(--ink);
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  touch-action: manipulation;
-}
-.stn__dur .num {
-  min-width: 3.2em;
-  text-align: center;
-}
-.stn__markers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  background: var(--ink);
-  border: 1px solid var(--edge);
-  border-radius: 12px;
-  overflow: hidden;
-}
-.chip.sel {
-  border-color: var(--mark);
-}
-.chip button {
-  min-width: 0;
-  min-height: 0;
-  background: none;
-  border: none;
-  font-size: 11px;
-  color: var(--mark);
-}
-.chip__main {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  padding: 3px 4px 3px 8px;
-}
-.chip__main .num {
-  color: var(--mark-dim);
-  font-size: 10px;
-}
-.chip__x {
-  padding: 3px 8px 3px 4px;
-  color: var(--mark-dim);
-}
-.chip__x:hover {
-  color: var(--mark);
-}
-.stn__add {
-  min-height: 26px;
-  padding: 0 10px;
-  font-size: 11.5px;
-  color: var(--mark-dim);
-  background: transparent;
-  border: 1px dashed var(--edge);
-  border-radius: 12px;
-}
-.stn__add:hover {
-  color: var(--mark);
-  border-color: var(--mark-dim);
-}
-.stn__ops {
-  display: flex;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--edge-soft);
-}
-.stn__ops button {
-  min-width: 34px;
-  min-height: 30px;
-  font-size: 14px;
-}
-.stn__ops .ghost {
-  margin-left: auto;
-  font-size: 12px;
-}
-
-/* The connector between stations: a transition block's station-density face. */
-.stn-link {
-  flex: none;
-  align-self: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  min-width: 64px;
-  min-height: 0;
-  padding: 6px 8px;
-  font-size: 10.5px;
-  color: var(--mark-dim);
-  background: transparent;
-  border: 1px solid var(--edge-soft);
-  border-radius: 8px;
-}
-.stn-link.cur {
-  color: var(--mark);
-  border-color: var(--mark-dim);
-}
-.exec .stn-link.cur {
-  color: var(--motion);
-  border-color: var(--motion);
-}
-.stn-link.sel {
-  color: var(--mark);
-  border-color: var(--mark);
-}
-.stn-link__arrow {
-  font-size: 14px;
-  line-height: 1;
-}
-.blk {
-  position: relative;
-  height: 100%;
-  flex: none;
-  border-right: 1px solid var(--edge);
-}
-.blk:first-child {
-  border-top-left-radius: 7px;
-  border-bottom-left-radius: 7px;
-}
-.blk:last-child {
-  border-right: none;
-  border-top-right-radius: 7px;
-  border-bottom-right-radius: 7px;
-}
-.blk.hold {
-  background: var(--body-lift);
-}
-.blk.trans {
-  background: repeating-linear-gradient(45deg, #141419 0 6px, var(--body-lift) 6px 12px);
-}
-/* The current block: grey outline while previewing (a plan), amber only while
- * the arm is really walking it. */
-.blk.cur {
-  box-shadow: inset 0 0 0 1.5px var(--mark-dim);
-  z-index: 2;
-}
-.exec .blk.cur {
-  box-shadow: inset 0 0 0 1.5px var(--motion);
-}
-.blk.sel {
-  box-shadow: inset 0 0 0 1.5px var(--mark);
-  z-index: 2;
-}
-.blk.missing .blk__name {
-  color: var(--mark-dim);
-  text-decoration: line-through;
-}
-.blk__in {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 7px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  pointer-events: none;
-}
-.blk__in .blk__dur {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--mark-dim);
-}
-.blk__in.trans {
-  left: 0;
-  right: 0;
-  top: 26px;
-  bottom: auto;
-  justify-content: center;
-  font-size: 9.5px;
-  line-height: 1.35;
-  color: var(--mark-dim);
-}
-.blk__trim {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: -5px;
-  width: 10px;
-  z-index: 4;
-  cursor: ew-resize;
-  touch-action: none;
-}
-.blk__trim:hover {
-  background: rgba(237, 237, 240, 0.12);
-}
-
-/* The explicit add-action affordance on the selected block — double-click
- * stays as the shortcut, but nothing in the UI should be gesture-only. */
-.blk__add {
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  z-index: 5;
-  min-width: 0;
-  min-height: 24px;
-  padding: 0 8px;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--mark);
-  background: var(--ink);
-  border: 1px solid var(--edge);
-  border-radius: 12px;
-  touch-action: manipulation;
-}
-.blk__add:hover {
-  border-color: var(--mark-dim);
-}
-
-/* Markers: pinned inside the parent block, move and trim with it. */
-.mk {
-  position: absolute;
-  top: 6px;
-  width: 20px;
-  height: 20px;
-  margin-left: -10px;
-  padding: 0;
-  min-height: 0;
-  min-width: 0;
-  border-radius: 50%;
-  background: var(--ink);
-  border: 1.5px solid var(--mark-dim);
-  color: var(--mark);
-  font-size: 10.5px;
-  line-height: 17px;
-  text-align: center;
-  z-index: 3;
-  cursor: grab;
-  touch-action: none;
-}
-.mk.sel {
-  border-color: var(--mark);
-  box-shadow: 0 0 0 2px rgba(237, 237, 240, 0.25);
-}
-/* One flash on crossing: --expose, which the previewing rule presses back to
- * grey — white only ever means the shutter really fired. */
-@keyframes mk-flash {
-  0% {
-    background: var(--expose);
-    border-color: var(--expose);
-    color: var(--ink);
-  }
-  100% {
-    background: var(--ink);
-    border-color: var(--mark-dim);
-    color: var(--mark);
-  }
-}
-.mk.fired {
-  animation: mk-flash 0.5s ease-out;
-}
-
-.tl-playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--mark);
-  z-index: 5;
-  pointer-events: none;
-}
-
-/* TIMELINE rule 5: a live run owns the ruler. The overlay eats every gesture
- * and says why. It stays inside the timeline — never over the stop. */
-.tl-lock {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  z-index: 8;
-  background: rgba(10, 10, 11, 0.62);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  color: var(--mark);
-  letter-spacing: 3px;
-}
-
-/* Estimate spans: translucent, dashed, labelled 预估 — the ruler is commanded
- * time and these are not. */
-.tl-spans {
-  position: relative;
-  height: 16px;
-  margin-top: 4px;
-}
-.tl-span {
-  position: absolute;
-  top: 0;
-  height: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: var(--mark-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  background: rgba(237, 237, 240, 0.07);
-  border-top: 1px dashed rgba(237, 237, 240, 0.35);
-  border-bottom: 1px dashed rgba(237, 237, 240, 0.35);
-}
-
-/* ── inspector ───────────────────────────────────────────────────────────── */
-
-/* The inspector floats over the track's right end instead of sitting in the
- * flex row: opening it must never reflow the timeline under the user's eyes. */
-
-.insp {
-  position: absolute;
-  top: 0;
-  right: 16px;
-  bottom: 12px;
-  z-index: 30; /* below dialogs (40) and the estop bar (60) */
-  width: 300px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--body);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-}
-.insp__head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 6px 6px 12px;
-  border-bottom: 1px solid var(--edge-soft);
-}
-.insp__title {
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.insp__close {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 4px 8px;
-  color: var(--mark-dim);
-}
-.insp__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  align-content: start;
-}
-.insp__field {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.insp__label {
-  flex: none;
-  min-width: 3.5em;
-  color: var(--mark-dim);
-  font-size: 14px;
-}
-.insp__pose {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
-.insp__link {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--mark-dim);
-  border: 1px solid var(--edge);
-  border-radius: 12px;
-  padding: 1px 8px;
-}
-.insp__path {
-  opacity: 0.6;
-}
-.insp__danger {
-  display: flex;
-  padding-top: 12px;
-  border-top: 1px solid var(--edge-soft);
 }
 
 /* ── teach bar ───────────────────────────────────────────────────────────── */
@@ -1967,12 +1235,7 @@ select:focus {
   }
 }
 
-/* ── phone (≤760px): tap-to-go face only, no 3D viewer ──────────────────────
- * App forces the simple face at this width and MonitorPanel unmounts the
- * viewer, so what is left to do here is layout and thumbs: the flat monitor
- * must not keep the 900px block's 240px floor, the tuning panel stacks below
- * it, and the small secondary buttons grow to 44px. The estop bar's own
- * narrow rules live with the bar (styles above) — same breakpoint. */
+/* Narrow screens retain the same workbench and optional feedback viewport. */
 @media (max-width: 760px) {
   .monitor--flat {
     min-height: 0;
@@ -2272,18 +1535,6 @@ select:focus {
   word-break: break-word;
 }
 
-/* ── preview greyness ────────────────────────────────────────────────────── */
-/* Preview is not a machine state: while it runs, the whole interface stays on
- * the grey ramp. Overriding the tokens themselves (not every use site) is the
- * enforcement — any future component that spends a status colour during
- * preview gets grey for free. --stop is excepted on purpose: an emergency
- * stop is red in every state, simulated or not. */
-.previewing {
-  --motion: #6f7681;
-  --ready: #6f7681;
-  --expose: #b9bec7;
-}
-
 /* ── library v2: the card is the destination ────────────────────────────── */
 /* No tab bar anymore — poses are the only material; templates live in the
  * new-sequence dialog. */
@@ -2396,11 +1647,137 @@ select:focus {
   cursor: pointer;
 }
 .create-opts button.sel {
-  border-color: var(--motion);
-  color: var(--motion);
+  border-color: var(--mark);
+  color: var(--mark);
 }
 .create-opts button:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
+/* Single workstation: physical feedback stays separate from motion inputs. */
+.console .monitor {
+  padding: 46px 12px 12px;
+}
+.feedback-frame {
+  display: block;
+  border: 0;
+  width: 100%;
+  height: 340px;
+  background: var(--ink);
+}
+.feedback-claim {
+  float: right;
+  font: 14px var(--sans);
+}
+.feedback-tools {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  padding-top: 12px;
+}
+.feedback-tools details {
+  flex: 1;
+}
+.joint-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--edge);
+}
+.joint-details button {
+  min-height: 36px;
+  margin-right: 4px;
+}
+.lib__pose--selected {
+  outline: 1px solid var(--mark);
+  outline-offset: -1px;
+  background: var(--body-lift);
+}
+.move-selected {
+  margin: 8px 12px;
+  min-height: 44px;
+}
+.station-strip {
+  display: flex;
+  overflow-x: auto;
+  gap: 12px;
+  padding: 16px;
+  align-items: start;
+}
+.station-editor {
+  min-width: 200px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--body);
+  padding: 12px;
+}
+.station-editor.transition {
+  min-width: 170px;
+  background: var(--ink);
+}
+.station-editor legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+.station-editor[data-current="true"] {
+  border-color: var(--motion);
+}
+.station-editor input {
+  width: 76px;
+  padding: 6px;
+}
+.station-editor label {
+  display: block;
+  margin-bottom: 8px;
+}
+.station-editor details {
+  margin-top: 12px;
+}
+.station-editor button {
+  margin: 4px;
+  min-height: 36px;
+}
+.station-actions {
+  display: flex;
+  margin-top: 12px;
+}
+.sequence-menu {
+  margin-left: auto;
+}
+.sequence-menu > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+}
+.sequence-empty {
+  padding: 16px;
+}
+.console .foot {
+  flex: 0 0 auto;
+}
+summary {
+  cursor: pointer;
+  min-height: 32px;
+}
+@media (max-width: 760px) {
+  .console .main {
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .console .lib {
+    width: 100%;
+    max-height: 320px;
+  }
+  .feedback-frame {
+    height: 240px;
+  }
+  .feedback-tools {
+    flex-wrap: wrap;
+  }
+  .console .seq-bar {
+    flex-wrap: wrap;
+  }
+}

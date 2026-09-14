@@ -1,13 +1,12 @@
-/**
- * Timeline model: the pure logic of the block/marker world.
- *
- * Shared between the React UI (preview, timeline rendering) and the dev mock
- * (PATCH-time normalization, playback engine) — one implementation, no drift.
- * It is also the blueprint the v2 backend ports to Python, so everything here
- * is a pure function with no framework or DOM dependency.
- */
+/** Pure sequence structure and normalization. No browser motion simulation. */
 
-import type { Block, Easing, EventMarker, HoldBlock, TransitionBlock } from "../types";
+import type {
+  Block,
+  Easing,
+  EventMarker,
+  HoldBlock,
+  TransitionBlock,
+} from "../types";
 
 /** Defaults for an auto-generated transition: slow and smooth beats fast. */
 export const DEFAULT_TRANSITION_S = 2.0;
@@ -32,17 +31,20 @@ export function newId(): string {
 }
 
 export function makeMarker(
-  kind: string,
+  kind: "wait",
   at: number,
   params: Record<string, unknown> = {},
-  estimate_s = 0.3,
+  estimate_s: 0 = 0,
 ): EventMarker {
   return { id: newId(), kind, params, at, estimate_s };
 }
 
 export const DEFAULT_HOLD_S = 3;
 
-export function makeHold(pose_id: string, duration_s = DEFAULT_HOLD_S): HoldBlock {
+export function makeHold(
+  pose_id: string,
+  duration_s = DEFAULT_HOLD_S,
+): HoldBlock {
   return { type: "hold", id: newId(), pose_id, duration_s, markers: [] };
 }
 
@@ -51,25 +53,6 @@ export function makeTransition(
   easing: Easing = DEFAULT_EASING,
 ): TransitionBlock {
   return { type: "transition", id: newId(), duration_s, easing, markers: [] };
-}
-
-// ── easing ───────────────────────────────────────────────────────────────────
-
-const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
-
-/** Cubic easing curves; `t` is the raw proportion, returns the eased one. */
-export function easingFn(name: Easing, t: number): number {
-  const x = clamp01(t);
-  switch (name) {
-    case "linear":
-      return x;
-    case "ease_in":
-      return x * x * x;
-    case "ease_out":
-      return 1 - Math.pow(1 - x, 3);
-    case "ease_in_out":
-      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
-  }
 }
 
 // ── normalize ────────────────────────────────────────────────────────────────
@@ -137,7 +120,10 @@ export function normalize(blocks: Block[]): Block[] {
       });
     } else {
       used.add(key);
-      out.push({ ...remembered, markers: remembered.markers.map((m) => ({ ...m })) });
+      out.push({
+        ...remembered,
+        markers: remembered.markers.map((m) => ({ ...m })),
+      });
     }
   }
   return out;
@@ -149,7 +135,11 @@ function pairKey(poseA: string, poseB: string): string {
   return poseA < poseB ? `${poseA}|${poseB}` : `${poseB}|${poseA}`;
 }
 
-function nearestHold(blocks: Block[], from: number, step: -1 | 1): HoldBlock | undefined {
+function nearestHold(
+  blocks: Block[],
+  from: number,
+  step: -1 | 1,
+): HoldBlock | undefined {
   for (let i = from + step; i >= 0 && i < blocks.length; i += step) {
     if (blocks[i].type === "hold") return blocks[i] as HoldBlock;
   }
@@ -168,112 +158,6 @@ export function sequenceDuration(blocks: Block[]): number {
 }
 
 /** Absolute start time of every block (length === blocks.length). */
-export function blockStarts(blocks: Block[]): number[] {
-  const starts: number[] = [];
-  let acc = 0;
-  for (const block of blocks) {
-    starts.push(acc);
-    acc += block.duration_s;
-  }
-  return starts;
-}
-
-/** Which block contains absolute time `t` (clamped to the last block). */
-export function blockIndexAt(blocks: Block[], t: number): number {
-  const starts = blockStarts(blocks);
-  for (let i = starts.length - 1; i >= 0; i--) {
-    if (t >= starts[i] - 1e-9) return i;
-  }
-  return 0;
-}
-
-/** Absolute time of a marker: seconds inside a hold, proportion inside a transition. */
-export function markerAbsTime(blockStart: number, block: Block, marker: EventMarker): number {
-  return block.type === "hold" ? blockStart + marker.at : blockStart + marker.at * block.duration_s;
-}
-
-export interface ScheduledMarker {
-  /** Absolute second on the plan ruler. */
-  t: number;
-  marker: EventMarker;
-  blockIndex: number;
-}
-
-/** Every marker as an absolute-time schedule — the preview's event timetable. */
-export function markerSchedule(blocks: Block[]): ScheduledMarker[] {
-  const starts = blockStarts(blocks);
-  const out: ScheduledMarker[] = [];
-  blocks.forEach((block, blockIndex) => {
-    for (const marker of block.markers) {
-      out.push({ t: markerAbsTime(starts[blockIndex], block, marker), marker, blockIndex });
-    }
-  });
-  return out.sort((a, b) => a.t - b.t);
-}
-
-// ── pose interpolation ───────────────────────────────────────────────────────
-
-export type PoseMap = Record<string, Record<string, number>>;
-
-/**
- * The planned pose at absolute time `t`, for preview and scrubbing.
- *
- * This is the *plan path*: joint-space lerp with the transition's easing,
- * computed on the plan ruler. The real arm walks whatever path the upstream
- * `move_to` picks — close, not guaranteed identical, and the UI says so.
- */
-export function poseAtTime(blocks: Block[], poses: PoseMap, t: number): Record<string, number> {
-  if (blocks.length === 0) return {};
-  const starts = blockStarts(blocks);
-  const index = blockIndexAt(blocks, t);
-  const block = blocks[index];
-
-  if (block.type === "hold") {
-    return { ...(poses[block.pose_id] ?? {}) };
-  }
-
-  const prev = nearestHold(blocks, index, -1);
-  const next = nearestHold(blocks, index, +1);
-  const from = prev ? poses[prev.pose_id] : undefined;
-  const to = next ? poses[next.pose_id] : undefined;
-  if (!from && !to) return {};
-  if (!from) return { ...to! };
-  if (!to) return { ...from };
-
-  const local = clamp01((t - starts[index]) / Math.max(block.duration_s, 1e-9));
-  const k = easingFn(block.easing, local);
-  const out: Record<string, number> = {};
-  for (const joint of new Set([...Object.keys(from), ...Object.keys(to)])) {
-    const a = from[joint] ?? 0;
-    const b = to[joint] ?? 0;
-    out[joint] = a + (b - a) * k;
-  }
-  return out;
-}
-
-// ── approach (first-block) helpers ─────────────────────────────────────────────
-//
-// These constants mirror backend/core/executor.py and backend/arm/base.py:
-//   DEFAULT_APPROACH_S  = 2.0
-//   FIRST_APPROACH_MAX_SPEED = 0.25
-//   EASE_PEAK = 1.875
-// They are deliberately duplicated (the repo already has this pattern for
-// normalize rules in model.ts vs normalize.py).  Keep them in sync —
-// tests/test_cross_lang_constants.py reads this file and fails on drift.
-
-/** Base duration for the approach to the first block's pose. */
-export const DEFAULT_APPROACH_S = 2.0;
-/** Ceiling on joint speed for the approach to the first pose, rad/s. */
-export const FIRST_APPROACH_MAX_SPEED = 0.25;
-/**
- * Peak joint speed of an eased move as a multiple of its linear average
- * (quintic rest-to-rest easing peaks at 1.875×). The executor stretches the first approach by
- * this factor so the eased *peak* stays at FIRST_APPROACH_MAX_SPEED — the
- * preview must plan with the same duration or the plan ruler lies about the
- * approach. Mirrors EASE_PEAK in backend/arm/base.py.
- */
-export const EASE_PEAK = 1.875;
-
 /** Largest single-joint delta between two poses (rad). */
 export function maxJointDelta(
   from: Record<string, number>,
@@ -287,32 +171,4 @@ export function maxJointDelta(
     if (d > max) max = d;
   }
   return max;
-}
-
-/** Linear (constant-speed) interpolation between two pose maps. */
-export function lerpPose(
-  from: Record<string, number>,
-  to: Record<string, number>,
-  t: number,
-): Record<string, number> {
-  const k = Math.max(0, Math.min(1, t));
-  const out: Record<string, number> = {};
-  for (const joint of new Set([...Object.keys(from), ...Object.keys(to)])) {
-    const a = from[joint] ?? 0;
-    const b = to[joint] ?? 0;
-    out[joint] = a + (b - a) * k;
-  }
-  return out;
-}
-
-/** Absolute playback time from a SeqPlayback frame, clamped to the ruler. */
-export function playbackAbsTime(
-  blocks: Block[],
-  playback: { block_index: number; t_in_block: number; finished: boolean },
-): number {
-  const starts = blockStarts(blocks);
-  const total = starts.length ? starts[starts.length - 1] + blocks[blocks.length - 1].duration_s : 0;
-  if (playback.finished || playback.block_index >= blocks.length) return total;
-  const index = Math.max(0, Math.min(playback.block_index, blocks.length - 1));
-  return starts[index] + Math.min(playback.t_in_block, blocks[index].duration_s);
 }

@@ -1,0 +1,15 @@
+恢复了生产 worker 编译后捕获的验证证据：
+
+```text
+cd app && .venv/bin/pytest -q tests/test_physics_playback.py -k checker
+......                                                                   [100%]
+6 passed, 2 deselected in 0.18s
+
+cd app && .venv/bin/pytest -q tests/test_physics_model.py
+.............                                                            [100%]
+13 passed in 7.35s
+```
+
+检查器包含空/缺失物理运行、缺失场景结果、零采样、WAIT 指令间隔与保持目标漂移的负例。
+
+退出码：`CHECKER_RC=0`、`MODEL_RC=0`。

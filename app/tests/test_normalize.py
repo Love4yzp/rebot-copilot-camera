@@ -50,7 +50,7 @@ def test_no_transition_between_two_holds_of_the_same_pose():
 
 
 def test_holds_keep_identity_order_duration_and_markers():
-    marker = EventMarker(kind="shutter", params={"count": 1}, at=2.0)
+    marker = EventMarker(kind="wait", params={}, at=2.0)
     a = hold("a", 5.0, [marker])
     b = hold("b", 1.0)
     out = normalize([a, trans(9.9), b])
@@ -60,7 +60,7 @@ def test_holds_keep_identity_order_duration_and_markers():
 
 
 def test_an_existing_transitions_parameters_survive_a_noop_normalize():
-    marker = EventMarker(kind="fill_light", params={}, at=0.4)
+    marker = EventMarker(kind="wait", params={}, at=0.4)
     out = normalize([hold("a"), trans(4.5, "linear", [marker]), hold("b")])
     kept = out[1]
     assert kept.duration_s == 4.5
@@ -106,7 +106,7 @@ def test_stacked_transitions_between_two_holds_collapse_to_one():
 
 
 def test_inherited_markers_are_copies_not_aliases():
-    marker = EventMarker(kind="fill_light", params={}, at=0.5)
+    marker = EventMarker(kind="wait", params={}, at=0.5)
     out = normalize([hold("a"), trans(2.0, markers=[marker]), hold("b"), hold("a")])
     inherited = out[3].markers[0]
     assert inherited is not marker
@@ -121,7 +121,7 @@ def test_inherited_markers_are_copies_not_aliases():
 def test_repeated_pairs_get_distinct_ids():
     """A→B→A→B puts the same pose pair on the ruler more than once; every
     rebuilt transition (and its markers) must carry its own id."""
-    marker = EventMarker(kind="fill_light", params={}, at=0.4)
+    marker = EventMarker(kind="wait", params={}, at=0.4)
     out = normalize([hold("a"), trans(3.0, markers=[marker]), hold("b"), hold("a"), hold("b")])
     transitions = [b for b in out if isinstance(b, TransitionBlock)]
     assert len(transitions) == 3
@@ -134,10 +134,12 @@ def test_repeated_pairs_get_distinct_ids():
 
 
 def test_sequence_duration_is_the_plan_ruler():
-    blocks = normalize([
-        hold("a", 3.0, [EventMarker(kind="wait", at=1.0, estimate_s=0.0)]),
-        hold("b", 5.0),
-    ])
+    blocks = normalize(
+        [
+            hold("a", 3.0, [EventMarker(kind="wait", at=1.0, estimate_s=0.0)]),
+            hold("b", 5.0),
+        ]
+    )
     assert sequence_duration(blocks) == 10.0
     assert sequence_duration([]) == 0.0
 

@@ -4,12 +4,11 @@ import type {
   PlaybackState,
   Pose,
   PoseLinks,
-  ProviderInfo,
   SeqTemplate,
   Sequence,
   SequenceSummary,
-  ShutterResult,
   TuningState,
+  SimulationState,
 } from "./types";
 
 /** Error carrying the server's structured reason, so the UI can show it. */
@@ -40,8 +39,9 @@ function explain(status: number, body: unknown): string {
   if (Array.isArray(detail)) {
     // Pydantic validation errors.
     return detail
-      .map((e: { loc?: unknown[]; msg?: string }) =>
-        `${(e.loc ?? []).slice(1).join(".")}: ${e.msg ?? "invalid"}`,
+      .map(
+        (e: { loc?: unknown[]; msg?: string }) =>
+          `${(e.loc ?? []).slice(1).join(".")}: ${e.msg ?? "invalid"}`,
       )
       .join("; ");
   }
@@ -65,7 +65,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const post = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+  request<T>(path, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 
 const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
@@ -78,7 +81,8 @@ export const api = {
   // ── emergency stop ──────────────────────────────────────────────────────
   estop: {
     get: () => request<EstopState>("/api/estop"),
-    engage: (reason: string) => post<EstopState>("/api/estop", { reason, source: "ui" }),
+    engage: (reason: string) =>
+      post<EstopState>("/api/estop", { reason, source: "ui" }),
     clear: () => post<EstopState>("/api/estop/clear"),
   },
 
@@ -89,8 +93,10 @@ export const api = {
       post<Pose>("/api/poses", { name, joints }),
     /** Record wherever the arm is standing right now, under a name. */
     capture: (name: string) => post<Pose>("/api/poses/capture", { name }),
-    patch: (id: string, body: { name?: string; joints?: Record<string, number> }) =>
-      patch<Pose>(`/api/poses/${id}`, body),
+    patch: (
+      id: string,
+      body: { name?: string; joints?: Record<string, number> },
+    ) => patch<Pose>(`/api/poses/${id}`, body),
     remove: (id: string) => del(`/api/poses/${id}`),
     /**
      * Which sequences link this pose. The UI asks before deleting or
@@ -115,7 +121,8 @@ export const api = {
       patch<Sequence>(`/api/sequences/${id}`, body),
     remove: (id: string) => del(`/api/sequences/${id}`),
     /** Run it for real — the arm moves. */
-    execute: (id: string) => post<PlaybackState>(`/api/sequences/${id}/execute`),
+    execute: (id: string) =>
+      post<PlaybackState>(`/api/sequences/${id}/execute`),
   },
 
   // ── templates ───────────────────────────────────────────────────────────
@@ -137,43 +144,24 @@ export const api = {
     resume: () => post<PlaybackState>("/api/execute/resume"),
   },
 
-  // ── plugins ─────────────────────────────────────────────────────────────
-  plugins: {
-    /** Every installed action provider, working or not. */
-    list: () => request<ProviderInfo[]>("/api/plugins"),
-    /** Re-run every provider's self-test. Moves no joints, burns no frame. */
-    probe: () => post<ProviderInfo[]>("/api/plugins/probe"),
-  },
-
-  // ── teach + rest + shutter ─────────────────────────────────────────────
   teach: (enabled: boolean) => post<PlaybackState>("/api/teach", { enabled }),
   /** Rest: zero torque at the zero pose, arm lying on its stops. */
   rest: (enabled: boolean) => post<PlaybackState>("/api/rest", { enabled }),
-
-  // ── simulator ───────────────────────────────────────────────────────────
-  sim: {
-    /**
-     * Push one joint of the simulated arm by a delta (radians), the way a
-     * hand pushes the real arm in teach. 409 on a real arm. The response
-     * positions are ignored — the next state broadcast carries the truth.
-     */
-    drag: (deltas: Record<string, number>) =>
-      post<{ positions: Record<string, number> }>("/api/sim/drag", { deltas }),
+  simulation: {
+    state: () => request<SimulationState>("/api/sim/state"),
+    perturb: (joint: string, torque: number) =>
+      post("/api/sim/perturb", { joint, torque, duration_s: 0.15 }),
   },
-  testShutter: (shoot: boolean) => post<ShutterResult>(`/api/shutter/test?shoot=${shoot}`),
-  /**
-   * Attach the camera over BLE. Slow — the board scans for thirty seconds
-   * while somebody puts the camera into its own pairing mode — and refused
-   * with a 409 while a sequence is executing.
-   */
-  pairShutter: () => post<ShutterResult>("/api/shutter/pair"),
 
   // ── tuning ──────────────────────────────────────────────────────────────
   tuning: {
     get: () => request<TuningState>("/api/config/tuning"),
     /** Deep-merge partial patch. Body is {section: {field: value, ...}} */
     put: (patch: Record<string, unknown>) =>
-      request<TuningState>("/api/config/tuning", { method: "PUT", body: JSON.stringify(patch) }),
+      request<TuningState>("/api/config/tuning", {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      }),
     save: () => post<TuningState>("/api/config/tuning/save"),
     reset: () => post<TuningState>("/api/config/tuning/reset"),
   },

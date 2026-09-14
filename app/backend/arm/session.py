@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .. import assets
-from ..integrations.rebot.runtime import compute_gravity, create_actuator, load_dynamics
 from .base import ArmState
 from .limits import expanded_joint_bounds
 from .profile import DEFAULT_LIMITS, MotionLimits, PreparedMotion, prepare_profiles
@@ -57,16 +56,19 @@ class ArmSession:
         hardware_yaml: str | None = None,
         clock: Callable[[], float] | None = None,
         transport: object | None = None,
+        model_path: str | None = None,
     ) -> None:
         import time
 
         assets.assert_rs_model()
         self._clock = clock or time.monotonic
         if transport is None:
-            transport = create_actuator(
-                hardware_yaml or str(assets.effective_hardware_yaml())
-            )
+            from reBotArm_control_py.actuator.rebotarm import RebotArm
+
+            transport = RebotArm(hardware_yaml or str(assets.effective_hardware_yaml()))
         self._arm = transport
+        self.model_path = model_path
+        self.model_locked = model_path is not None
         self._lock = threading.RLock()
         self._connected = False
         self._floating = False
@@ -124,6 +126,8 @@ class ArmSession:
 
     def connect(self) -> None:
         with self._lock:
+            # Parse the selected model before enabling any hardware.
+            self._dynamics_model()
             self._arm.connect()
             # The firmware latches its control mode at enable: MIT must be
             # set BEFORE enable_all, and runtime mode switches are ignored —
@@ -207,13 +211,27 @@ class ArmSession:
             if self._motion is None or requested != (self._requested_target or {}):
                 self.commit_move(self.prepare_move(q_target, duration_s))
             assert self._motion is not None and self._motion_started_at is not None
-            values = [self._motion.profiles[name].eval(now - self._motion_started_at) for name in self._names]
-            self._send_mit(np.array([v[0] for v in values]), vel=np.array([v[1] for v in values]), kp=DEFAULT_HOLD_KP, kd=DEFAULT_HOLD_KD)
+            values = [
+                self._motion.profiles[name].eval(now - self._motion_started_at)
+                for name in self._names
+            ]
+            self._send_mit(
+                np.array([v[0] for v in values]),
+                vel=np.array([v[1] for v in values]),
+                kp=DEFAULT_HOLD_KP,
+                kd=DEFAULT_HOLD_KD,
+            )
             self._reference = {name: values[i][:3] for i, name in enumerate(self._names)}
             self._generation += 1
             return self._motion.duration
 
-    def prepare_move(self, q_target: Mapping[str, float], requested_duration: float, *, limits: MotionLimits = DEFAULT_LIMITS) -> PreparedMotion:
+    def prepare_move(
+        self,
+        q_target: Mapping[str, float],
+        requested_duration: float,
+        *,
+        limits: MotionLimits = DEFAULT_LIMITS,
+    ) -> PreparedMotion:
         with self._lock:
             target = self._full_target(q_target)
             current, _, _ = self._arm.get_state()
@@ -224,7 +242,11 @@ class ArmSession:
             else:
                 starts = {name: (float(current[i]), 0.0, 0.0) for i, name in enumerate(self._names)}
             return prepare_profiles(
-                starts, target, requested_duration, self._generation + 1, limits,
+                starts,
+                target,
+                requested_duration,
+                self._generation + 1,
+                limits,
                 joint_bounds=expanded_joint_bounds(),
             )
 
@@ -296,9 +318,7 @@ class ArmSession:
             self._send_mit(q, kp=self._float_kp, kd=self._float_kd)
             self._generation += 1
 
-    def set_gravity_correction(
-        self, scale: Mapping[str, float], bias: Mapping[str, float]
-    ) -> None:
+    def set_gravity_correction(self, scale: Mapping[str, float], bias: Mapping[str, float]) -> None:
         """Apply the per-joint correction to the gravity feedforward. Called by
         the controller when tuning changes; the arm must not be floating (the
         feedforward jumps with the correction)."""
@@ -382,9 +402,13 @@ class ArmSession:
         goes in when the tuning profile says one is mounted.
         """
         if self._dyn_model is None:
-            self._dyn_model, self._dyn_data = load_dynamics(
-                str(assets.effective_urdf_path(self._payload))
+            from reBotArm_control_py.dynamics.inverse_dynamics import create_data
+            from reBotArm_control_py.dynamics.robot_model import load_dynamics_model
+
+            self._dyn_model = load_dynamics_model(
+                self.model_path or str(assets.effective_urdf_path(self._payload))
             )
+            self._dyn_data = create_data(self._dyn_model)
         return self._dyn_model
 
     def _gravity_torque(self, q: np.ndarray) -> np.ndarray:
@@ -397,12 +421,14 @@ class ArmSession:
         finger travel to motor torque, and inventing one would put a made-up
         number into a torque command.
         """
+        from reBotArm_control_py.dynamics.inverse_dynamics import compute_generalized_gravity
+
         model = self._dynamics_model()
         # Pass only the arm joints; upstream pads the gripper fingers out to the
         # model's eight DOFs. Handing it all seven hardware values would put the
         # gripper motor angle where a finger's metre-valued travel belongs.
         arm_q = np.array([q[self._index[name]] for name in assets.arm_joint_names()], dtype=float)
-        g = compute_gravity(model, arm_q, self._dyn_data)
+        g = compute_generalized_gravity(model, arm_q, self._dyn_data)
 
         tau = np.zeros(len(self._names), dtype=float)
         for position, name in enumerate(assets.arm_joint_names()):

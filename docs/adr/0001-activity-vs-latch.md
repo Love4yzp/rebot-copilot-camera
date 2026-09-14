@@ -1,11 +1,12 @@
-# Activity is exclusive; the latch stays cross-cutting
+# ADR 0001: Activity 状态互斥与横切急停闩锁
 
-The controller used overlapping flags (`_teaching`, `_resting`, `_executor`) and derived `mode` by priority. Every new behaviour (rest, disconnect lock, contact, retarget) would add another flag and force every caller to re-audit. That is how this codebase started needing an AI rewrite each session.
+## 背景
 
-**Activity** is a closed exclusive set. **Intent** is the only way to change it. The table `decide(activity, intent) -> Decision` is the interface: adding SafeLock or Goto-retarget is a new row, not a new flag. Effects name what the control loop must do to the arm; the table does not touch hardware.
+控制器早期使用重叠的标志位（`_teaching`、`_resting`、`_executor`）按优先级推导 `mode`。每增加一种行为（休息、断连锁定、接触、改向）就要新增一个标志位，所有调用方都必须重新审计状态组合。
 
-The **latch is not an Activity**. A freeze that some activities might forget to enter is how a 48 V arm moves under a stop. Callers still check the latch first; `mode == "estop"` is a view, not a table state.
+## 决策
 
-HTTP stays resource-shaped (`/api/poses/{id}/goto`, `/api/teach`, …). Handlers parse and call `Controller.intend`. We do not add a second command bus.
-
-Goto and Play are different intents: a second Goto retargets; a second Play is refused. That is the motion model (set destination vs run this tape), not a UI preference.
+1. **Activity 为互斥集合**：机械臂运行状态定义为闭集，`Intent` 是改变它的唯一途径。`decide(activity, intent) -> Decision` 决策表即接口——增加 SafeLock 或 Goto 改向是加一行，不是加一个标志位。Effect 描述控制循环要对臂做什么，表本身不碰硬件。
+2. **闩锁不是 Activity**：「某些 Activity 可能忘记进入」的冻结状态，正是 48V 的臂在急停之下还会动的原因。调用方先查闩锁；`mode == "estop"` 是视图，不是表状态。
+3. **HTTP 保持资源形状**（`/api/poses/{id}/goto`、`/api/teach` 等）：处理器解析后调用 `Controller.intend`，不建第二套命令总线。
+4. **Goto 与 Play 是不同 Intent**：第二次 Goto 平滑改向，第二次 Play 拒绝。这是运动模型（设定目的地 vs 跑这盘带子），不是界面偏好。
